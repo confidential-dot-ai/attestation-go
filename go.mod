@@ -1,4 +1,4 @@
-module github.com/lunal-dev/attestation-go
+module github.com/confidential-dot-ai/attestation-go
 
 go 1.24.3
 

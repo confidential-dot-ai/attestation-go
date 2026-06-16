@@ -10,7 +10,7 @@ import (
 	pb "github.com/google/go-tpm-tools/proto/attest"
 	"google.golang.org/protobuf/encoding/protojson"
 
-	"github.com/lunal-dev/attestation-go/attestation"
+	"github.com/confidential-dot-ai/attestation-go/attestation"
 )
 
 func ExampleVerifyAttestation() {

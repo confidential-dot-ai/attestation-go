@@ -9,7 +9,7 @@ import (
 
 	"google.golang.org/protobuf/encoding/protojson"
 
-	"github.com/lunal-dev/attestation-go/attestation"
+	"github.com/confidential-dot-ai/attestation-go/attestation"
 )
 
 //export VerifyAttestationFFI

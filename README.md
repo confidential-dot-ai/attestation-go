@@ -17,7 +17,7 @@ A Go library for generating and verifying hardware attestations from Google Clou
 ## Installation
 
 ```bash
-go get github.com/lunal-dev/attestation-go/attestation
+go get github.com/confidential-dot-ai/attestation-go/attestation
 ```
 
 ## Usage
@@ -25,7 +25,7 @@ go get github.com/lunal-dev/attestation-go/attestation
 ### Go Library
 
 ```go
-import "github.com/lunal-dev/attestation-go/attestation"
+import "github.com/confidential-dot-ai/attestation-go/attestation"
 
 // Generate an attestation
 attestationBytes, err := attestation.Attest(opts)
