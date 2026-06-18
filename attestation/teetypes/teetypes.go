@@ -1,0 +1,164 @@
+// Package teetypes holds the platform-agnostic types shared by the TEE
+// attestation verifiers (snp, tdx, az-snp, az-tdx, …). It mirrors the
+// attestation-rs `types` module so the Go and Rust verifiers expose the same
+// VerifyParams / VerificationResult / Claims shapes.
+package teetypes
+
+import (
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+)
+
+// PlatformType identifies which TEE platform produced a piece of evidence.
+//
+// For the cloud-overlay platforms (GcpSnp, GcpTdx, AzSnp, AzTdx) this is an
+// attester-reported claim derived from the evidence envelope, NOT a
+// cryptographic proof of cloud-provider origin. Do not grant elevated trust on
+// the platform tag alone — verify report fields (measurement, chip_id, TCB).
+type PlatformType string
+
+const (
+	PlatformSNP    PlatformType = "snp"
+	PlatformTDX    PlatformType = "tdx"
+	PlatformAzSNP  PlatformType = "az-snp"
+	PlatformAzTDX  PlatformType = "az-tdx"
+	PlatformGcpSNP PlatformType = "gcp-snp"
+	PlatformGcpTDX PlatformType = "gcp-tdx"
+	PlatformDstack PlatformType = "dstack"
+)
+
+// AttestationEvidence is the self-describing evidence envelope: a platform tag
+// plus the platform-specific payload, so a verifier can auto-detect the
+// platform.
+type AttestationEvidence struct {
+	Platform PlatformType    `json:"platform"`
+	Evidence json.RawMessage `json:"evidence"`
+}
+
+// VerifyParams is what the caller wants checked during verification. The zero
+// value verifies the hardware signature/chain and rejects debug guests, with no
+// freshness/init-data/TCB-floor checks.
+type VerifyParams struct {
+	// ExpectedReportData, if set, must match the report_data bound in the
+	// evidence (the SNP/TDX report_data directly, or the vTPM quote nonce on
+	// Azure platforms). At most 64 bytes.
+	ExpectedReportData []byte
+	// ExpectedInitDataHash, if set, must match the init-data binding (SNP
+	// HOST_DATA / TDX MR_CONFIG_ID, or PCR[8] on Azure vTPM). At most 32 bytes.
+	ExpectedInitDataHash []byte
+	// AllowDebug permits guests launched with a debug policy. Default false.
+	AllowDebug bool
+	// MinTCB, if set, enforces a component-wise minimum SNP TCB.
+	MinTCB *SnpTcb
+}
+
+// VerificationResult is the outcome of verification. The caller decides
+// pass/fail from these fields.
+type VerificationResult struct {
+	// SignatureValid reports whether the hardware signature on the evidence was
+	// valid. Always true on a non-error return (errors are returned instead).
+	SignatureValid bool `json:"signature_valid"`
+	// Platform that produced the evidence (attester claim for cloud overlays).
+	Platform PlatformType `json:"platform"`
+	// Claims are the parsed, normalized report fields.
+	Claims Claims `json:"claims"`
+	// ReportDataMatch is nil when no ExpectedReportData was supplied, else true
+	// (a mismatch is returned as an error, not false).
+	ReportDataMatch *bool `json:"report_data_match,omitempty"`
+	// InitDataMatch is nil when no ExpectedInitDataHash was supplied.
+	InitDataMatch *bool `json:"init_data_match,omitempty"`
+	// CollateralVerified is true when collateral (CRL/TCB/QE identity) was
+	// available and all collateral checks passed; false when skipped.
+	CollateralVerified bool `json:"collateral_verified"`
+	// TCBStatus carries platform-specific collateral/TCB details (TDX DCAP).
+	TCBStatus *DcapVerificationStatus `json:"tcb_status,omitempty"`
+}
+
+// Claims are normalized claims extracted from evidence.
+type Claims struct {
+	// LaunchDigest is the hex launch measurement (MR_TD for TDX, MEASUREMENT
+	// for SNP).
+	LaunchDigest string `json:"launch_digest"`
+	// ReportData is the raw report_data field from the HW quote.
+	ReportData HexBytes `json:"report_data"`
+	// SignedData is the data the attester requested be signed. Equals
+	// ReportData for bare-metal platforms; the TPM nonce for vTPM platforms.
+	SignedData HexBytes `json:"signed_data"`
+	// InitData is the init/host data from the quote (SNP HOST_DATA / TDX
+	// MR_CONFIG_ID).
+	InitData HexBytes `json:"init_data"`
+	// TCB is the platform-specific TCB version info.
+	TCB TcbInfo `json:"tcb"`
+	// PlatformData carries all platform-specific claim fields.
+	PlatformData map[string]any `json:"platform_data"`
+}
+
+// TcbInfo is the platform-specific TCB version, tagged by Type ("Snp"/"Tdx") to
+// match the attestation-rs serde representation.
+type TcbInfo struct {
+	Type string `json:"type"`
+	// SNP components (Type == "Snp").
+	Bootloader *uint8 `json:"bootloader,omitempty"`
+	Tee        *uint8 `json:"tee,omitempty"`
+	Snp        *uint8 `json:"snp,omitempty"`
+	Microcode  *uint8 `json:"microcode,omitempty"`
+	// FMC is present only on Turin SNP processors.
+	FMC *uint8 `json:"fmc,omitempty"`
+	// TCBSvn is the raw 16-byte TDX TCB SVN (Type == "Tdx").
+	TCBSvn HexBytes `json:"tcb_svn,omitempty"`
+}
+
+// SnpTcb is an SNP TCB version (used for the MinTCB floor and KDS lookups).
+type SnpTcb struct {
+	Bootloader uint8  `json:"bootloader"`
+	Tee        uint8  `json:"tee"`
+	Snp        uint8  `json:"snp"`
+	Microcode  uint8  `json:"microcode"`
+	FMC        *uint8 `json:"fmc,omitempty"`
+}
+
+// TdxTcbStatus is the TDX TCB status from Intel DCAP collateral evaluation.
+type TdxTcbStatus string
+
+const (
+	TdxUpToDate                          TdxTcbStatus = "UpToDate"
+	TdxSWHardeningNeeded                 TdxTcbStatus = "SWHardeningNeeded"
+	TdxConfigurationNeeded               TdxTcbStatus = "ConfigurationNeeded"
+	TdxConfigurationAndSWHardeningNeeded TdxTcbStatus = "ConfigurationAndSWHardeningNeeded"
+	TdxOutOfDate                         TdxTcbStatus = "OutOfDate"
+	TdxOutOfDateConfigurationNeeded      TdxTcbStatus = "OutOfDateConfigurationNeeded"
+	TdxRevoked                           TdxTcbStatus = "Revoked"
+)
+
+// DcapVerificationStatus carries the Intel DCAP collateral evaluation result.
+type DcapVerificationStatus struct {
+	TCBStatus         TdxTcbStatus `json:"tcb_status"`
+	FMSPC             string       `json:"fmspc"`
+	AdvisoryIDs       []string     `json:"advisory_ids"`
+	CollateralExpired bool         `json:"collateral_expired"`
+}
+
+// HexBytes is a byte slice that marshals to/from a hex string in JSON, matching
+// the attestation-rs `hex_bytes` serde helper.
+type HexBytes []byte
+
+func (h HexBytes) MarshalJSON() ([]byte, error) {
+	return json.Marshal(hex.EncodeToString(h))
+}
+
+func (h *HexBytes) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		return fmt.Errorf("hex decode: %w", err)
+	}
+	*h = b
+	return nil
+}
+
+// Ptr returns a pointer to v. Helper for the optional *bool / *uint8 fields.
+func Ptr[T any](v T) *T { return &v }

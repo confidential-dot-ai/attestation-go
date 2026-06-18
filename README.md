@@ -14,6 +14,45 @@ A Go library for generating and verifying hardware attestations from Google Clou
 - AMD SEV-SNP (Secure Encrypted Virtualization - Secure Nested Paging)
 - Intel TDX (Trust Domain Extensions)
 
+## Evidence-envelope verification (`attestation/...`)
+
+Alongside the original go-tpm-tools (GCE-style) flow in the `attestation`
+package, the library verifies the self-describing `{platform, evidence}`
+envelopes used by `attestation-rs` / c8s — the Go counterpart of the Rust
+verifier, sharing the same `tpm_common` logic so the two agree byte-for-byte.
+
+```go
+import (
+    "github.com/confidential-dot-ai/attestation-go/attestation/teeverify"
+    "github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
+)
+
+// Auto-detects the platform from the envelope and verifies offline.
+res, err := teeverify.Verify(evidenceJSON, teetypes.VerifyParams{
+    ExpectedReportData: nonce, // freshness; nil to skip
+    AllowDebug:         false, // reject debug guests
+})
+// res.Claims.LaunchDigest, res.ReportDataMatch, res.Platform, ...
+```
+
+Packages: `teeverify` (dispatcher) · `snp`, `tdx` (bare-metal) · `azsnp`, `aztdx`
+(Azure vTPM) · `tpmcommon` (HCL/vTPM layer) · `teetypes` (shared types).
+
+| Platform tag | Status | Notes |
+|---|---|---|
+| `snp` | ✅ verify | bare-metal SEV-SNP; report sig + VCEK chain + policy via go-sev-guest |
+| `az-snp` | ✅ verify | Azure vTPM: SNP report + var_data binding + TPM-quote nonce |
+| `tdx` | ✅ verify | Intel TDX DCAP via go-tdx-guest |
+| `az-tdx` | ✅ verify | Azure vTPM: TD quote + var_data binding + TPM-quote nonce |
+| `gcp-snp`, `gcp-tdx` | ✅ verify | identical to bare-metal; platform tag is an attester claim, not proof of GCP origin |
+| `dstack` | ⬜ not yet | — |
+
+Limitations: collateral (CRL / Intel TCB status / QE identity) requires a network
+`Getter` and is skipped offline (`CollateralVerified=false`); guest-side
+generation (`attest`) for the envelope platforms is not implemented (verify
+only); Turin FMC TCB and Genoa-family model `0xA0` (Bergamo/Siena) offline root
+selection are gated by go-sev-guest support.
+
 ## Installation
 
 ```bash
