@@ -1,27 +1,26 @@
 package aztdx
 
 import (
+	_ "embed"
 	"encoding/json"
-	"os"
 	"testing"
 
 	"github.com/confidential-dot-ai/attestation-go/attestation/tdx"
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
 )
 
+//go:embed testdata/evidence-v1.json
+var azTdxFixture []byte
+
 // TestVerifyEvidence_Fixture verifies a real recorded az-tdx envelope end to
 // end: the Intel DCAP TD quote, the HCL var_data binding, and the vTPM AK quote
 // (signature + PCR digest). A fresh nonce must fail closed since the recorded
 // quote is not bound to it.
 func TestVerifyEvidence_Fixture(t *testing.T) {
-	raw, err := os.ReadFile("testdata/evidence-v1.json")
-	if err != nil {
-		t.Skipf("fixture missing: %v", err)
-	}
 	var env struct {
 		Evidence json.RawMessage `json:"evidence"`
 	}
-	if err := json.Unmarshal(raw, &env); err != nil {
+	if err := json.Unmarshal(azTdxFixture, &env); err != nil {
 		t.Fatal(err)
 	}
 

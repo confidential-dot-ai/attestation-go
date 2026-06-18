@@ -1,24 +1,21 @@
 package azsnp
 
 import (
+	_ "embed"
 	"encoding/json"
-	"os"
 	"testing"
 
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
 	"github.com/confidential-dot-ai/attestation-go/attestation/tpmcommon"
 )
 
-const fixturePath = "testdata/attestation.json"
+//go:embed testdata/attestation.json
+var attestationFixture []byte
 
 // TestVerify_Fixture verifies a real recorded az-snp envelope through the
 // back-compat API (hardware verify) and the vTPM components.
 func TestVerify_Fixture(t *testing.T) {
-	raw, err := os.ReadFile(fixturePath)
-	if err != nil {
-		t.Fatalf("read fixture: %v", err)
-	}
-	res, err := Verify(raw)
+	res, err := Verify(attestationFixture)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -50,14 +47,10 @@ func TestVerify_Fixture(t *testing.T) {
 // TestVerifyEvidence_FailClosed runs the hardened unified path on the inner
 // evidence and confirms a fresh nonce is rejected (recorded quote isn't bound).
 func TestVerifyEvidence_FailClosed(t *testing.T) {
-	raw, err := os.ReadFile(fixturePath)
-	if err != nil {
-		t.Fatalf("read fixture: %v", err)
-	}
 	var env struct {
 		Evidence json.RawMessage `json:"evidence"`
 	}
-	if err := json.Unmarshal(raw, &env); err != nil {
+	if err := json.Unmarshal(attestationFixture, &env); err != nil {
 		t.Fatal(err)
 	}
 

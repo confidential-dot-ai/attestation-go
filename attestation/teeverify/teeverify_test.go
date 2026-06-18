@@ -1,34 +1,39 @@
 package teeverify
 
 import (
+	_ "embed"
 	"encoding/base64"
 	"encoding/json"
-	"os"
 	"testing"
 
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
 )
 
-// TestVerify_Dispatch drives the unified entry point across platforms using real
-// envelope fixtures, confirming auto-detection routes to the right verifier and
-// tags the result platform.
+// Real envelope fixtures embedded so the dispatcher test is self-contained (no
+// fragile cross-package paths).
+var (
+	//go:embed testdata/az-snp.json
+	azSnpEnvelope []byte
+	//go:embed testdata/az-tdx.json
+	azTdxEnvelope []byte
+	//go:embed testdata/tdx-quote.dat
+	tdxQuote []byte
+)
+
+// TestVerify_Dispatch drives the unified entry point across platforms, confirming
+// auto-detection routes to the right verifier and tags the result platform.
 func TestVerify_Dispatch(t *testing.T) {
 	cases := []struct {
-		name   string
-		path   string
-		params teetypes.VerifyParams
-		want   teetypes.PlatformType
+		name string
+		raw  []byte
+		want teetypes.PlatformType
 	}{
-		{"az-snp", "../azsnp/testdata/attestation.json", teetypes.VerifyParams{}, teetypes.PlatformAzSNP},
-		{"az-tdx", "../aztdx/testdata/evidence-v1.json", teetypes.VerifyParams{}, teetypes.PlatformAzTDX},
+		{"az-snp", azSnpEnvelope, teetypes.PlatformAzSNP},
+		{"az-tdx", azTdxEnvelope, teetypes.PlatformAzTDX},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			raw, err := os.ReadFile(tc.path)
-			if err != nil {
-				t.Skipf("fixture missing: %v", err)
-			}
-			res, err := Verify(raw, tc.params)
+			res, err := Verify(tc.raw, teetypes.VerifyParams{})
 			if err != nil {
 				t.Fatalf("Verify: %v", err)
 			}
@@ -45,12 +50,8 @@ func TestVerify_Dispatch(t *testing.T) {
 // TestVerify_TDXEnvelope dispatches a bare-metal TDX envelope (synthesized from a
 // real DCAP quote) and a gcp-tdx re-tag of the same evidence.
 func TestVerify_TDXEnvelope(t *testing.T) {
-	quote, err := os.ReadFile("../tdx/testdata/tdx_quote_4.dat")
-	if err != nil {
-		t.Skipf("fixture missing: %v", err)
-	}
 	mkEnvelope := func(platform teetypes.PlatformType) []byte {
-		inner, _ := json.Marshal(map[string]string{"quote": base64.StdEncoding.EncodeToString(quote)})
+		inner, _ := json.Marshal(map[string]string{"quote": base64.StdEncoding.EncodeToString(tdxQuote)})
 		env, _ := json.Marshal(teetypes.AttestationEvidence{Platform: platform, Evidence: inner})
 		return env
 	}

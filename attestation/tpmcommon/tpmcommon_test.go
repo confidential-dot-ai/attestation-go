@@ -5,12 +5,15 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	_ "embed"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
-	"os"
 	"testing"
 )
+
+//go:embed testdata/hcl-report.bin
+var hclReportFixture []byte
 
 func buildTPMSAttest(nonce, pcrSelect, pcrDigest []byte) []byte {
 	var msg []byte
@@ -170,11 +173,7 @@ func TestExtractAKPub_TPM2BPublic(t *testing.T) {
 // TestParseHCLReport_Fixture exercises the HCL parser + AK extraction + var_data
 // binding against the real CoCo az-snp HCL report fixture.
 func TestParseHCLReport_Fixture(t *testing.T) {
-	raw, err := os.ReadFile("testdata/hcl-report.bin")
-	if err != nil {
-		t.Skipf("fixture missing: %v", err)
-	}
-	hcl, err := ParseHCLReport(raw)
+	hcl, err := ParseHCLReport(hclReportFixture)
 	if err != nil {
 		t.Fatalf("ParseHCLReport: %v", err)
 	}

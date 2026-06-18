@@ -1,28 +1,30 @@
 package snp
 
 import (
+	_ "embed"
 	"encoding/base64"
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
 
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
 )
 
+//go:embed testdata/milan-report.bin
+var milanReport []byte
+
+//go:embed testdata/milan-vcek.der
+var milanVcek []byte
+
+//go:embed testdata/live-evidence-genoa.json
+var genoaEvidence []byte
+
 // TestVerifyReport_Milan exercises the full SNP verification core (report
 // signature + ARK→ASK→VCEK chain against bundled Milan roots + policy validation
 // + claims) on a real paired Milan report and VCEK. This is the shared path the
 // az-snp verifier also drives.
 func TestVerifyReport_Milan(t *testing.T) {
-	report, err := os.ReadFile("testdata/milan-report.bin")
-	if err != nil {
-		t.Skipf("fixture missing: %v", err)
-	}
-	vcek, err := os.ReadFile("testdata/milan-vcek.der")
-	if err != nil {
-		t.Skipf("fixture missing: %v", err)
-	}
+	report, vcek := milanReport, milanVcek
 
 	res, err := VerifyReport(report, vcek, teetypes.VerifyParams{}, teetypes.PlatformSNP, MinReportVersionAzure, Options{})
 	if err != nil {
@@ -63,14 +65,10 @@ func TestVerifyEvidence_Errors(t *testing.T) {
 // 0xA0 (Bergamo/Siena) CPU model offline, so it can't pick embedded roots for
 // it; the test skips with that documented limitation rather than failing.
 func TestVerifyEvidence_BareMetalEnvelope(t *testing.T) {
-	raw, err := os.ReadFile("testdata/live-evidence-genoa.json")
-	if err != nil {
-		t.Skipf("fixture missing: %v", err)
-	}
 	var env struct {
 		Evidence json.RawMessage `json:"evidence"`
 	}
-	if err := json.Unmarshal(raw, &env); err != nil {
+	if err := json.Unmarshal(genoaEvidence, &env); err != nil {
 		t.Fatal(err)
 	}
 	var ev SnpEvidence

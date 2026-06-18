@@ -1,21 +1,21 @@
 package tdx
 
 import (
+	_ "embed"
 	"encoding/base64"
-	"os"
 	"testing"
 
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
 )
 
+//go:embed testdata/tdx_quote_4.dat
+var tdxQuoteV4 []byte
+
 // TestVerifyQuoteBytes_Fixture verifies a real DCAP TDX quote (v4) offline:
 // signature + PCK chain against the embedded Intel root, plus claims. The v4
 // fixture has the debug attribute set, so AllowDebug is required.
 func TestVerifyQuoteBytes_Fixture(t *testing.T) {
-	quote, err := os.ReadFile("testdata/tdx_quote_4.dat")
-	if err != nil {
-		t.Skipf("fixture missing: %v", err)
-	}
+	quote := tdxQuoteV4
 
 	// Without AllowDebug the debug TD must be rejected.
 	if _, err := VerifyQuoteBytes(quote, teetypes.VerifyParams{}, teetypes.PlatformTDX, Options{}); err == nil {
@@ -47,11 +47,7 @@ func TestVerifyQuoteBytes_Fixture(t *testing.T) {
 
 // TestVerifyEvidence_Envelope drives the envelope-shaped entry point.
 func TestVerifyEvidence_Envelope(t *testing.T) {
-	quote, err := os.ReadFile("testdata/tdx_quote_4.dat")
-	if err != nil {
-		t.Skipf("fixture missing: %v", err)
-	}
-	ev := TdxEvidence{Quote: base64.StdEncoding.EncodeToString(quote)}
+	ev := TdxEvidence{Quote: base64.StdEncoding.EncodeToString(tdxQuoteV4)}
 	res, err := VerifyEvidence(ev, teetypes.VerifyParams{AllowDebug: true}, Options{})
 	if err != nil {
 		t.Fatalf("VerifyEvidence: %v", err)
