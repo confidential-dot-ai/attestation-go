@@ -189,7 +189,7 @@ func productFromReport(report *spb.Report) *spb.SevProduct {
 		return p
 	}
 	family, model, stepping := abi.FmsFromCpuid1Eax(fms)
-	name := spb.SevProduct_SEV_PRODUCT_UNKNOWN
+	var name spb.SevProduct_SevProductName
 	switch {
 	case family == 0x19 && model <= 0x0F:
 		name = spb.SevProduct_SEV_PRODUCT_MILAN
