@@ -48,6 +48,26 @@ if err != nil {
 fmt.Println("✅ Attestation successfully verified!")
 ```
 
+### Verifying a bare SEV-SNP report
+
+`VerifyAttestation` expects a full go-tpm-tools bundle (TPM quote + event log) as
+produced on GCE. For callers that carry SEV-SNP evidence outside that envelope —
+e.g. an RA-TLS certificate extension or a `/.well-known` attestation endpoint —
+`VerifySNPReport` verifies a bare 1184-byte report plus an optional DER cert
+chain (VCEK[ ‖ ASK ‖ ARK]) and returns the verified claims. It checks the AMD
+signature chain before validating any field.
+
+```go
+claims, err := attestation.VerifySNPReport(report, certChainDER, &validate.Options{
+    GuestPolicy: abi.SnpPolicy{SMT: true},
+    ReportData:  expectedReportData, // 64 bytes; empty skips the binding check
+}, nil) // nil verify.Options → bundled AMD roots, KDS fallback for missing certs
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Printf("launch measurement: %x\n", claims.Measurement)
+```
+
 ### Example Usage
 
 ```go
