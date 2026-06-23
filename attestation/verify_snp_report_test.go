@@ -6,12 +6,53 @@ import (
 	"time"
 
 	"github.com/google/go-sev-guest/abi"
+	"github.com/google/go-sev-guest/kds"
+	spb "github.com/google/go-sev-guest/proto/sevsnp"
 	"github.com/google/go-sev-guest/validate"
 	sv "github.com/google/go-sev-guest/verify"
 	"github.com/google/go-sev-guest/verify/trust"
 
 	test "github.com/google/go-sev-guest/testing"
 )
+
+// sienaFms is a Zen4c (EPYC 8004 "Siena") CPUID_1_EAX (family 0x19, model 0xA0,
+// stepping 2) — a value go-sev-guest's table does not classify (→ "Unknown").
+const sienaFms = uint32(0x00aa0f02)
+
+func TestVCEKProductRootsFallback(t *testing.T) {
+	t.Run("v2 report: no override", func(t *testing.T) {
+		r, err := vcekProductRootsFallback(&spb.Report{}, []byte{0x30})
+		if err != nil || r != nil {
+			t.Errorf("v2 must be (nil,nil); got (%v,%v)", r, err)
+		}
+	})
+
+	t.Run("classifiable v3 (Genoa): no override", func(t *testing.T) {
+		r, err := vcekProductRootsFallback(&spb.Report{Cpuid1EaxFms: 0x00a10f10}, []byte("ignored"))
+		if err != nil || r != nil {
+			t.Errorf("classifiable v3 must be (nil,nil); got (%v,%v)", r, err)
+		}
+	})
+
+	t.Run("unclassifiable v3 (Siena) + Genoa VCEK -> Genoa roots", func(t *testing.T) {
+		signer, err := test.DefaultTestOnlyCertChain("Genoa", time.Now())
+		if err != nil {
+			t.Fatalf("DefaultTestOnlyCertChain: %v", err)
+		}
+		roots, err := vcekProductRootsFallback(&spb.Report{Cpuid1EaxFms: sienaFms}, signer.Vcek.Raw)
+		if err != nil {
+			t.Fatalf("fallback: %v", err)
+		}
+		key := kds.ProductLineFromFms(sienaFms) // what go-sev-guest will look up ("Unknown")
+		if roots == nil || len(roots[key]) == 0 {
+			t.Fatalf("expected roots keyed under %q, got %v", key, roots)
+		}
+		// The supplied roots must be the bundled Genoa roots.
+		if roots[key][0].ArkSev != trust.DefaultRootCerts["Genoa"].ArkSev {
+			t.Error("expected the bundled Genoa ARK to be supplied")
+		}
+	})
+}
 
 // fakeReport mints a fake-but-cryptographically-consistent SEV-SNP report
 // signed by a test-only AMD key chain, returning the bare report, the VCEK DER,

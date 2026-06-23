@@ -5,9 +5,11 @@ import (
 	"fmt"
 
 	sabi "github.com/google/go-sev-guest/abi"
+	"github.com/google/go-sev-guest/kds"
 	spb "github.com/google/go-sev-guest/proto/sevsnp"
 	"github.com/google/go-sev-guest/validate"
 	sv "github.com/google/go-sev-guest/verify"
+	"github.com/google/go-sev-guest/verify/trust"
 )
 
 // SNPClaims holds the verified fields extracted from a SEV-SNP attestation
@@ -66,6 +68,22 @@ func VerifySNPReport(report, certChainDER []byte, validateOpts *validate.Options
 		att.CertificateChain = chain
 	}
 
+	// Back-fill the product classification go-sev-guest lacks (e.g. Zen4c
+	// Bergamo/Siena): when it can't anchor the report's CPUID to bundled roots,
+	// derive the product line from the VCEK certificate and supply the matching
+	// roots. Skipped when the caller already pinned TrustedRoots.
+	if verifyOpts.TrustedRoots == nil {
+		roots, err := vcekProductRootsFallback(proto, att.GetCertificateChain().GetVcekCert())
+		if err != nil {
+			return nil, err
+		}
+		if roots != nil {
+			opts := *verifyOpts
+			opts.TrustedRoots = roots
+			verifyOpts = &opts
+		}
+	}
+
 	// INVARIANT: signature before fields. verifySevSnpAttestation runs
 	// verify.SnpAttestation then validate.SnpAttestation in that order.
 	if err := verifySevSnpAttestation(att, &verifySnpOpts{Validation: validateOpts, Verification: verifyOpts}); err != nil {
@@ -100,4 +118,52 @@ func certChainFromDER(der []byte) (*spb.CertificateChain, error) {
 		}
 	}
 	return chain, nil
+}
+
+// vcekProductRootsFallback returns trusted roots for go-sev-guest when it cannot
+// classify a v3 report's CPUID (so it would fail anchoring as product
+// "Unknown"), by reading the authoritative product line from the VCEK
+// certificate — the same source go-sev-guest uses for v2 reports, and what the
+// attestation-api (attestation-rs) relies on. This back-fills support for parts
+// go-sev-guest's CPUID table omits, notably Zen4c (Bergamo/Siena), whose VCEKs
+// chain to the Genoa roots.
+//
+// It returns nil (no override) when: the report is v2 (go-sev-guest already
+// reads the VCEK product name), go-sev-guest can classify the CPUID itself, no
+// VCEK is available, or the VCEK's product line is also unknown to go-sev-guest
+// (no bundled roots to anchor to — that part genuinely needs upstream support).
+func vcekProductRootsFallback(report *spb.Report, vcekDER []byte) (map[string][]*trust.AMDRootCerts, error) {
+	if len(vcekDER) == 0 {
+		return nil, nil
+	}
+	fms := report.GetCpuid1EaxFms()
+	if fms == 0 {
+		return nil, nil // v2 report: go-sev-guest already derives product from the VCEK.
+	}
+	// reportLine is the product line go-sev-guest derives from the v3 CPUID and
+	// keys root lookup by; only intervene when it has no bundled roots for it.
+	reportLine := kds.ProductLineFromFms(fms)
+	if trust.DefaultRootCerts[reportLine] != nil {
+		return nil, nil // go-sev-guest can anchor this part itself.
+	}
+
+	cert, err := x509.ParseCertificate(vcekDER)
+	if err != nil {
+		return nil, fmt.Errorf("attestation: parse VCEK for product fallback: %w", err)
+	}
+	exts, err := kds.VcekCertificateExtensions(cert)
+	if err != nil {
+		return nil, fmt.Errorf("attestation: read VCEK product extension: %w", err)
+	}
+	vcekLine := kds.ProductLineOfProductName(exts.ProductName)
+	base := trust.DefaultRootCerts[vcekLine]
+	if base == nil {
+		return nil, nil // VCEK's product line is also unknown to go-sev-guest.
+	}
+
+	root := trust.AMDRootCertsProduct(vcekLine)
+	root.AskSev = base.AskSev
+	root.ArkSev = base.ArkSev
+	// Key under the (e.g. "Unknown") line go-sev-guest computes for this report.
+	return map[string][]*trust.AMDRootCerts{reportLine: {root}}, nil
 }
