@@ -2,10 +2,10 @@ package snp
 
 import (
 	_ "embed"
-	"encoding/base64"
 	"encoding/json"
-	"strings"
 	"testing"
+
+	spb "github.com/google/go-sev-guest/proto/sevsnp"
 
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
 )
@@ -60,10 +60,10 @@ func TestVerifyEvidence_Errors(t *testing.T) {
 	}
 }
 
-// TestVerifyEvidence_BareMetalEnvelope drives the bare-metal envelope path with
-// a real Genoa-family v5 fixture. go-sev-guest v0.15 doesn't recognize the
-// 0xA0 (Bergamo/Siena) CPU model offline, so it can't pick embedded roots for
-// it; the test skips with that documented limitation rather than failing.
+// TestVerifyEvidence_BareMetalEnvelope drives the bare-metal envelope path with a
+// real Genoa-family fixture whose CPUID model (0xA0, Bergamo/Siena) go-sev-guest
+// cannot classify offline. vcekProductRoots back-fills the Genoa roots from the
+// VCEK certificate so verification succeeds end to end.
 func TestVerifyEvidence_BareMetalEnvelope(t *testing.T) {
 	var env struct {
 		Evidence json.RawMessage `json:"evidence"`
@@ -75,18 +75,43 @@ func TestVerifyEvidence_BareMetalEnvelope(t *testing.T) {
 	if err := json.Unmarshal(env.Evidence, &ev); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := base64.StdEncoding.DecodeString(ev.AttestationReport); err != nil {
-		t.Fatalf("envelope report should be valid base64: %v", err)
-	}
 
 	res, err := VerifyEvidence(ev, teetypes.VerifyParams{}, Options{})
 	if err != nil {
-		if strings.Contains(err.Error(), "Unknown") || strings.Contains(err.Error(), "no embedded roots") {
-			t.Skipf("known go-sev-guest gap: Genoa-family model 0xA0 (Bergamo/Siena) product not recognized offline: %v", err)
-		}
 		t.Fatalf("VerifyEvidence: %v", err)
 	}
-	if res.Platform != teetypes.PlatformSNP {
-		t.Fatalf("platform = %s", res.Platform)
+	if !res.SignatureValid || res.Platform != teetypes.PlatformSNP {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+	if len(res.Claims.LaunchDigest) != 96 || res.Claims.TCB.Type != "Snp" {
+		t.Fatalf("unexpected claims: %+v", res.Claims)
 	}
 }
+
+// TestVCEKProductRoots_Guards covers the cases where the VCEK product fallback
+// must stay out of go-sev-guest's way and return no override.
+func TestVCEKProductRoots_Guards(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		report *spb.Report
+		vcek   []byte
+	}{
+		{"v2 report (no CPUID)", &spb.Report{}, []byte{0x30}},
+		{"v3 report without a VCEK", &spb.Report{Cpuid1EaxFms: sienaFms}, nil},
+		{"classifiable v3 (Genoa)", &spb.Report{Cpuid1EaxFms: genoaFms}, []byte("ignored")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			roots, err := vcekProductRoots(tc.report, tc.vcek)
+			if err != nil || roots != nil {
+				t.Fatalf("want (nil, nil); got (%v, %v)", roots, err)
+			}
+		})
+	}
+}
+
+// Genoa-family CPUID_1_EAX values: genoaFms (family 0x19, model 0x11) is
+// classifiable by go-sev-guest; sienaFms (model 0xA0, Zen4c) is not.
+const (
+	genoaFms = uint32(0x00a10f11)
+	sienaFms = uint32(0x00aa0f02)
+)
