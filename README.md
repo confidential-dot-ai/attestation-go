@@ -1,4 +1,4 @@
-# Lunal Attestation
+# Confidential.AI Attestation Verification Library
 
 A Go library for generating and verifying hardware attestations from Google Cloud confidential computing environments, supporting both AMD SEV-SNP and Intel TDX technologies.
 
