@@ -8,6 +8,7 @@
 package snp
 
 import (
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -18,7 +19,6 @@ import (
 	"github.com/google/go-sev-guest/validate"
 	sv "github.com/google/go-sev-guest/verify"
 	"github.com/google/go-sev-guest/verify/trust"
-	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
 )
@@ -101,10 +101,21 @@ func VerifyReport(reportBytes, vcekDER []byte, params teetypes.VerifyParams, pla
 	// Getter is supplied for CRL/cert fetching.
 	verifyOpts := sv.DefaultOptions()
 	verifyOpts.CheckRevocations = opts.CheckRevocations
-	verifyOpts.Product = productFromReport(report)
+	verifyOpts.Product = abi.SevProductFromCpuid1Eax(report.GetCpuid1EaxFms())
 	verifyOpts.DisableCertFetching = opts.Getter == nil
 	if opts.Getter != nil {
 		verifyOpts.Getter = opts.Getter
+	}
+	// go-sev-guest selects its bundled AMD roots by the product line it derives
+	// from the report's CPUID. For parts its table doesn't know — notably Zen4c
+	// (Bergamo/Siena), family 0x19 model 0xA0 — that yields "Unknown" and offline
+	// root selection fails; back-fill the roots from the VCEK certificate instead.
+	roots, err := vcekProductRoots(report, vcekDER)
+	if err != nil {
+		return nil, err
+	}
+	if roots != nil {
+		verifyOpts.TrustedRoots = roots
 	}
 	if err := sv.SnpAttestation(attestation, verifyOpts); err != nil {
 		return nil, fmt.Errorf("snp: hardware verification failed: %w", err)
@@ -178,29 +189,41 @@ func pad(b []byte, n int) []byte {
 	return out
 }
 
-// productFromReport resolves the AMD product (which selects the embedded ARK/ASK
-// roots) from the report's CPUID. go-sev-guest recognizes the canonical model
-// IDs; for the Genoa-family 0xA0 range (Bergamo/Siena and some Genoa SKUs) its
-// detection returns Unknown, so we fall back to the same family/model mapping
-// attestation-rs uses, keeping verification offline.
-func productFromReport(report *spb.Report) *spb.SevProduct {
+// vcekProductRoots back-fills trusted roots for parts go-sev-guest cannot
+// classify from a v3 report's CPUID (so it would fail offline anchoring under
+// product line "Unknown") — notably Zen4c (Bergamo/Siena), whose VCEKs chain to
+// the Genoa roots. It reads the authoritative product line from the VCEK
+// certificate (the same source go-sev-guest uses for v2 reports) and supplies the
+// matching bundled roots, keyed under the line go-sev-guest derives for the
+// report.
+//
+// It returns (nil, nil) — leaving go-sev-guest's own root selection untouched —
+// when there is no VCEK, the report is v2 (product already comes from the VCEK),
+// go-sev-guest can classify the CPUID itself, or the VCEK's product line is also
+// unknown to go-sev-guest (that part genuinely needs upstream support).
+func vcekProductRoots(report *spb.Report, vcekDER []byte) (map[string][]*trust.AMDRootCerts, error) {
 	fms := report.GetCpuid1EaxFms()
-	if p := abi.SevProductFromCpuid1Eax(fms); p.GetName() != spb.SevProduct_SEV_PRODUCT_UNKNOWN {
-		return p
+	if fms == 0 || len(vcekDER) == 0 {
+		return nil, nil // v2 report or no VCEK: nothing to back-fill.
 	}
-	family, model, stepping := abi.FmsFromCpuid1Eax(fms)
-	var name spb.SevProduct_SevProductName
-	switch {
-	case family == 0x19 && model <= 0x0F:
-		name = spb.SevProduct_SEV_PRODUCT_MILAN
-	case family == 0x19 && ((model >= 0x10 && model <= 0x1F) || (model >= 0xA0 && model <= 0xAF)):
-		name = spb.SevProduct_SEV_PRODUCT_GENOA
-	case family == 0x1A && model <= 0x11:
-		name = spb.SevProduct_SEV_PRODUCT_TURIN
-	default:
-		return abi.SevProductFromCpuid1Eax(fms) // leave Unknown; verify reports it
+	reportLine := kds.ProductLineFromFms(fms)
+	if _, err := trust.GetDefaultRootCerts(reportLine); err == nil {
+		return nil, nil // go-sev-guest can anchor this part itself.
 	}
-	return &spb.SevProduct{Name: name, MachineStepping: wrapperspb.UInt32(uint32(stepping))}
+	cert, err := x509.ParseCertificate(vcekDER)
+	if err != nil {
+		return nil, fmt.Errorf("snp: parsing VCEK for product fallback: %w", err)
+	}
+	exts, err := kds.VcekCertificateExtensions(cert)
+	if err != nil {
+		return nil, fmt.Errorf("snp: reading VCEK product extension: %w", err)
+	}
+	root, err := trust.GetDefaultRootCerts(kds.ProductLineOfProductName(exts.ProductName))
+	if err != nil {
+		return nil, nil // VCEK's product line is also unknown to go-sev-guest.
+	}
+	// Hand go-sev-guest the bundled roots under the line it derives for this report.
+	return map[string][]*trust.AMDRootCerts{reportLine: {root}}, nil
 }
 
 // extractClaims normalizes an SNP report into teetypes.Claims (mirrors
