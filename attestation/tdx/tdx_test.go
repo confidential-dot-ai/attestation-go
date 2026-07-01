@@ -58,7 +58,11 @@ func TestVerifyQuoteBytes_LaunchDigestAndRTMRs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decoding mr_td: %v", err)
 	}
-	rtmr0, err := hex.DecodeString(base.Claims.PlatformData["rtmr_0"].(string))
+	rtmr0Hex, ok := base.Claims.PlatformData["rtmr_0"].(string)
+	if !ok {
+		t.Fatal("rtmr_0 claim missing or not a string")
+	}
+	rtmr0, err := hex.DecodeString(rtmr0Hex)
 	if err != nil {
 		t.Fatalf("decoding rtmr_0: %v", err)
 	}
@@ -84,10 +88,13 @@ func TestVerifyQuoteBytes_LaunchDigestAndRTMRs(t *testing.T) {
 		t.Fatal("wrong mr_td must be rejected")
 	}
 
-	// Wrong RTMR[0] fails closed.
+	// Wrong RTMR[0] fails closed. Pass an explicit 4-slot slice so the rejection
+	// is unambiguously a digest mismatch (RTMR[0]) and not a slice-length error —
+	// this stays a genuine fail-closed assertion even if validateOptions' 4-slot
+	// expansion were to regress.
 	badRtmr := append([]byte(nil), rtmr0...)
 	badRtmr[0] ^= 0xFF
-	if _, err := VerifyQuoteBytes(tdxQuoteV4, teetypes.VerifyParams{AllowDebug: true, ExpectedRTMRs: [][]byte{badRtmr}}, teetypes.PlatformTDX, Options{}); err == nil {
+	if _, err := VerifyQuoteBytes(tdxQuoteV4, teetypes.VerifyParams{AllowDebug: true, ExpectedRTMRs: [][]byte{badRtmr, nil, nil, nil}}, teetypes.PlatformTDX, Options{}); err == nil {
 		t.Fatal("wrong rtmr[0] must be rejected")
 	}
 }

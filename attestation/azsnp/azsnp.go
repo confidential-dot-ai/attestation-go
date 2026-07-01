@@ -182,15 +182,16 @@ func VerifyEvidence(inner []byte, params teetypes.VerifyParams, opts snp.Options
 		return nil, fmt.Errorf("az-snp vTPM: %w", err)
 	}
 
-	// Hardware layer: SNP report signature + chain + policy. The nonce binds via
-	// the TPM quote (above), so ExpectedReportData is NOT forwarded to the SNP
-	// report_data check; init-data binds via PCR[8], not HOST_DATA. The launch
-	// measurement is a property of the HW report, so it IS forwarded.
-	hwParams := teetypes.VerifyParams{
-		AllowDebug:           params.AllowDebug,
-		MinTCB:               params.MinTCB,
-		ExpectedLaunchDigest: params.ExpectedLaunchDigest,
-	}
+	// Hardware layer: SNP report signature + chain + policy. Forward every param
+	// to the HW layer EXCEPT the two that bind at the vTPM layer rather than the
+	// SNP report: the nonce (ExpectedReportData, checked against the TPM quote's
+	// extraData above) and init-data (ExpectedInitDataHash, checked against
+	// PCR[8]). Deriving from params and nulling only those two is fail-safe — a
+	// future HW-property field flows through by default instead of being silently
+	// dropped from the Azure path.
+	hwParams := params
+	hwParams.ExpectedReportData = nil
+	hwParams.ExpectedInitDataHash = nil
 	hw, err := snp.VerifyReport(d.hcl.TEEReport, d.vcek, hwParams, teetypes.PlatformAzSNP, snp.MinReportVersionAzure, opts)
 	if err != nil {
 		return nil, err

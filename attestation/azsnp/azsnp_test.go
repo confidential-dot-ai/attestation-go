@@ -2,6 +2,7 @@ package azsnp
 
 import (
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"testing"
 
@@ -70,6 +71,43 @@ func TestVerifyEvidence_FailClosed(t *testing.T) {
 	// Fresh nonce: recorded quote isn't bound to it → fail closed.
 	if _, err := VerifyEvidence(env.Evidence, teetypes.VerifyParams{ExpectedReportData: make([]byte, 32)}, snp.Options{}); err == nil {
 		t.Fatal("fresh nonce must be rejected on recorded evidence")
+	}
+}
+
+// TestVerifyEvidence_LaunchDigestForwarded proves ExpectedLaunchDigest is
+// forwarded into the SNP hardware layer on the Azure path: the report's own
+// MEASUREMENT verifies and sets LaunchDigestMatch, and a wrong digest fails
+// closed. Guards the hwParams-forwarding fix (a dropped forward would make the
+// wrong-digest case pass).
+func TestVerifyEvidence_LaunchDigestForwarded(t *testing.T) {
+	var env struct {
+		Evidence json.RawMessage `json:"evidence"`
+	}
+	if err := json.Unmarshal(attestationFixture, &env); err != nil {
+		t.Fatal(err)
+	}
+
+	base, err := VerifyEvidence(env.Evidence, teetypes.VerifyParams{}, snp.Options{})
+	if err != nil {
+		t.Fatalf("baseline VerifyEvidence: %v", err)
+	}
+	md, err := hex.DecodeString(base.Claims.LaunchDigest)
+	if err != nil {
+		t.Fatalf("decoding launch digest: %v", err)
+	}
+
+	res, err := VerifyEvidence(env.Evidence, teetypes.VerifyParams{ExpectedLaunchDigest: md}, snp.Options{})
+	if err != nil {
+		t.Fatalf("VerifyEvidence with launch digest: %v", err)
+	}
+	if res.LaunchDigestMatch == nil || !*res.LaunchDigestMatch {
+		t.Errorf("LaunchDigestMatch = %v, want true", res.LaunchDigestMatch)
+	}
+
+	wrong := append([]byte(nil), md...)
+	wrong[0] ^= 0xFF
+	if _, err := VerifyEvidence(env.Evidence, teetypes.VerifyParams{ExpectedLaunchDigest: wrong}, snp.Options{}); err == nil {
+		t.Fatal("wrong launch digest must be rejected on the az-snp path")
 	}
 }
 
