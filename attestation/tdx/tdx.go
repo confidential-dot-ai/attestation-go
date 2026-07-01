@@ -107,6 +107,9 @@ func VerifyQuoteBytes(quoteBytes []byte, params teetypes.VerifyParams, platform 
 	if params.ExpectedInitDataHash != nil {
 		res.InitDataMatch = teetypes.Ptr(true)
 	}
+	if params.ExpectedLaunchDigest != nil {
+		res.LaunchDigestMatch = teetypes.Ptr(true)
+	}
 	return res, nil
 }
 
@@ -123,6 +126,28 @@ func validateOptions(params teetypes.VerifyParams) (*tvalidate.Options, error) {
 			return nil, fmt.Errorf("tdx: expected_init_data_hash is %d bytes (max 48 for MR_CONFIG_ID)", len(d))
 		}
 		opts.TdQuoteBodyOptions.MrConfigID = pad(d, 48)
+	}
+	if d := params.ExpectedLaunchDigest; d != nil {
+		if len(d) != 48 {
+			return nil, fmt.Errorf("tdx: expected_launch_digest is %d bytes (want 48 for MR_TD)", len(d))
+		}
+		opts.TdQuoteBodyOptions.MrTd = d
+	}
+	if rtmrs := params.ExpectedRTMRs; rtmrs != nil {
+		if len(rtmrs) > 4 {
+			return nil, fmt.Errorf("tdx: expected_rtmrs has %d entries (max 4)", len(rtmrs))
+		}
+		// go-tdx-guest compares RTMRs positionally and requires the slice to be
+		// either empty or exactly 4 entries; a nil/empty entry at index i skips
+		// RTMR[i]. Emit a 4-slot slice, placing each provided value at its index.
+		out := make([][]byte, 4)
+		for i, r := range rtmrs {
+			if r != nil && len(r) != 48 {
+				return nil, fmt.Errorf("tdx: expected_rtmrs[%d] is %d bytes (want 48)", i, len(r))
+			}
+			out[i] = r
+		}
+		opts.TdQuoteBodyOptions.Rtmrs = out
 	}
 	return opts, nil
 }

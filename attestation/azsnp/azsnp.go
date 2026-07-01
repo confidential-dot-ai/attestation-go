@@ -149,7 +149,11 @@ func (r *Result) VerifyVTPMFreshness(nonce []byte) error {
 // and (when requested) nonce freshness and init-data. It mirrors attestation-rs
 // az_snp::verify::verify_evidence. The nonce, if any, is params.ExpectedReportData
 // (compared against the TPM quote's extraData, not the SNP report_data).
-func VerifyEvidence(inner []byte, params teetypes.VerifyParams) (*teetypes.VerificationResult, error) {
+//
+// opts tunes the SNP hardware layer (CRL revocation / collateral fetching). The
+// zero value verifies offline; pass a Getter with CheckRevocations to enable
+// VCEK revocation checks — previously this path could never reach them.
+func VerifyEvidence(inner []byte, params teetypes.VerifyParams, opts snp.Options) (*teetypes.VerificationResult, error) {
 	var ev azSnpEvidence
 	if err := json.Unmarshal(inner, &ev); err != nil {
 		return nil, fmt.Errorf("parsing az-snp evidence: %w", err)
@@ -180,9 +184,14 @@ func VerifyEvidence(inner []byte, params teetypes.VerifyParams) (*teetypes.Verif
 
 	// Hardware layer: SNP report signature + chain + policy. The nonce binds via
 	// the TPM quote (above), so ExpectedReportData is NOT forwarded to the SNP
-	// report_data check; init-data binds via PCR[8], not HOST_DATA.
-	hwParams := teetypes.VerifyParams{AllowDebug: params.AllowDebug, MinTCB: params.MinTCB}
-	hw, err := snp.VerifyReport(d.hcl.TEEReport, d.vcek, hwParams, teetypes.PlatformAzSNP, snp.MinReportVersionAzure, snp.Options{})
+	// report_data check; init-data binds via PCR[8], not HOST_DATA. The launch
+	// measurement is a property of the HW report, so it IS forwarded.
+	hwParams := teetypes.VerifyParams{
+		AllowDebug:           params.AllowDebug,
+		MinTCB:               params.MinTCB,
+		ExpectedLaunchDigest: params.ExpectedLaunchDigest,
+	}
+	hw, err := snp.VerifyReport(d.hcl.TEEReport, d.vcek, hwParams, teetypes.PlatformAzSNP, snp.MinReportVersionAzure, opts)
 	if err != nil {
 		return nil, err
 	}

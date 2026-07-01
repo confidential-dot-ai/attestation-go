@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/confidential-dot-ai/attestation-go/attestation/snp"
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
 	"github.com/confidential-dot-ai/attestation-go/attestation/tpmcommon"
 )
@@ -55,7 +56,7 @@ func TestVerifyEvidence_FailClosed(t *testing.T) {
 	}
 
 	// No nonce: hardware + vTPM-AK chain verify; result carries az-snp claims.
-	res, err := VerifyEvidence(env.Evidence, teetypes.VerifyParams{})
+	res, err := VerifyEvidence(env.Evidence, teetypes.VerifyParams{}, snp.Options{})
 	if err != nil {
 		t.Fatalf("VerifyEvidence (no nonce): %v", err)
 	}
@@ -67,7 +68,7 @@ func TestVerifyEvidence_FailClosed(t *testing.T) {
 	}
 
 	// Fresh nonce: recorded quote isn't bound to it → fail closed.
-	if _, err := VerifyEvidence(env.Evidence, teetypes.VerifyParams{ExpectedReportData: make([]byte, 32)}); err == nil {
+	if _, err := VerifyEvidence(env.Evidence, teetypes.VerifyParams{ExpectedReportData: make([]byte, 32)}, snp.Options{}); err == nil {
 		t.Fatal("fresh nonce must be rejected on recorded evidence")
 	}
 }

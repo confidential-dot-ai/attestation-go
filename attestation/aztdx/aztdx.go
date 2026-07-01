@@ -78,8 +78,13 @@ func VerifyEvidence(inner []byte, params teetypes.VerifyParams, opts tdx.Options
 	}
 
 	// TDX DCAP layer: verify the TD quote. The nonce binds via the TPM quote, so
-	// ExpectedReportData is NOT forwarded to the TD report_data check.
-	hwParams := teetypes.VerifyParams{AllowDebug: params.AllowDebug}
+	// ExpectedReportData is NOT forwarded to the TD report_data check. The launch
+	// measurement (MR_TD) and RTMRs live in the TD report, so they ARE forwarded.
+	hwParams := teetypes.VerifyParams{
+		AllowDebug:           params.AllowDebug,
+		ExpectedLaunchDigest: params.ExpectedLaunchDigest,
+		ExpectedRTMRs:        params.ExpectedRTMRs,
+	}
 	hw, err := tdx.VerifyQuoteBytes(tdQuoteBytes, hwParams, teetypes.PlatformAzTDX, opts)
 	if err != nil {
 		return nil, err
