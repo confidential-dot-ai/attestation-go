@@ -89,16 +89,34 @@ func VerifyReport(reportBytes, vcekDER []byte, params teetypes.VerifyParams, pla
 		return nil, fmt.Errorf("snp: unsupported report version %d (want %d..%d)", v, minVersion, MaxReportVersion)
 	}
 
+	// Route the supplied endorsement cert (cert_chain.vcek) to the field that
+	// matches how the report was signed: VCEK (per-chip) or VLEK (per-CSP,
+	// ARK→ASVK→VLEK). Previously only VcekCert was populated, so any VLEK-signed
+	// report failed with ErrMissingVlek; this brings az-snp/snp to parity with
+	// attestation-rs, which detects the VLEK by its cert CN.
+	signer, err := abi.ParseSignerInfo(report.GetSignerInfo())
+	if err != nil {
+		return nil, fmt.Errorf("snp: parsing signer info: %w", err)
+	}
+	certChain := &spb.CertificateChain{}
+	switch signer.SigningKey {
+	case abi.VcekReportSigner:
+		certChain.VcekCert = vcekDER
+	case abi.VlekReportSigner:
+		certChain.VlekCert = vcekDER
+	default:
+		return nil, fmt.Errorf("snp: unsupported report signing key %v (want VCEK or VLEK)", signer.SigningKey)
+	}
 	attestation := &spb.Attestation{
 		Report:           report,
-		CertificateChain: &spb.CertificateChain{VcekCert: vcekDER},
+		CertificateChain: certChain,
 	}
 
-	// Hardware verification: report signature + ARK→ASK→VCEK chain + VCEK TCB
-	// OID cross-validation, against go-sev-guest's bundled AMD roots. The product
-	// (Milan/Genoa/Turin) selects which embedded roots to use; we resolve it from
-	// the report so verification stays offline (DisableCertFetching) unless a
-	// Getter is supplied for CRL/cert fetching.
+	// Hardware verification: report signature + ARK→ASK→VCEK (or ARK→ASVK→VLEK)
+	// chain + VEK TCB OID cross-validation, against go-sev-guest's bundled AMD
+	// roots. The product (Milan/Genoa/Turin) selects which embedded roots to use;
+	// we resolve it from the report so verification stays offline
+	// (DisableCertFetching) unless a Getter is supplied for CRL/cert fetching.
 	verifyOpts := sv.DefaultOptions()
 	verifyOpts.CheckRevocations = opts.CheckRevocations
 	verifyOpts.Product = abi.SevProductFromCpuid1Eax(report.GetCpuid1EaxFms())
@@ -110,12 +128,16 @@ func VerifyReport(reportBytes, vcekDER []byte, params teetypes.VerifyParams, pla
 	// from the report's CPUID. For parts its table doesn't know — notably Zen4c
 	// (Bergamo/Siena), family 0x19 model 0xA0 — that yields "Unknown" and offline
 	// root selection fails; back-fill the roots from the VCEK certificate instead.
-	roots, err := vcekProductRoots(report, vcekDER)
-	if err != nil {
-		return nil, err
-	}
-	if roots != nil {
-		verifyOpts.TrustedRoots = roots
+	// The back-fill reads VCEK-specific extensions, so it only applies to
+	// VCEK-signed reports; VLEK roots (ASVK) are selected by go-sev-guest.
+	if signer.SigningKey == abi.VcekReportSigner {
+		roots, err := vcekProductRoots(report, vcekDER)
+		if err != nil {
+			return nil, err
+		}
+		if roots != nil {
+			verifyOpts.TrustedRoots = roots
+		}
 	}
 	if err := sv.SnpAttestation(attestation, verifyOpts); err != nil {
 		return nil, fmt.Errorf("snp: hardware verification failed: %w", err)
@@ -142,6 +164,9 @@ func VerifyReport(reportBytes, vcekDER []byte, params teetypes.VerifyParams, pla
 	}
 	if params.ExpectedInitDataHash != nil {
 		res.InitDataMatch = teetypes.Ptr(true)
+	}
+	if params.ExpectedLaunchDigest != nil {
+		res.LaunchDigestMatch = teetypes.Ptr(true)
 	}
 	return res, nil
 }
@@ -172,7 +197,18 @@ func validateOptions(params teetypes.VerifyParams) (*validate.Options, error) {
 		}
 		opts.HostData = pad(d, 32)
 	}
+	if d := params.ExpectedLaunchDigest; d != nil {
+		if len(d) != 48 {
+			return nil, fmt.Errorf("snp: expected_launch_digest is %d bytes (want 48)", len(d))
+		}
+		opts.Measurement = d
+	}
 	if t := params.MinTCB; t != nil {
+		// NOTE: the FMC (Turin) TCB component is intentionally not enforced here:
+		// go-sev-guest v0.15.0's kds.TCBParts has no FMC field, so a caller-supplied
+		// MinTCB.FMC floor cannot be mapped onto validate.MinimumTCB. attestation-rs
+		// does enforce it; matching that requires upstream FMC support (or a manual
+		// reported-TCB comparison). Tracked as a known parity gap.
 		opts.MinimumTCB = kds.TCBParts{
 			BlSpl:    t.Bootloader,
 			TeeSpl:   t.Tee,

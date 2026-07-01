@@ -3,6 +3,7 @@ package snp
 import (
 	"bytes"
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"testing"
 	"time"
@@ -222,6 +223,49 @@ func TestValidateOptions(t *testing.T) {
 			t.Error("init_data_hash > 32 should error")
 		}
 	})
+
+	t.Run("launch_digest mapped and size-checked", func(t *testing.T) {
+		md := make([]byte, 48)
+		md[0] = 0xAB
+		opts, err := validateOptions(teetypes.VerifyParams{ExpectedLaunchDigest: md})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(opts.Measurement, md) {
+			t.Errorf("Measurement = %x, want %x", opts.Measurement, md)
+		}
+		if _, err := validateOptions(teetypes.VerifyParams{ExpectedLaunchDigest: make([]byte, 32)}); err == nil {
+			t.Error("launch_digest != 48 bytes should error")
+		}
+	})
+}
+
+// TestVerifyReport_LaunchDigest pins the launch measurement on the real Milan
+// fixture: feeding the report's own MEASUREMENT back must verify and set
+// LaunchDigestMatch; a wrong digest must fail closed.
+func TestVerifyReport_LaunchDigest(t *testing.T) {
+	base, err := VerifyReport(milanReport, milanVcek, teetypes.VerifyParams{}, teetypes.PlatformSNP, MinReportVersionAzure, Options{})
+	if err != nil {
+		t.Fatalf("baseline VerifyReport: %v", err)
+	}
+	md, err := hex.DecodeString(base.Claims.LaunchDigest)
+	if err != nil {
+		t.Fatalf("decoding launch digest: %v", err)
+	}
+
+	res, err := VerifyReport(milanReport, milanVcek, teetypes.VerifyParams{ExpectedLaunchDigest: md}, teetypes.PlatformSNP, MinReportVersionAzure, Options{})
+	if err != nil {
+		t.Fatalf("VerifyReport with launch digest: %v", err)
+	}
+	if res.LaunchDigestMatch == nil || !*res.LaunchDigestMatch {
+		t.Errorf("LaunchDigestMatch = %v, want true", res.LaunchDigestMatch)
+	}
+
+	wrong := append([]byte(nil), md...)
+	wrong[0] ^= 0xFF
+	if _, err := VerifyReport(milanReport, milanVcek, teetypes.VerifyParams{ExpectedLaunchDigest: wrong}, teetypes.PlatformSNP, MinReportVersionAzure, Options{}); err == nil {
+		t.Fatal("wrong launch digest must be rejected")
+	}
 }
 
 // TestVerifyReport_BindingFlags exercises the report_data / init_data binding

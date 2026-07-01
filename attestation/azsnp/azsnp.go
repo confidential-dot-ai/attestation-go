@@ -149,7 +149,11 @@ func (r *Result) VerifyVTPMFreshness(nonce []byte) error {
 // and (when requested) nonce freshness and init-data. It mirrors attestation-rs
 // az_snp::verify::verify_evidence. The nonce, if any, is params.ExpectedReportData
 // (compared against the TPM quote's extraData, not the SNP report_data).
-func VerifyEvidence(inner []byte, params teetypes.VerifyParams) (*teetypes.VerificationResult, error) {
+//
+// opts tunes the SNP hardware layer (CRL revocation / collateral fetching). The
+// zero value verifies offline; pass a Getter with CheckRevocations to enable
+// VCEK revocation checks — previously this path could never reach them.
+func VerifyEvidence(inner []byte, params teetypes.VerifyParams, opts snp.Options) (*teetypes.VerificationResult, error) {
 	var ev azSnpEvidence
 	if err := json.Unmarshal(inner, &ev); err != nil {
 		return nil, fmt.Errorf("parsing az-snp evidence: %w", err)
@@ -178,11 +182,17 @@ func VerifyEvidence(inner []byte, params teetypes.VerifyParams) (*teetypes.Verif
 		return nil, fmt.Errorf("az-snp vTPM: %w", err)
 	}
 
-	// Hardware layer: SNP report signature + chain + policy. The nonce binds via
-	// the TPM quote (above), so ExpectedReportData is NOT forwarded to the SNP
-	// report_data check; init-data binds via PCR[8], not HOST_DATA.
-	hwParams := teetypes.VerifyParams{AllowDebug: params.AllowDebug, MinTCB: params.MinTCB}
-	hw, err := snp.VerifyReport(d.hcl.TEEReport, d.vcek, hwParams, teetypes.PlatformAzSNP, snp.MinReportVersionAzure, snp.Options{})
+	// Hardware layer: SNP report signature + chain + policy. Forward every param
+	// to the HW layer EXCEPT the two that bind at the vTPM layer rather than the
+	// SNP report: the nonce (ExpectedReportData, checked against the TPM quote's
+	// extraData above) and init-data (ExpectedInitDataHash, checked against
+	// PCR[8]). Deriving from params and nulling only those two is fail-safe — a
+	// future HW-property field flows through by default instead of being silently
+	// dropped from the Azure path.
+	hwParams := params
+	hwParams.ExpectedReportData = nil
+	hwParams.ExpectedInitDataHash = nil
+	hw, err := snp.VerifyReport(d.hcl.TEEReport, d.vcek, hwParams, teetypes.PlatformAzSNP, snp.MinReportVersionAzure, opts)
 	if err != nil {
 		return nil, err
 	}

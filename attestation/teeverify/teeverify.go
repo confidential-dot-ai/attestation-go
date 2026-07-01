@@ -58,7 +58,7 @@ func VerifyWithOptions(evidenceJSON []byte, params teetypes.VerifyParams, opts O
 	case teetypes.PlatformGcpSNP:
 		return verifySNP(env.Evidence, params, opts.SNP, teetypes.PlatformGcpSNP)
 	case teetypes.PlatformAzSNP:
-		return azsnp.VerifyEvidence(env.Evidence, params)
+		return azsnp.VerifyEvidence(env.Evidence, params, opts.SNP)
 	case teetypes.PlatformTDX:
 		return verifyTDX(env.Evidence, params, opts.TDX, teetypes.PlatformTDX)
 	case teetypes.PlatformGcpTDX:

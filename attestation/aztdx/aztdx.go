@@ -77,9 +77,16 @@ func VerifyEvidence(inner []byte, params teetypes.VerifyParams, opts tdx.Options
 		return nil, fmt.Errorf("az-tdx vTPM: %w", err)
 	}
 
-	// TDX DCAP layer: verify the TD quote. The nonce binds via the TPM quote, so
-	// ExpectedReportData is NOT forwarded to the TD report_data check.
-	hwParams := teetypes.VerifyParams{AllowDebug: params.AllowDebug}
+	// TDX DCAP layer: verify the TD quote. Forward every param to the HW layer
+	// EXCEPT the two that bind at the vTPM layer rather than the TD report: the
+	// nonce (ExpectedReportData, checked against the TPM quote's extraData above)
+	// and init-data (ExpectedInitDataHash, checked against PCR[8]). Deriving from
+	// params and nulling only those two is fail-safe — a future HW-property field
+	// (e.g. the launch measurement MR_TD and RTMRs, which live in the TD report)
+	// flows through by default instead of being silently dropped.
+	hwParams := params
+	hwParams.ExpectedReportData = nil
+	hwParams.ExpectedInitDataHash = nil
 	hw, err := tdx.VerifyQuoteBytes(tdQuoteBytes, hwParams, teetypes.PlatformAzTDX, opts)
 	if err != nil {
 		return nil, err

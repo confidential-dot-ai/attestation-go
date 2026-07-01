@@ -51,6 +51,14 @@ type VerifyParams struct {
 	AllowDebug bool
 	// MinTCB, if set, enforces a component-wise minimum SNP TCB.
 	MinTCB *SnpTcb
+	// ExpectedLaunchDigest, if set, must match the launch measurement (SNP
+	// MEASUREMENT / TDX MR_TD). Must be 48 bytes. A mismatch is returned as an
+	// error, not a false result.
+	ExpectedLaunchDigest []byte
+	// ExpectedRTMRs, if set, pins TDX RTMR values. Entry i (0..3) that is
+	// non-nil must equal RTMR[i]; nil entries are not checked. Each non-nil
+	// entry must be 48 bytes. TDX-only; ignored for SNP.
+	ExpectedRTMRs [][]byte
 }
 
 // VerificationResult is the outcome of verification. The caller decides
@@ -68,6 +76,9 @@ type VerificationResult struct {
 	ReportDataMatch *bool `json:"report_data_match,omitempty"`
 	// InitDataMatch is nil when no ExpectedInitDataHash was supplied.
 	InitDataMatch *bool `json:"init_data_match,omitempty"`
+	// LaunchDigestMatch is nil when no ExpectedLaunchDigest was supplied, else
+	// true (a mismatch is returned as an error, not false).
+	LaunchDigestMatch *bool `json:"launch_digest_match,omitempty"`
 	// CollateralVerified is true when collateral (CRL/TCB/QE identity) was
 	// available and all collateral checks passed; false when skipped.
 	CollateralVerified bool `json:"collateral_verified"`
