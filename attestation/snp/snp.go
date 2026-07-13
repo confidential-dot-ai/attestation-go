@@ -119,7 +119,12 @@ func VerifyReport(reportBytes, vcekDER []byte, params teetypes.VerifyParams, pla
 	// (DisableCertFetching) unless a Getter is supplied for CRL/cert fetching.
 	verifyOpts := sv.DefaultOptions()
 	verifyOpts.CheckRevocations = opts.CheckRevocations
-	verifyOpts.Product = abi.SevProductFromCpuid1Eax(report.GetCpuid1EaxFms())
+	// v2 reports (az-snp) carry no CPUID: leave Product nil (no constraint) so
+	// go-sev-guest derives the line from the V[CL]EK cert and still anchors to
+	// its bundled AMD roots; a forced UNKNOWN product fails its cert check.
+	if fms := report.GetCpuid1EaxFms(); fms != 0 {
+		verifyOpts.Product = abi.SevProductFromCpuid1Eax(fms)
+	}
 	verifyOpts.DisableCertFetching = opts.Getter == nil
 	if opts.Getter != nil {
 		verifyOpts.Getter = opts.Getter
@@ -183,7 +188,11 @@ func validateOptions(params teetypes.VerifyParams) (*validate.Options, error) {
 			Debug:        params.AllowDebug,
 			SingleSocket: false,
 		},
-		VMPL: &vmpl0,
+		// Match attestation-rs, which has no committed==current requirement:
+		// hosts routinely run not-yet-committed firmware (committed < current).
+		// Committed ≤ current is still enforced; MinTCB is the policy floor.
+		PermitProvisionalFirmware: true,
+		VMPL:                      &vmpl0,
 	}
 	if d := params.ExpectedReportData; d != nil {
 		if len(d) > 64 {
