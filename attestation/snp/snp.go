@@ -8,9 +8,12 @@
 package snp
 
 import (
+	"bytes"
+	"context"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 
 	"github.com/google/go-sev-guest/abi"
@@ -22,6 +25,11 @@ import (
 
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
 )
+
+// ErrCollateralUnavailable marks a failed AMD KDS collateral fetch (network /
+// timeout), as opposed to a verification rejection. Callers can errors.Is it to
+// report "collateral unavailable" instead of "attestation invalid".
+var ErrCollateralUnavailable = errors.New("snp: collateral unavailable")
 
 // Report version bounds. Bare-metal SNP requires v3+ (CPUID fields); Azure CVMs
 // emit v2 reports, so az-snp passes MinReportVersionAzure.
@@ -53,8 +61,8 @@ type Options struct {
 	// CheckRevocations fetches AMD CRLs and checks the VCEK/ASK for revocation.
 	// Requires network (Getter). Off by default → offline verification.
 	CheckRevocations bool
-	// Getter fetches collateral (CRLs, missing certs). Defaults to none
-	// (offline); set for revocation/cert fetching.
+	// Getter fetches collateral: the VCEK for a bare report (see fetchVCEK) and
+	// CRLs. Defaults to none → fully offline, VCEK must be supplied inline.
 	Getter trust.HTTPSGetter
 }
 
@@ -81,6 +89,16 @@ func VerifyEvidence(ev SnpEvidence, params teetypes.VerifyParams, opts Options) 
 // (go-sev-guest validate), then extracts claims. minVersion lets az-snp accept
 // v2 reports while bare-metal requires v3. Shared by the snp and azsnp packages.
 func VerifyReport(reportBytes, vcekDER []byte, params teetypes.VerifyParams, platform teetypes.PlatformType, minVersion uint32, opts Options) (*teetypes.VerificationResult, error) {
+	return VerifyReportContext(context.Background(), reportBytes, vcekDER, params, platform, minVersion, opts)
+}
+
+// VerifyReportContext behaves like VerifyReport and additionally: when vcekDER
+// is empty, the report is VCEK-signed, and opts.Getter is set, it fetches the
+// VCEK from AMD KDS itself — resolving the product line from the report's CPUID
+// including Zen4c (Bergamo/Siena), which go-sev-guest maps to "Unknown" (see
+// kdsProductLine). ctx bounds the fetch; chain verification itself is always
+// offline against bundled AMD roots.
+func VerifyReportContext(ctx context.Context, reportBytes, vcekDER []byte, params teetypes.VerifyParams, platform teetypes.PlatformType, minVersion uint32, opts Options) (*teetypes.VerificationResult, error) {
 	report, err := abi.ReportToProto(reportBytes)
 	if err != nil {
 		return nil, fmt.Errorf("snp: parsing report: %w", err)
@@ -97,6 +115,11 @@ func VerifyReport(reportBytes, vcekDER []byte, params teetypes.VerifyParams, pla
 	signer, err := abi.ParseSignerInfo(report.GetSignerInfo())
 	if err != nil {
 		return nil, fmt.Errorf("snp: parsing signer info: %w", err)
+	}
+	if len(vcekDER) == 0 && signer.SigningKey == abi.VcekReportSigner && opts.Getter != nil {
+		if vcekDER, err = fetchVCEK(ctx, report, opts.Getter); err != nil {
+			return nil, err
+		}
 	}
 	certChain := &spb.CertificateChain{}
 	switch signer.SigningKey {
@@ -115,8 +138,11 @@ func VerifyReport(reportBytes, vcekDER []byte, params teetypes.VerifyParams, pla
 	// Hardware verification: report signature + ARK→ASK→VCEK (or ARK→ASVK→VLEK)
 	// chain + VEK TCB OID cross-validation, against go-sev-guest's bundled AMD
 	// roots. The product (Milan/Genoa/Turin) selects which embedded roots to use;
-	// we resolve it from the report so verification stays offline
-	// (DisableCertFetching) unless a Getter is supplied for CRL/cert fetching.
+	// we resolve it from the report. Chain verification is always offline
+	// (DisableCertFetching): go-sev-guest's own KDS path derives the product line
+	// from CPUID alone and hangs on parts it cannot classify (Zen4c → "Unknown"
+	// URLs); the VCEK is already in hand (inline or fetchVCEK) and ASK/ARK come
+	// from bundled roots. The Getter is kept for CRL fetching only.
 	verifyOpts := sv.DefaultOptions()
 	verifyOpts.CheckRevocations = opts.CheckRevocations
 	// v2 reports (az-snp) carry no CPUID: leave Product nil (no constraint) so
@@ -125,7 +151,7 @@ func VerifyReport(reportBytes, vcekDER []byte, params teetypes.VerifyParams, pla
 	if fms := report.GetCpuid1EaxFms(); fms != 0 {
 		verifyOpts.Product = abi.SevProductFromCpuid1Eax(fms)
 	}
-	verifyOpts.DisableCertFetching = opts.Getter == nil
+	verifyOpts.DisableCertFetching = true
 	if opts.Getter != nil {
 		verifyOpts.Getter = opts.Getter
 	}
@@ -144,7 +170,7 @@ func VerifyReport(reportBytes, vcekDER []byte, params teetypes.VerifyParams, pla
 			verifyOpts.TrustedRoots = roots
 		}
 	}
-	if err := sv.SnpAttestation(attestation, verifyOpts); err != nil {
+	if err := sv.SnpAttestationContext(ctx, attestation, verifyOpts); err != nil {
 		return nil, fmt.Errorf("snp: hardware verification failed: %w", err)
 	}
 
@@ -232,6 +258,45 @@ func pad(b []byte, n int) []byte {
 	out := make([]byte, n)
 	copy(out, b)
 	return out
+}
+
+// kdsProductLine maps a v3+ report's CPUID_1_EAX to the AMD KDS product line
+// its collateral is served under. go-sev-guest's own table covers Milan, Genoa,
+// and Turin; Zen4c (Bergamo/Siena, family 0x19 models 0xA0–0xAF) it maps to
+// "Unknown", but KDS serves those parts' collateral under Genoa.
+func kdsProductLine(fms uint32) (string, error) {
+	if abi.SevProductFromCpuid1Eax(fms).GetName() != spb.SevProduct_SEV_PRODUCT_UNKNOWN {
+		return kds.ProductLineFromFms(fms), nil
+	}
+	family, model, _ := abi.FmsFromCpuid1Eax(fms)
+	if family == 0x19 && model >= 0xA0 && model <= 0xAF {
+		return "Genoa", nil
+	}
+	return "", fmt.Errorf("snp: no KDS product line known for CPUID family %#x model %#x", family, model)
+}
+
+// fetchVCEK downloads a VCEK-signed report's VCEK from AMD KDS via getter,
+// bounded by ctx and the getter's own retry policy. Network failures wrap
+// ErrCollateralUnavailable; a report whose VCEK URL cannot be derived (no
+// CPUID, zeroed CHIP_ID) is a plain error — refetching cannot help.
+func fetchVCEK(ctx context.Context, report *spb.Report, getter trust.HTTPSGetter) ([]byte, error) {
+	fms := report.GetCpuid1EaxFms()
+	if fms == 0 {
+		return nil, fmt.Errorf("snp: report carries no CPUID product info; cannot derive its KDS VCEK URL (supply the VCEK inline)")
+	}
+	productLine, err := kdsProductLine(fms)
+	if err != nil {
+		return nil, err
+	}
+	if len(bytes.Trim(report.GetChipId(), "\x00")) == 0 {
+		return nil, fmt.Errorf("snp: report has an all-zero CHIP_ID (MaskChipKey?); cannot derive its KDS VCEK URL (supply the VCEK inline)")
+	}
+	url := kds.VCEKCertURL(productLine, report.GetChipId(), kds.TCBVersion(report.GetReportedTcb()))
+	der, err := trust.GetWith(ctx, getter, url)
+	if err != nil {
+		return nil, fmt.Errorf("%w: GET %s: %w", ErrCollateralUnavailable, url, err)
+	}
+	return der, nil
 }
 
 // vcekProductRoots back-fills trusted roots for parts go-sev-guest cannot

@@ -2,12 +2,16 @@ package snp
 
 import (
 	"bytes"
+	"context"
 	_ "embed"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/google/go-sev-guest/abi"
 	"github.com/google/go-sev-guest/kds"
 	spb "github.com/google/go-sev-guest/proto/sevsnp"
 	test "github.com/google/go-sev-guest/testing"
@@ -91,6 +95,123 @@ func TestVerifyEvidence_BareMetalEnvelope(t *testing.T) {
 	}
 	if len(res.Claims.LaunchDigest) != 96 || res.Claims.TCB.Type != "Snp" {
 		t.Fatalf("unexpected claims: %+v", res.Claims)
+	}
+}
+
+// genoaFixture returns the raw report and paired VCEK DER from the live
+// Zen4c/Genoa evidence fixture.
+func genoaFixture(t *testing.T) (report, vcek []byte) {
+	t.Helper()
+	var env struct {
+		Evidence json.RawMessage `json:"evidence"`
+	}
+	if err := json.Unmarshal(genoaEvidence, &env); err != nil {
+		t.Fatal(err)
+	}
+	var ev SnpEvidence
+	if err := json.Unmarshal(env.Evidence, &ev); err != nil {
+		t.Fatal(err)
+	}
+	report, err := base64.StdEncoding.DecodeString(ev.AttestationReport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vcek, err = base64.StdEncoding.DecodeString(ev.CertChain.Vcek)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return report, vcek
+}
+
+// TestVerifyReportContext_FetchesZen4cVCEKFromGenoa is the regression test for
+// the Siena `c8s verify` hang: a bare (VCEK-less) Zen4c report must resolve to
+// the Genoa KDS URL and verify end to end. The fake getter serves the fixture's
+// real VCEK under exactly that URL and 404s anything else, so a wrong product
+// line (go-sev-guest derives "Unknown") fails the test.
+func TestVerifyReportContext_FetchesZen4cVCEKFromGenoa(t *testing.T) {
+	report, vcek := genoaFixture(t)
+	rp, err := abi.ReportToProto(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	url := kds.VCEKCertURL("Genoa", rp.GetChipId(), kds.TCBVersion(rp.GetReportedTcb()))
+	getter := test.SimpleGetter(map[string][]byte{url: vcek})
+
+	res, err := VerifyReportContext(context.Background(), report, nil, teetypes.VerifyParams{},
+		teetypes.PlatformSNP, MinReportVersion, Options{Getter: getter})
+	if err != nil {
+		t.Fatalf("VerifyReportContext with KDS fetch: %v", err)
+	}
+	if !res.SignatureValid || len(res.Claims.LaunchDigest) != 96 {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+}
+
+// TestVerifyReportContext_KDSFailureIsCollateralError: a failing fetch must
+// surface ErrCollateralUnavailable (so callers report availability, not a
+// security verdict) and must return promptly when the context is cancelled
+// even with a retrying getter — the original bug retried unbounded.
+func TestVerifyReportContext_KDSFailureIsCollateralError(t *testing.T) {
+	report, _ := genoaFixture(t)
+
+	t.Run("fetch error wraps sentinel", func(t *testing.T) {
+		_, err := VerifyReportContext(context.Background(), report, nil, teetypes.VerifyParams{},
+			teetypes.PlatformSNP, MinReportVersion, Options{Getter: test.SimpleGetter(nil)})
+		if !errors.Is(err, ErrCollateralUnavailable) {
+			t.Fatalf("want ErrCollateralUnavailable, got %v", err)
+		}
+	})
+
+	t.Run("cancelled ctx bounds a retrying getter", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		getter := &trust.RetryHTTPSGetter{MaxRetryDelay: time.Minute, Getter: test.SimpleGetter(nil)}
+		start := time.Now()
+		_, err := VerifyReportContext(ctx, report, nil, teetypes.VerifyParams{},
+			teetypes.PlatformSNP, MinReportVersion, Options{Getter: getter})
+		if elapsed := time.Since(start); elapsed > 2*time.Second {
+			t.Fatalf("cancelled ctx took %v, want prompt return", elapsed)
+		}
+		if !errors.Is(err, ErrCollateralUnavailable) {
+			t.Fatalf("want ErrCollateralUnavailable, got %v", err)
+		}
+	})
+}
+
+// TestVerifyReport_MissingVCEKWithoutGetter pins the offline contract: no VCEK
+// and no getter is an error, never an implicit network fetch.
+func TestVerifyReport_MissingVCEKWithoutGetter(t *testing.T) {
+	report, _ := genoaFixture(t)
+	if _, err := VerifyReport(report, nil, teetypes.VerifyParams{}, teetypes.PlatformSNP, MinReportVersion, Options{}); err == nil {
+		t.Fatal("missing VCEK with no getter must fail")
+	}
+}
+
+func TestKDSProductLine(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		fms  uint32
+		want string // "" = expect an error
+	}{
+		{"Siena/Bergamo (Zen4c, model 0xA0) → Genoa", sienaFms, "Genoa"},
+		{"Zen4c upper bound (family 0x19, model 0xAF)", 0x00aa0ff0, "Genoa"},
+		{"Genoa proper (go-sev-guest's own table)", genoaFms, "Genoa"},
+		{"Milan proper", 0x00a00f11, "Milan"},
+		{"unknown family 0x1B", 0x00c00f00, ""},
+		{"family 0x19 below Zen4c range (model 0x90)", 0x00a90f00, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := kdsProductLine(tc.fms)
+			if tc.want == "" {
+				if err == nil {
+					t.Fatalf("want error, got %q", got)
+				}
+				return
+			}
+			if err != nil || got != tc.want {
+				t.Fatalf("kdsProductLine(%#x) = (%q, %v), want %q", tc.fms, got, err, tc.want)
+			}
+		})
 	}
 }
 
