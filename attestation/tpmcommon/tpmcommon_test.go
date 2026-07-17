@@ -129,7 +129,8 @@ func TestCheckReportDataAndInitData(t *testing.T) {
 	if m, err := CheckReportData(msg, nonce); err != nil || m == nil || !*m {
 		t.Fatalf("matching nonce → true; got %v %v", m, err)
 	}
-	// PCR[8] init-data extend.
+	// PCR[8] init-data extend. The message must select PCR 8 (bitmap byte 1,
+	// bit 0), else CheckInitData rejects it as unauthenticated (see below).
 	pcrs := zeroPCRs()
 	hash := make([]byte, 32)
 	for i := range hash {
@@ -139,11 +140,41 @@ func TestCheckReportDataAndInitData(t *testing.T) {
 	h.Write(make([]byte, 32))
 	h.Write(hash)
 	pcrs[8] = h.Sum(nil)
-	if m, err := CheckInitData(pcrs, hash); err != nil || m == nil || !*m {
+	sel8 := []byte{3, 0xFF, 0xFF, 0xFF} // PCRs 0-23 selected → index 8 covered
+	msg8 := buildTPMSAttest(nonce, sel8, make([]byte, 32))
+	if m, err := CheckInitData(msg8, pcrs, hash); err != nil || m == nil || !*m {
 		t.Fatalf("init-data extend should match: %v %v", m, err)
 	}
-	if _, err := CheckInitData(pcrs, make([]byte, 32)); err == nil {
+	if _, err := CheckInitData(msg8, pcrs, make([]byte, 32)); err == nil {
 		t.Fatal("wrong init-data should fail")
+	}
+}
+
+// TestCheckInitData_RejectsUnselectedPCR8 is a regression PoC: a quote whose
+// signed PCR selection EXCLUDES index 8, plus a forged pcrs[8], must be rejected.
+// Before the fix, CheckInitData read pcrs[8] unconditionally, so an attacker on a
+// genuine CVM could issue a real AK-signed quote selecting only PCRs 0-7 and
+// append pcrs[8] = SHA-256(0^32 || attacker_init_data) to spoof InitDataMatch.
+func TestCheckInitData_RejectsUnselectedPCR8(t *testing.T) {
+	nonce := []byte("nonce-value")
+	attackerInitData := make([]byte, 32)
+	for i := range attackerInitData {
+		attackerInitData[i] = 0xCC
+	}
+	// Forge pcrs[8] to the value the attacker wants matched.
+	pcrs := zeroPCRs()
+	h := sha256.New()
+	h.Write(make([]byte, 32))
+	h.Write(attackerInitData)
+	pcrs[8] = h.Sum(nil)
+
+	// Selection covers only PCRs 0-7 (byte 1 = 0xFF, byte 2/3 = 0x00) — index 8
+	// is NOT in the signed selection, so pcrs[8] is unauthenticated.
+	selNo8 := []byte{3, 0xFF, 0x00, 0x00}
+	msgNo8 := buildTPMSAttest(nonce, selNo8, make([]byte, 32))
+
+	if _, err := CheckInitData(msgNo8, pcrs, attackerInitData); err == nil {
+		t.Fatal("forged pcrs[8] with PCR 8 outside the signed selection must be rejected")
 	}
 }
 

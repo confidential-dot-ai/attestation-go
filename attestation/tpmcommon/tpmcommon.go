@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"slices"
 	"strings"
 
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
@@ -378,12 +379,30 @@ func VerifyTPMPCRs(message []byte, pcrs [][]byte) error {
 
 // CheckInitData verifies PCR[8] == SHA-256(zeros_32 || expected), the TPM
 // extend of the init-data hash. Returns nil when expected is nil.
-func CheckInitData(pcrs [][]byte, expected []byte) (*bool, error) {
+//
+// SECURITY: pcrs is attacker-controlled data carried alongside the quote, but
+// only the PCRs named in the quote's signed pcrSelect are covered by the
+// AK-signed pcrDigest (VerifyTPMPCRs enforces that digest). Reading pcrs[8] is
+// therefore only sound if index 8 is in that signed selection; otherwise a
+// caller could issue a real quote whose selection excludes PCR 8 and then append
+// a forged pcrs[8] = SHA-256(0^32 || attacker_init_data) that the signature never
+// covered, spoofing InitDataMatch=true. So we re-derive the signed selection from
+// the (already signature-verified) quote message and require index 8 to be
+// present before trusting pcrs[8]. Callers MUST verify the quote signature and
+// call VerifyTPMPCRs before this.
+func CheckInitData(message []byte, pcrs [][]byte, expected []byte) (*bool, error) {
 	if expected == nil {
 		return nil, nil
 	}
 	if len(expected) != 32 {
 		return nil, fmt.Errorf("expected_init_data_hash must be 32 bytes, got %d", len(expected))
+	}
+	selected, _, err := parseQuoteInfo(message)
+	if err != nil {
+		return nil, fmt.Errorf("init_data check: parse quote selection: %w", err)
+	}
+	if !slices.Contains(selected, 8) {
+		return nil, fmt.Errorf("init_data check needs PCR[8] but it is not in the quote's signed PCR selection (would be unauthenticated)")
 	}
 	if len(pcrs) <= 8 {
 		return nil, fmt.Errorf("init_data check needs PCR[8] but only %d PCRs present", len(pcrs))
