@@ -30,12 +30,6 @@ type azSnpEvidence struct {
 	TPMQuote  *tpmcommon.RawTPMQuote `json:"tpm_quote,omitempty"`
 }
 
-// envelope is the self-describing {platform, evidence} wrapper.
-type envelope struct {
-	Platform string          `json:"platform"`
-	Evidence json.RawMessage `json:"evidence"`
-}
-
 // decoded holds the pieces pulled out of an az-snp envelope.
 type decoded struct {
 	hcl   *tpmcommon.HCLReport
@@ -69,80 +63,6 @@ func decode(ev azSnpEvidence) (*decoded, error) {
 	}
 	return d, nil
 }
-
-// --- Back-compat lightweight API (used by TEErminator's policy layer) ---
-
-// Result is the lightweight result of az-snp hardware verification: the launch
-// measurement, report_data, HCL var_data (vTPM AK material), and decoded vTPM
-// quote. Use VerifyVTPMFreshness to bind a nonce.
-type Result struct {
-	Measurement string
-	ReportData  []byte
-	VarData     []byte
-	TPMQuote    *tpmcommon.TPMQuote
-}
-
-// Verify verifies the SNP hardware report inside an az-snp envelope (signature +
-// VCEK chain + policy via the snp package) and returns the launch measurement,
-// report_data, var_data, and decoded vTPM quote. It does not enforce freshness;
-// use Result.VerifyVTPMFreshness.
-func Verify(raw []byte) (*Result, error) {
-	var env envelope
-	if err := json.Unmarshal(raw, &env); err != nil {
-		return nil, fmt.Errorf("parsing az-snp envelope: %w", err)
-	}
-	if env.Platform != string(teetypes.PlatformAzSNP) {
-		return nil, fmt.Errorf("unexpected platform %q, want %q", env.Platform, teetypes.PlatformAzSNP)
-	}
-	var ev azSnpEvidence
-	if err := json.Unmarshal(env.Evidence, &ev); err != nil {
-		return nil, fmt.Errorf("parsing az-snp evidence: %w", err)
-	}
-	d, err := decode(ev)
-	if err != nil {
-		return nil, err
-	}
-	hw, err := snp.VerifyReport(d.hcl.TEEReport, d.vcek, teetypes.VerifyParams{}, teetypes.PlatformAzSNP, snp.MinReportVersionAzure, snp.Options{})
-	if err != nil {
-		return nil, err
-	}
-	return &Result{
-		Measurement: hw.Claims.LaunchDigest,
-		ReportData:  hw.Claims.ReportData,
-		VarData:     d.hcl.VarData,
-		TPMQuote:    d.quote,
-	}, nil
-}
-
-// VerifyAttestation reports only whether the az-snp hardware report is valid.
-func VerifyAttestation(raw []byte) error {
-	_, err := Verify(raw)
-	return err
-}
-
-// VerifyVTPMFreshness verifies the az-snp vTPM trust chain binds nonce:
-// report_data == SHA-256(var_data) → AK pub → AK-signed quote → quote extraData
-// == nonce. PCR digest integrity is checked too.
-func (r *Result) VerifyVTPMFreshness(nonce []byte) error {
-	if r.TPMQuote == nil {
-		return fmt.Errorf("evidence carries no vTPM quote")
-	}
-	if len(r.VarData) == 0 {
-		return fmt.Errorf("HCL report carries no var_data to bind the vTPM AK")
-	}
-	if err := tpmcommon.VerifyHCLVarDataBinding(r.ReportData, r.VarData); err != nil {
-		return err
-	}
-	if err := tpmcommon.VerifyTPMSignature(r.TPMQuote.Signature, r.TPMQuote.Message, r.VarData); err != nil {
-		return err
-	}
-	if err := tpmcommon.VerifyTPMPCRs(r.TPMQuote.Message, r.TPMQuote.PCRs); err != nil {
-		return err
-	}
-	return tpmcommon.VerifyTPMNonce(r.TPMQuote.Message, nonce)
-}
-
-// --- Unified API (used by the dispatcher) ---
 
 // VerifyEvidence verifies the inner az-snp evidence payload end to end against
 // params: the vTPM trust chain, the SNP hardware report, the var_data binding,
