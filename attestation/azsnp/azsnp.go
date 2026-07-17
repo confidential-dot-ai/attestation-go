@@ -201,7 +201,7 @@ func VerifyEvidence(inner []byte, params teetypes.VerifyParams, opts snp.Options
 	if err := tpmcommon.VerifyHCLVarDataBinding(hw.Claims.ReportData, d.hcl.VarData); err != nil {
 		return nil, err
 	}
-	initDataMatch, err := tpmcommon.CheckInitData(d.quote.PCRs, params.ExpectedInitDataHash)
+	initDataMatch, err := tpmcommon.CheckInitData(d.quote.Message, d.quote.PCRs, params.ExpectedInitDataHash)
 	if err != nil {
 		return nil, err
 	}
