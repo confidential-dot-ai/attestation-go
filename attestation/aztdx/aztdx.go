@@ -27,6 +27,27 @@ type azTdxEvidence struct {
 	TPMQuote  *tpmcommon.RawTPMQuote `json:"tpm_quote"`
 }
 
+// checkFieldSizes bounds each evidence field. The dispatcher already caps the
+// whole envelope, but VerifyEvidence is exported and may be called directly.
+// Mirrors attestation-rs's check_field_size calls in az_tdx::verify.
+func checkFieldSizes(ev azTdxEvidence) error {
+	if err := teetypes.CheckFieldSize("hcl_report", len(ev.HCLReport)); err != nil {
+		return fmt.Errorf("az-tdx: %w", err)
+	}
+	if err := teetypes.CheckFieldSize("td_quote", len(ev.TDQuote)); err != nil {
+		return fmt.Errorf("az-tdx: %w", err)
+	}
+	if ev.TPMQuote != nil {
+		if err := teetypes.CheckFieldSize("tpm_quote.message", len(ev.TPMQuote.Message)); err != nil {
+			return fmt.Errorf("az-tdx: %w", err)
+		}
+		if err := teetypes.CheckFieldSize("tpm_quote.signature", len(ev.TPMQuote.Signature)); err != nil {
+			return fmt.Errorf("az-tdx: %w", err)
+		}
+	}
+	return nil
+}
+
 // decode pulls the HCL report, raw TD quote bytes, and decoded vTPM quote out of
 // an az-tdx evidence payload, enforcing the required tpm_quote and TDX report
 // type.
@@ -68,6 +89,9 @@ func VerifyEvidence(inner []byte, params teetypes.VerifyParams, opts tdx.Options
 	}
 	if ev.Version != 1 {
 		return nil, fmt.Errorf("unsupported az-tdx evidence version: %d", ev.Version)
+	}
+	if err := checkFieldSizes(ev); err != nil {
+		return nil, err
 	}
 
 	hcl, tdQuoteBytes, quote, err := decode(ev)

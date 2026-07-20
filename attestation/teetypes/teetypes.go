@@ -36,6 +36,22 @@ type AttestationEvidence struct {
 	Evidence json.RawMessage `json:"evidence"`
 }
 
+// MaxEvidenceFieldSize caps a single decoded evidence field (quote, report,
+// cert, event log, vTPM quote). The dispatcher already bounds the whole envelope
+// (teeverify.MaxEvidenceSize), but the per-platform VerifyEvidence entry points
+// are exported and may be called directly, so they bound their own fields.
+// Mirrors attestation-rs's utils::MAX_EVIDENCE_FIELD_SIZE.
+const MaxEvidenceFieldSize = 1 << 20 // 1 MiB
+
+// CheckFieldSize returns an error if an evidence field exceeds
+// MaxEvidenceFieldSize.
+func CheckFieldSize(name string, n int) error {
+	if n > MaxEvidenceFieldSize {
+		return fmt.Errorf("evidence field %q too large: %d bytes (max %d)", name, n, MaxEvidenceFieldSize)
+	}
+	return nil
+}
+
 // VerifyParams is what the caller wants checked during verification. The zero
 // value verifies the hardware signature/chain and rejects debug guests, with no
 // freshness/init-data/TCB-floor checks.
@@ -82,6 +98,17 @@ type VerificationResult struct {
 	// CollateralVerified is true when collateral (CRL/TCB/QE identity) was
 	// available and all collateral checks passed; false when skipped.
 	CollateralVerified bool `json:"collateral_verified"`
+	// EventlogVerified is nil when the evidence carried no event log. When
+	// non-nil it is true: the CCEL replayed to the quote's RTMR[0-2], binding
+	// the event log to the signed quote. A replay mismatch is returned as an
+	// error, not false.
+	EventlogVerified *bool `json:"eventlog_verified,omitempty"`
+	// RTMR3ReplayMatch is nil when the evidence carried no event log, else
+	// reports whether the replayed RTMR[3] matched the quote. False is normal
+	// and not a failure: RTMR[3] is runtime-extendable and such extends are not
+	// recorded in the CCEL. Pin RTMR[3] via VerifyParams.ExpectedRTMRs — that is
+	// checked against the signed quote — rather than relying on this field.
+	RTMR3ReplayMatch *bool `json:"rtmr3_replay_match,omitempty"`
 	// TCBStatus carries platform-specific collateral/TCB details (TDX DCAP).
 	TCBStatus *DcapVerificationStatus `json:"tcb_status,omitempty"`
 }
