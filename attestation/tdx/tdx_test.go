@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
 )
@@ -198,6 +199,60 @@ func TestVerifyEvidence_BatchFixtures(t *testing.T) {
 				t.Fatal("wrong report_data must be rejected")
 			}
 		})
+	}
+}
+
+// TestVerificationTime pins Options.Now and checks it actually reaches
+// go-tdx-guest's certificate-validity evaluation.
+//
+// go-tdx-guest v0.3.2-20250814 replaced Options.Now (time.Time) with a
+// *TimeSet carrying one instant per collateral artifact. verificationTimeSet
+// maps our single time onto all five fields; this test would fail if it
+// populated the wrong field or dropped the value, since PckCertChain is what
+// gates the offline chain check.
+func TestVerificationTime(t *testing.T) {
+	ev := batchEvidence(t)[0]
+
+	// An explicitly pinned "now" must behave like the zero value. If
+	// verificationTimeSet left PckCertChain unset, this would fail with the
+	// zero time reading as "certificate not yet valid".
+	if _, err := VerifyEvidence(ev, teetypes.VerifyParams{}, Options{Now: time.Now()}); err != nil {
+		t.Fatalf("pinning Now to the present should verify: %v", err)
+	}
+
+	// Before the PCK certificate was issued.
+	if _, err := VerifyEvidence(ev, teetypes.VerifyParams{},
+		Options{Now: time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)}); err == nil {
+		t.Fatal("a verification time before the PCK cert was issued must fail")
+	}
+
+	// After the PCK certificate expired.
+	if _, err := VerifyEvidence(ev, teetypes.VerifyParams{},
+		Options{Now: time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)}); err == nil {
+		t.Fatal("a verification time after the PCK cert expired must fail")
+	}
+}
+
+// TestVerificationTimeSet covers the mapping itself.
+func TestVerificationTimeSet(t *testing.T) {
+	if ts := verificationTimeSet(time.Time{}); ts != nil {
+		t.Fatalf("zero time must map to nil (upstream then defaults to now), got %+v", ts)
+	}
+	now := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	ts := verificationTimeSet(now)
+	if ts == nil {
+		t.Fatal("non-zero time must produce a TimeSet")
+	}
+	for name, got := range map[string]time.Time{
+		"PckCertChain": ts.PckCertChain,
+		"TcbInfo":      ts.TcbInfo,
+		"QeIdentity":   ts.QeIdentity,
+		"PckCrl":       ts.PckCrl,
+		"RootCaCrl":    ts.RootCaCrl,
+	} {
+		if !got.Equal(now) {
+			t.Errorf("%s = %v, want %v", name, got, now)
+		}
 	}
 }
 
