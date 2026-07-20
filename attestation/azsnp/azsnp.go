@@ -30,6 +30,27 @@ type azSnpEvidence struct {
 	TPMQuote  *tpmcommon.RawTPMQuote `json:"tpm_quote,omitempty"`
 }
 
+// checkFieldSizes bounds each evidence field. The dispatcher already caps the
+// whole envelope, but VerifyEvidence is exported and may be called directly.
+// Mirrors attestation-rs's check_field_size calls in az_snp::verify.
+func checkFieldSizes(ev azSnpEvidence) error {
+	if err := teetypes.CheckFieldSize("hcl_report", len(ev.HCLReport)); err != nil {
+		return fmt.Errorf("az-snp: %w", err)
+	}
+	if err := teetypes.CheckFieldSize("vcek", len(ev.Vcek)); err != nil {
+		return fmt.Errorf("az-snp: %w", err)
+	}
+	if ev.TPMQuote != nil {
+		if err := teetypes.CheckFieldSize("tpm_quote.message", len(ev.TPMQuote.Message)); err != nil {
+			return fmt.Errorf("az-snp: %w", err)
+		}
+		if err := teetypes.CheckFieldSize("tpm_quote.signature", len(ev.TPMQuote.Signature)); err != nil {
+			return fmt.Errorf("az-snp: %w", err)
+		}
+	}
+	return nil
+}
+
 // decoded holds the pieces pulled out of an az-snp envelope.
 type decoded struct {
 	hcl   *tpmcommon.HCLReport
@@ -80,6 +101,9 @@ func VerifyEvidence(inner []byte, params teetypes.VerifyParams, opts snp.Options
 	}
 	if ev.Version != 1 {
 		return nil, fmt.Errorf("unsupported az-snp evidence version: %d", ev.Version)
+	}
+	if err := checkFieldSizes(ev); err != nil {
+		return nil, err
 	}
 	d, err := decode(ev)
 	if err != nil {

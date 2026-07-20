@@ -336,6 +336,17 @@ func TestValidateOptions(t *testing.T) {
 		}
 	})
 
+	t.Run("MinTCB.FMC rejected rather than silently dropped", func(t *testing.T) {
+		fmc := uint8(7)
+		_, err := validateOptions(teetypes.VerifyParams{
+			MinTCB: &teetypes.SnpTcb{Bootloader: 1, Tee: 2, Snp: 3, Microcode: 4, FMC: &fmc},
+		})
+		if err == nil {
+			t.Fatal("an FMC floor is not enforceable with go-sev-guest and must be rejected, " +
+				"otherwise the caller believes it pinned a floor it did not get")
+		}
+	})
+
 	t.Run("oversize inputs rejected", func(t *testing.T) {
 		if _, err := validateOptions(teetypes.VerifyParams{ExpectedReportData: make([]byte, 65)}); err == nil {
 			t.Error("report_data > 64 should error")

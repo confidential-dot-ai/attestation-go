@@ -239,11 +239,17 @@ func validateOptions(params teetypes.VerifyParams) (*validate.Options, error) {
 		opts.Measurement = d
 	}
 	if t := params.MinTCB; t != nil {
-		// NOTE: the FMC (Turin) TCB component is intentionally not enforced here:
-		// go-sev-guest v0.15.0's kds.TCBParts has no FMC field, so a caller-supplied
-		// MinTCB.FMC floor cannot be mapped onto validate.MinimumTCB. attestation-rs
-		// does enforce it; matching that requires upstream FMC support (or a manual
-		// reported-TCB comparison). Tracked as a known parity gap.
+		// The FMC (Turin) TCB component cannot be enforced: go-sev-guest v0.15.0's
+		// kds.TCBParts has no FMC field, so a caller-supplied MinTCB.FMC floor
+		// cannot be mapped onto validate.MinimumTCB. attestation-rs does enforce
+		// it. Reject rather than silently ignore — a caller that believes it set a
+		// floor and got none is the fail-open outcome. (Moot in practice today:
+		// go-sev-guest cannot parse a Turin VCEK's FMC extension, so Turin reports
+		// fail earlier in the chain regardless. See PARITY.md.)
+		if t.FMC != nil {
+			return nil, fmt.Errorf("snp: MinTCB.FMC is not enforceable with go-sev-guest v0.15.0 " +
+				"(no FMC field in kds.TCBParts); unset it or pin the TCB via the other components")
+		}
 		opts.MinimumTCB = kds.TCBParts{
 			BlSpl:    t.Bootloader,
 			TeeSpl:   t.Tee,

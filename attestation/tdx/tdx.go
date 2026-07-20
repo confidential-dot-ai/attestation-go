@@ -26,7 +26,7 @@ import (
 // TdxEvidence is the bare-metal TDX evidence payload.
 type TdxEvidence struct {
 	Quote      string `json:"quote"`                 // base64 (std) of the DCAP quote
-	CCEventlog string `json:"cc_eventlog,omitempty"` // base64 (std), optional, not verified here
+	CCEventlog string `json:"cc_eventlog,omitempty"` // base64 (std), optional; replayed against RTMR[0-2]
 }
 
 // Options tunes DCAP verification.
@@ -44,13 +44,44 @@ type Options struct {
 }
 
 // VerifyEvidence verifies a bare-metal TDX evidence envelope and returns
-// normalized claims.
+// normalized claims. When the envelope carries a CCEL event log, it is replayed
+// against the quote's RTMRs (see ccel.go) to bind the log to the signed quote.
 func VerifyEvidence(ev TdxEvidence, params teetypes.VerifyParams, opts Options) (*teetypes.VerificationResult, error) {
+	if err := teetypes.CheckFieldSize("quote", len(ev.Quote)); err != nil {
+		return nil, fmt.Errorf("tdx: %w", err)
+	}
+	if err := teetypes.CheckFieldSize("cc_eventlog", len(ev.CCEventlog)); err != nil {
+		return nil, fmt.Errorf("tdx: %w", err)
+	}
 	quoteBytes, err := base64.StdEncoding.DecodeString(ev.Quote)
 	if err != nil {
 		return nil, fmt.Errorf("tdx: decoding quote: %w", err)
 	}
-	return VerifyQuoteBytes(quoteBytes, params, teetypes.PlatformTDX, opts)
+	res, err := VerifyQuoteBytes(quoteBytes, params, teetypes.PlatformTDX, opts)
+	if err != nil {
+		return nil, err
+	}
+	if ev.CCEventlog == "" {
+		return res, nil
+	}
+
+	ccel, err := base64.StdEncoding.DecodeString(ev.CCEventlog)
+	if err != nil {
+		return nil, fmt.Errorf("tdx: decoding cc_eventlog: %w", err)
+	}
+	// Replay against the RTMRs in the quote body, which VerifyQuoteBytes has
+	// just verified as signed.
+	rtmrs, err := quoteRTMRs(quoteBytes)
+	if err != nil {
+		return nil, err
+	}
+	rtmr3Match, err := VerifyCCELAgainstRTMRs(ccel, rtmrs[0], rtmrs[1], rtmrs[2], rtmrs[3])
+	if err != nil {
+		return nil, err
+	}
+	res.EventlogVerified = teetypes.Ptr(true)
+	res.RTMR3ReplayMatch = teetypes.Ptr(rtmr3Match)
+	return res, nil
 }
 
 // VerifyQuoteBytes verifies a raw DCAP quote: signature + PCK chain (go-tdx-guest
@@ -150,6 +181,26 @@ func validateOptions(params teetypes.VerifyParams) (*tvalidate.Options, error) {
 		opts.TdQuoteBodyOptions.Rtmrs = out
 	}
 	return opts, nil
+}
+
+// quoteRTMRs re-parses a verified quote and returns its four RTMRs. Used to
+// replay the CCEL against values the DCAP signature has already covered.
+func quoteRTMRs(quoteBytes []byte) ([4][]byte, error) {
+	var out [4][]byte
+	anyQuote, err := tabi.QuoteToProto(quoteBytes)
+	if err != nil {
+		return out, fmt.Errorf("tdx: parsing quote for RTMRs: %w", err)
+	}
+	quote, ok := anyQuote.(*tpb.QuoteV4)
+	if !ok {
+		return out, fmt.Errorf("tdx: unsupported quote type %T (only QuoteV4 is supported)", anyQuote)
+	}
+	rtmrs := quote.GetTdQuoteBody().GetRtmrs()
+	if len(rtmrs) != 4 {
+		return out, fmt.Errorf("tdx: quote has %d RTMRs (want 4)", len(rtmrs))
+	}
+	copy(out[:], rtmrs)
+	return out, nil
 }
 
 func pad(b []byte, n int) []byte {
