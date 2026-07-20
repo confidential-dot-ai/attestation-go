@@ -48,3 +48,30 @@ func TestVerifyEvidence_Errors(t *testing.T) {
 		t.Fatal("bad version should fail")
 	}
 }
+
+// TestVerify_LightweightAPI exercises the back-compat Verify/Result surface that
+// TEErminator's Flow A consumes: it takes the full {platform, evidence} envelope,
+// verifies the TD quote, and exposes the MRTD + a nonce-binding freshness check.
+func TestVerify_LightweightAPI(t *testing.T) {
+	res, err := Verify(azTdxFixture)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if res.Measurement == "" {
+		t.Fatal("expected an MRTD launch measurement")
+	}
+	if len(res.ReportData) == 0 || len(res.VarData) == 0 || res.TPMQuote == nil {
+		t.Fatalf("incomplete result: %+v", res)
+	}
+
+	// A fresh (unbound) nonce must fail closed: the recorded quote's extraData
+	// binds a different value.
+	if err := res.VerifyVTPMFreshness(make([]byte, 32)); err == nil {
+		t.Fatal("fresh nonce must be rejected on recorded evidence")
+	}
+
+	// A platform-tagged non-TDX envelope is rejected by the envelope guard.
+	if _, err := Verify([]byte(`{"platform":"az-snp","evidence":{}}`)); err == nil {
+		t.Fatal("az-snp envelope must be rejected by aztdx.Verify")
+	}
+}
