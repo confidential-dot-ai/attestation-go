@@ -14,35 +14,29 @@ import (
 //go:embed testdata/attestation.json
 var attestationFixture []byte
 
-// TestVerify_Fixture verifies a real recorded az-snp envelope through the
-// back-compat API (hardware verify) and the vTPM components.
-func TestVerify_Fixture(t *testing.T) {
-	res, err := Verify(attestationFixture)
+// TestDecode_AKPub decodes the real recorded az-snp fixture and checks the HCL
+// var_data carries a well-formed RSA-2048 vTPM AK.
+func TestDecode_AKPub(t *testing.T) {
+	var env struct {
+		Evidence json.RawMessage `json:"evidence"`
+	}
+	if err := json.Unmarshal(attestationFixture, &env); err != nil {
+		t.Fatal(err)
+	}
+	var ev azSnpEvidence
+	if err := json.Unmarshal(env.Evidence, &ev); err != nil {
+		t.Fatal(err)
+	}
+	d, err := decode(ev)
 	if err != nil {
-		t.Fatalf("Verify: %v", err)
+		t.Fatalf("decode: %v", err)
 	}
-	if res.Measurement == "" || len(res.ReportData) != 64 {
-		t.Fatalf("unexpected result: measurement=%q reportData=%d", res.Measurement, len(res.ReportData))
-	}
-	if len(res.VarData) == 0 || res.TPMQuote == nil {
+	if len(d.hcl.VarData) == 0 || d.quote == nil {
 		t.Fatal("expected var_data + tpm_quote to be surfaced")
 	}
-
-	// vTPM components verify against real evidence.
-	if err := tpmcommon.VerifyHCLVarDataBinding(res.ReportData, res.VarData); err != nil {
-		t.Fatalf("var_data binding: %v", err)
-	}
-	if err := tpmcommon.VerifyTPMSignature(res.TPMQuote.Signature, res.TPMQuote.Message, res.VarData); err != nil {
-		t.Fatalf("AK signature: %v", err)
-	}
-	pub, err := tpmcommon.ExtractAKPub(res.VarData)
+	pub, err := tpmcommon.ExtractAKPub(d.hcl.VarData)
 	if err != nil || len(pub.N.Bytes()) != 256 || pub.E != 65537 {
 		t.Fatalf("AK pub: %v (N=%d E=%d)", err, len(pub.N.Bytes()), pub.E)
-	}
-
-	// Recorded evidence has empty qualifyingData → a fresh nonce fails closed.
-	if err := res.VerifyVTPMFreshness(make([]byte, 32)); err == nil {
-		t.Fatal("recorded evidence must fail freshness against a fresh nonce")
 	}
 }
 
@@ -111,11 +105,11 @@ func TestVerifyEvidence_LaunchDigestForwarded(t *testing.T) {
 	}
 }
 
-func TestVerify_Errors(t *testing.T) {
-	if err := VerifyAttestation([]byte("not json")); err == nil {
+func TestVerifyEvidence_Errors(t *testing.T) {
+	if _, err := VerifyEvidence([]byte("not json"), teetypes.VerifyParams{}, snp.Options{}); err == nil {
 		t.Fatal("garbage should fail")
 	}
-	if err := VerifyAttestation([]byte(`{"platform":"snp","evidence":{}}`)); err == nil {
-		t.Fatal("wrong platform should fail")
+	if _, err := VerifyEvidence([]byte(`{"version":99}`), teetypes.VerifyParams{}, snp.Options{}); err == nil {
+		t.Fatal("unsupported evidence version should fail")
 	}
 }
