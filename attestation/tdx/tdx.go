@@ -106,7 +106,7 @@ func VerifyQuoteBytes(quoteBytes []byte, params teetypes.VerifyParams, platform 
 		CheckRevocations: opts.CheckRevocations,
 		GetCollateral:    opts.GetCollateral,
 		Getter:           opts.Getter,
-		Now:              opts.Now,
+		Now:              verificationTimeSet(opts.Now),
 	}
 	if err := tverify.TdxQuote(quote, vOpts); err != nil {
 		return nil, fmt.Errorf("tdx: DCAP verification failed: %w", err)
@@ -181,6 +181,30 @@ func validateOptions(params teetypes.VerifyParams) (*tvalidate.Options, error) {
 		opts.TdQuoteBodyOptions.Rtmrs = out
 	}
 	return opts, nil
+}
+
+// verificationTimeSet maps our single verification time onto go-tdx-guest's
+// per-artifact tverify.TimeSet.
+//
+// Upstream split Options.Now from a time.Time into a *TimeSet carrying a
+// separate instant for the PCK cert chain, TCB info, QE identity, PCK CRL and
+// root CA CRL. We keep exposing one time: pinning a captured quote means
+// evaluating every artifact as of that same moment, and a caller with a reason
+// to skew them apart is better served by calling go-tdx-guest directly.
+//
+// A zero time returns nil, which upstream fills in with time.Now() for each
+// artifact — preserving this package's documented "zero → time.Now()" contract.
+func verificationTimeSet(now time.Time) *tverify.TimeSet {
+	if now.IsZero() {
+		return nil
+	}
+	return &tverify.TimeSet{
+		PckCertChain: now,
+		TcbInfo:      now,
+		QeIdentity:   now,
+		PckCrl:       now,
+		RootCaCrl:    now,
+	}
 }
 
 // quoteRTMRs re-parses a verified quote and returns its four RTMRs. Used to
