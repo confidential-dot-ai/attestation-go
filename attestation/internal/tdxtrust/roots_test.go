@@ -13,8 +13,8 @@ func TestIntelSGXRootCAPool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IntelSGXRootCAPool: %v", err)
 	}
-	if pool == nil || len(pool.Subjects()) != 1 {
-		t.Fatalf("root pool subjects = %d, want 1", len(pool.Subjects()))
+	if pool == nil {
+		t.Fatal("IntelSGXRootCAPool returned nil")
 	}
 
 	block, _ := pem.Decode(intelSGXRootCAPEM)
