@@ -39,9 +39,9 @@ type Options struct {
 	GetCollateral bool
 	// Getter fetches collateral. Nil → offline (signature + pinned-root chain).
 	Getter trust.HTTPSGetter
-	// TrustedRoots overrides the Intel SGX Root CA pool used for the PCK
-	// certificate chain. Nil uses this module's fingerprint-validated,
-	// explicitly bundled Intel root.
+	// TrustedRoots fully replaces the trust anchor for the PCK certificate
+	// chain; certificates chain only to roots in this pool. Nil uses this
+	// module's fingerprint-validated, explicitly bundled Intel root.
 	TrustedRoots *x509.CertPool
 	// Now is the verification time for certificate/collateral validity. Zero →
 	// time.Now(). Pin it to verify older captured quotes whose PCK certs have
