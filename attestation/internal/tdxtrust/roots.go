@@ -29,12 +29,12 @@ var (
 )
 
 // IntelSGXRootCAPool returns the certificate pool explicitly pinned by this
-// module. The pool is initialized once and treated as immutable.
+// module. Each call returns a clone so callers cannot mutate the pinned pool.
 func IntelSGXRootCAPool() (*x509.CertPool, error) {
 	if intelSGXRootPoolErr != nil {
 		return nil, intelSGXRootPoolErr
 	}
-	return intelSGXRootPool, nil
+	return intelSGXRootPool.Clone(), nil
 }
 
 func parseIntelSGXRootCA(certPEM []byte) (*x509.CertPool, error) {

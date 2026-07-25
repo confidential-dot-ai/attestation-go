@@ -38,6 +38,24 @@ func TestIntelSGXRootCAPool(t *testing.T) {
 	}
 }
 
+func TestIntelSGXRootCAPoolIsolatesCallers(t *testing.T) {
+	first, err := IntelSGXRootCAPool()
+	if err != nil {
+		t.Fatalf("IntelSGXRootCAPool: %v", err)
+	}
+	if !first.AppendCertsFromPEM(selfSignedCAPEM(t, "Mutated By Caller")) {
+		t.Fatal("appending to returned pool failed")
+	}
+
+	second, err := IntelSGXRootCAPool()
+	if err != nil {
+		t.Fatalf("IntelSGXRootCAPool: %v", err)
+	}
+	if second.Equal(first) {
+		t.Fatal("caller mutation leaked into the pinned pool")
+	}
+}
+
 func selfSignedCAPEM(t *testing.T, commonName string) []byte {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
