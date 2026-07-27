@@ -83,9 +83,9 @@ func TestParseIntelSGXRootCARejections(t *testing.T) {
 	wrongKey := selfSignedCAPEM(t, "Intel SGX Root CA")
 
 	cases := []struct {
-		name    string
-		certPEM []byte
-		wantErr string
+		name                   string
+		certPEM                []byte
+		expectedErrorSubstring string
 	}{
 		{"not PEM", []byte("not a certificate"), "not a PEM CERTIFICATE"},
 		{"trailing PEM data", append(append([]byte{}, intelSGXRootCAPEM...), wrongIdentity...), "trailing PEM data"},
@@ -98,8 +98,8 @@ func TestParseIntelSGXRootCARejections(t *testing.T) {
 			if err == nil {
 				t.Fatal("want error, got nil")
 			}
-			if !strings.Contains(err.Error(), tc.wantErr) {
-				t.Fatalf("error = %q, want it to contain %q", err, tc.wantErr)
+			if !strings.Contains(err.Error(), tc.expectedErrorSubstring) {
+				t.Fatalf("error = %q, want it to contain %q", err, tc.expectedErrorSubstring)
 			}
 		})
 	}
