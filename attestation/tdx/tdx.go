@@ -8,6 +8,7 @@
 package tdx
 
 import (
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
@@ -20,6 +21,7 @@ import (
 	tverify "github.com/google/go-tdx-guest/verify"
 	"github.com/google/go-tdx-guest/verify/trust"
 
+	"github.com/confidential-dot-ai/attestation-go/attestation/internal/tdxtrust"
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
 )
 
@@ -35,8 +37,12 @@ type Options struct {
 	CheckRevocations bool
 	// GetCollateral fetches TCB info / QE identity collateral (requires network).
 	GetCollateral bool
-	// Getter fetches collateral. Nil → offline (signature + embedded-root chain).
+	// Getter fetches collateral. Nil → offline (signature + pinned-root chain).
 	Getter trust.HTTPSGetter
+	// TrustedRoots fully replaces the trust anchor for the PCK certificate
+	// chain; certificates chain only to roots in this pool. Nil uses this
+	// module's fingerprint-validated, explicitly bundled Intel root.
+	TrustedRoots *x509.CertPool
 	// Now is the verification time for certificate/collateral validity. Zero →
 	// time.Now(). Pin it to verify older captured quotes whose PCK certs have
 	// since expired.
@@ -101,12 +107,21 @@ func VerifyQuoteBytes(quoteBytes []byte, params teetypes.VerifyParams, platform 
 		return nil, fmt.Errorf("tdx: quote has no TD report body")
 	}
 
+	trustedRoots := opts.TrustedRoots
+	if trustedRoots == nil {
+		trustedRoots, err = tdxtrust.IntelSGXRootCAPool()
+		if err != nil {
+			return nil, fmt.Errorf("tdx: initialize Intel trust root: %w", err)
+		}
+	}
+
 	// DCAP signature + PCK chain (+ collateral when requested).
 	vOpts := &tverify.Options{
 		CheckRevocations: opts.CheckRevocations,
 		GetCollateral:    opts.GetCollateral,
 		Getter:           opts.Getter,
 		Now:              verificationTimeSet(opts.Now),
+		TrustedRoots:     trustedRoots,
 	}
 	if err := tverify.TdxQuote(quote, vOpts); err != nil {
 		return nil, fmt.Errorf("tdx: DCAP verification failed: %w", err)

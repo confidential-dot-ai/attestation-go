@@ -1,6 +1,7 @@
 package tdx
 
 import (
+	"crypto/x509"
 	_ "embed"
 	"encoding/base64"
 	"encoding/hex"
@@ -49,6 +50,17 @@ func TestVerifyQuoteBytes_Fixture(t *testing.T) {
 	bad[0] = 1
 	if _, err := VerifyQuoteBytes(quote, teetypes.VerifyParams{AllowDebug: true, ExpectedReportData: bad}, teetypes.PlatformTDX, Options{}); err == nil {
 		t.Fatal("wrong report_data should fail")
+	}
+}
+
+func TestVerifyQuoteBytesRejectsUntrustedRoot(t *testing.T) {
+	if _, err := VerifyQuoteBytes(
+		tdxQuoteV4,
+		teetypes.VerifyParams{AllowDebug: true},
+		teetypes.PlatformTDX,
+		Options{TrustedRoots: x509.NewCertPool()},
+	); err == nil {
+		t.Fatal("empty caller-supplied trust pool should reject the PCK chain")
 	}
 }
 

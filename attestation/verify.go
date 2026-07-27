@@ -13,6 +13,8 @@ import (
 	"github.com/google/go-tpm/legacy/tpm2"
 	"google.golang.org/protobuf/encoding/prototext"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/confidential-dot-ai/attestation-go/attestation/internal/tdxtrust"
 )
 
 var (
@@ -103,16 +105,22 @@ func verifyGceTechnology(attestation *pb.Attestation, nonce []byte, teeNonce []b
 
 	switch attestation.GetTeeAttestation().(type) {
 	case *pb.Attestation_TdxAttestation:
+		trustedRoots, err := tdxtrust.IntelSGXRootCAPool()
+		if err != nil {
+			return fmt.Errorf("initialize Intel TDX trust root: %w", err)
+		}
+		verification := tv.DefaultOptions()
+		verification.TrustedRoots = trustedRoots
 		var tdxOpts *verifyTdxOpts
 		if len(teeNonce) != 0 {
 			tdxOpts = &verifyTdxOpts{
 				Validation:   tdxDefaultValidateOpts(teeNonce),
-				Verification: tv.DefaultOptions(),
+				Verification: verification,
 			}
 		} else {
 			tdxOpts = &verifyTdxOpts{
 				Validation:   tdxDefaultValidateOpts(nonce),
-				Verification: tv.DefaultOptions(),
+				Verification: verification,
 			}
 		}
 		tee, ok := attestation.TeeAttestation.(*pb.Attestation_TdxAttestation)
