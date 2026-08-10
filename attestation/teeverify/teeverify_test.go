@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
@@ -83,5 +84,37 @@ func TestVerify_UnsupportedPlatform(t *testing.T) {
 	big := make([]byte, MaxEvidenceSize+1)
 	if _, err := Verify(big, teetypes.VerifyParams{}); err == nil {
 		t.Fatal("oversized evidence should error")
+	}
+}
+
+// TestDispatchMatchesFamily keeps the dispatcher and teetypes.Family in
+// lockstep. Downstream consumers gate hardware-specific policy (TDX RTMR pins,
+// SNP TCB floors) on Family, so a tag this package routes but Family calls
+// FamilyUnknown would be verified with that policy silently dropped — and a tag
+// Family claims but this package rejects would let a policy report itself as
+// enforceable against evidence no verifier accepts.
+func TestDispatchMatchesFamily(t *testing.T) {
+	for _, p := range []teetypes.PlatformType{
+		teetypes.PlatformSNP, teetypes.PlatformTDX,
+		teetypes.PlatformAzSNP, teetypes.PlatformAzTDX,
+		teetypes.PlatformGcpSNP, teetypes.PlatformGcpTDX,
+		teetypes.PlatformDstack,
+		" AZ-TDX ", "nitro", "",
+	} {
+		env, err := json.Marshal(teetypes.AttestationEvidence{Platform: p, Evidence: json.RawMessage(`{}`)})
+		if err != nil {
+			t.Fatalf("marshal envelope for %q: %v", p, err)
+		}
+		// Empty inner evidence never verifies; what matters is whether the
+		// dispatcher recognized the tag at all, which precedes any parsing.
+		_, err = Verify(env, teetypes.VerifyParams{})
+		if err == nil {
+			t.Fatalf("platform %q: empty evidence unexpectedly verified", p)
+		}
+		routed := !strings.Contains(err.Error(), "unsupported platform")
+		if want := p.Family() != teetypes.FamilyUnknown; routed != want {
+			t.Errorf("platform %q: dispatcher routed = %v, Family()=%q implies %v (err: %v)",
+				p, routed, p.Family(), want, err)
+		}
 	}
 }

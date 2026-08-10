@@ -17,6 +17,10 @@ import (
 // attester-reported claim derived from the evidence envelope, NOT a
 // cryptographic proof of cloud-provider origin. Do not grant elevated trust on
 // the platform tag alone — verify report fields (measurement, chip_id, TCB).
+//
+// Compare tags through Family/IsTDX/IsSNP rather than as strings: the cloud
+// overlays share their bare-metal counterpart's hardware and code path, so a
+// raw comparison lets an attester dodge a rule by picking a sibling tag.
 type PlatformType string
 
 const (
@@ -28,41 +32,6 @@ const (
 	PlatformGcpTDX PlatformType = "gcp-tdx"
 	PlatformDstack PlatformType = "dstack"
 )
-
-// Family is the hardware evidence family a platform tag verifies as.
-type Family string
-
-const (
-	FamilySNP Family = "sev-snp"
-	FamilyTDX Family = "tdx"
-)
-
-// Family maps a platform tag to its hardware evidence family: SEV-SNP for
-// snp/az-snp/gcp-snp, TDX for tdx/az-tdx/gcp-tdx/dstack (dstack evidence
-// carries a TDX quote). An unknown tag returns ("", false) — treat it as
-// unverifiable, never as a default family.
-func (p PlatformType) Family() (Family, bool) {
-	switch p {
-	case PlatformSNP, PlatformAzSNP, PlatformGcpSNP:
-		return FamilySNP, true
-	case PlatformTDX, PlatformAzTDX, PlatformGcpTDX, PlatformDstack:
-		return FamilyTDX, true
-	default:
-		return "", false
-	}
-}
-
-// IsSNP reports whether p verifies as SEV-SNP evidence.
-func (p PlatformType) IsSNP() bool {
-	f, ok := p.Family()
-	return ok && f == FamilySNP
-}
-
-// IsTDX reports whether p verifies as TDX evidence.
-func (p PlatformType) IsTDX() bool {
-	f, ok := p.Family()
-	return ok && f == FamilyTDX
-}
 
 // AttestationEvidence is the self-describing evidence envelope: a platform tag
 // plus the platform-specific payload, so a verifier can auto-detect the

@@ -7,38 +7,6 @@ import (
 	"testing"
 )
 
-func TestPlatformTypeFamily(t *testing.T) {
-	tests := []struct {
-		platform PlatformType
-		family   Family
-		known    bool
-	}{
-		{PlatformSNP, FamilySNP, true},
-		{PlatformAzSNP, FamilySNP, true},
-		{PlatformGcpSNP, FamilySNP, true},
-		{PlatformTDX, FamilyTDX, true},
-		{PlatformAzTDX, FamilyTDX, true},
-		{PlatformGcpTDX, FamilyTDX, true},
-		{PlatformDstack, FamilyTDX, true},
-		{PlatformType("sev-snp"), "", false},
-		{PlatformType(""), "", false},
-	}
-	for _, tc := range tests {
-		t.Run(string(tc.platform), func(t *testing.T) {
-			family, known := tc.platform.Family()
-			if family != tc.family || known != tc.known {
-				t.Errorf("Family(%q) = %q, %v, want %q, %v", tc.platform, family, known, tc.family, tc.known)
-			}
-			if got := tc.platform.IsSNP(); got != (tc.family == FamilySNP && tc.known) {
-				t.Errorf("IsSNP(%q) = %v", tc.platform, got)
-			}
-			if got := tc.platform.IsTDX(); got != (tc.family == FamilyTDX && tc.known) {
-				t.Errorf("IsTDX(%q) = %v", tc.platform, got)
-			}
-		})
-	}
-}
-
 func tdxClaims() Claims {
 	return Claims{
 		PlatformData: map[string]any{
