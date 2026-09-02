@@ -5,6 +5,7 @@
 package teetypes
 
 import (
+	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -27,6 +28,41 @@ const (
 	PlatformGcpTDX PlatformType = "gcp-tdx"
 	PlatformDstack PlatformType = "dstack"
 )
+
+// Family is the hardware evidence family a platform tag verifies as.
+type Family string
+
+const (
+	FamilySNP Family = "sev-snp"
+	FamilyTDX Family = "tdx"
+)
+
+// Family maps a platform tag to its hardware evidence family: SEV-SNP for
+// snp/az-snp/gcp-snp, TDX for tdx/az-tdx/gcp-tdx/dstack (dstack evidence
+// carries a TDX quote). An unknown tag returns ("", false) — treat it as
+// unverifiable, never as a default family.
+func (p PlatformType) Family() (Family, bool) {
+	switch p {
+	case PlatformSNP, PlatformAzSNP, PlatformGcpSNP:
+		return FamilySNP, true
+	case PlatformTDX, PlatformAzTDX, PlatformGcpTDX, PlatformDstack:
+		return FamilyTDX, true
+	default:
+		return "", false
+	}
+}
+
+// IsSNP reports whether p verifies as SEV-SNP evidence.
+func (p PlatformType) IsSNP() bool {
+	f, ok := p.Family()
+	return ok && f == FamilySNP
+}
+
+// IsTDX reports whether p verifies as TDX evidence.
+func (p PlatformType) IsTDX() bool {
+	f, ok := p.Family()
+	return ok && f == FamilyTDX
+}
 
 // AttestationEvidence is the self-describing evidence envelope: a platform tag
 // plus the platform-specific payload, so a verifier can auto-detect the
@@ -130,6 +166,60 @@ type Claims struct {
 	TCB TcbInfo `json:"tcb"`
 	// PlatformData carries all platform-specific claim fields.
 	PlatformData map[string]any `json:"platform_data"`
+}
+
+// RTMR returns the 48-byte SHA-384 value of RTMR[i] (0..3) from the TDX
+// platform-data claims. It fails for claims without RTMRs (SNP) and for a
+// missing or malformed register claim, so a caller pinning a register fails
+// closed. Prefer VerifyParams.ExpectedRTMRs, which the verifier checks against
+// the signed quote; use this accessor to read verified claims afterwards.
+func (c Claims) RTMR(i int) ([]byte, error) {
+	if i < 0 || i > 3 {
+		return nil, fmt.Errorf("RTMR index %d out of range 0..3", i)
+	}
+	key := fmt.Sprintf("rtmr_%d", i)
+	v, ok := c.PlatformData[key].(string)
+	if !ok || v == "" {
+		return nil, fmt.Errorf("claims carry no %s", key)
+	}
+	b, err := hex.DecodeString(v)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", key, err)
+	}
+	if len(b) != sha512.Size384 {
+		return nil, fmt.Errorf("%s is %d bytes, want %d", key, len(b), sha512.Size384)
+	}
+	return b, nil
+}
+
+// DebugEnabled reports whether the evidence marks the guest debuggable: the
+// SNP guest policy debug bit, or the TDX TD_ATTRIBUTES debug bit. It fails
+// when the claims carry neither, so a caller gating on it fails closed. The
+// verifier already rejects debug guests unless VerifyParams.AllowDebug is set;
+// use this accessor for reporting or an extra gate.
+func (c Claims) DebugEnabled() (bool, error) {
+	if policy, ok := c.PlatformData["policy"].(map[string]any); ok {
+		if v, ok := policy["debug_allowed"].(bool); ok {
+			return v, nil
+		}
+	}
+	if attrs, ok := c.PlatformData["td_attributes_parsed"].(map[string]any); ok {
+		if v, ok := attrs["debug"].(bool); ok {
+			return v, nil
+		}
+	}
+	return false, fmt.Errorf("claims carry no debug flag (policy.debug_allowed or td_attributes_parsed.debug)")
+}
+
+// SMTEnabled reports whether simultaneous multithreading is enabled on the SNP
+// host. It fails for claims without SNP platform info (TDX).
+func (c Claims) SMTEnabled() (bool, error) {
+	if info, ok := c.PlatformData["platform_info"].(map[string]any); ok {
+		if v, ok := info["smt_enabled"].(bool); ok {
+			return v, nil
+		}
+	}
+	return false, fmt.Errorf("claims carry no platform_info.smt_enabled")
 }
 
 // TcbInfo is the platform-specific TCB version, tagged by Type ("Snp"/"Tdx") to
