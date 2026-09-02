@@ -52,7 +52,10 @@ func VerifyWithOptions(evidenceJSON []byte, params teetypes.VerifyParams, opts O
 		return nil, fmt.Errorf("parsing evidence envelope: %w", err)
 	}
 
-	switch env.Platform {
+	// Route on the canonicalized tag so the dispatcher accepts exactly what
+	// teetypes.NormalizePlatform/Family say a tag means; the result carries the
+	// canonical constant, never the attester's spelling.
+	switch teetypes.NormalizePlatform(string(env.Platform)) {
 	case teetypes.PlatformSNP:
 		return verifySNP(env.Evidence, params, opts.SNP, teetypes.PlatformSNP)
 	case teetypes.PlatformGcpSNP:
