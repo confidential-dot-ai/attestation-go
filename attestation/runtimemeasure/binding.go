@@ -1,0 +1,110 @@
+package runtimemeasure
+
+import (
+	"bytes"
+	"encoding/hex"
+	"fmt"
+
+	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
+)
+
+// Binding returns the post-launch operator-key binding a verified result
+// carries: RTMR[3] on Intel TDX (Size bytes), HOSTDATA on AMD SEV-SNP
+// (HostDataSize bytes).
+//
+// It takes a whole VerificationResult, not bare Claims, because the value is
+// only meaningful once the hardware signature over it has been checked: the
+// same field read off an unverified self-report is host-chosen on both sides.
+//
+// The two widths are never interchangeable. A caller comparing them by hand
+// risks matching a 48-byte TDX value against a 32-byte SNP one; use
+// [VerifyOperatorKey] rather than comparing what this returns.
+func Binding(r *teetypes.VerificationResult) ([]byte, error) {
+	if r == nil {
+		return nil, fmt.Errorf("no verification result")
+	}
+	switch r.Platform.Family() {
+	case teetypes.FamilyTDX:
+		return r.Claims.RTMR(3)
+	case teetypes.FamilySNP:
+		// InitData is HOST_DATA on SNP. On TDX the same field is MR_CONFIG_ID
+		// at 48 bytes, which is why this arm is family-gated rather than
+		// reading InitData unconditionally.
+		if n := len(r.Claims.InitData); n != HostDataSize {
+			return nil, fmt.Errorf("HOSTDATA claim is %d bytes, want %d", n, HostDataSize)
+		}
+		return r.Claims.InitData, nil
+	default:
+		return nil, fmt.Errorf("platform %q: %w", r.Platform, ErrNoRegister)
+	}
+}
+
+// ExpectedBinding returns the value [Binding] must equal for a guest launched
+// to trust pubkey, having measured workloadDigests in that order.
+//
+// pubkey is the EXACT bytes the guest hashed — the public key file verbatim, as
+// written by `openssl ec -pubout` (PKIX PEM text, armor and trailing newline
+// included). Any re-encoding, re-wrapping or stripped newline yields a
+// different digest and a silent verification failure, so pass file bytes
+// through unmodified rather than round-tripping through a PEM parser.
+//
+// workloadDigests are canonical "sha256:<64-hex>" strings (see
+// [CanonicalDigest]), deduplicated and in extend order. SEV-SNP has no runtime
+// extends, so a non-empty list there is a policy error rather than a value this
+// function could compute.
+func ExpectedBinding(p teetypes.PlatformType, pubkey []byte, workloadDigests []string) ([]byte, error) {
+	switch p.Family() {
+	case teetypes.FamilyTDX:
+		reg := FromDigestsSeeded(ForOperatorKey(pubkey), workloadDigests)
+		return reg[:], nil
+	case teetypes.FamilySNP:
+		if len(workloadDigests) > 0 {
+			return nil, fmt.Errorf("platform %q has no runtime extends, so %d workload digests cannot be measured into its binding: %w",
+				p, len(workloadDigests), ErrNoRegister)
+		}
+		hd := HostDataForOperatorKey(pubkey)
+		return hd[:], nil
+	default:
+		return nil, fmt.Errorf("platform %q: %w", p, ErrNoRegister)
+	}
+}
+
+// VerifyOperatorKey reports whether the guest that produced r was launched to
+// trust pubkey, having measured workloadDigests. It resolves the whole
+// TDX-versus-SNP difference — which field carries the binding, how wide it is,
+// and how the key digest folds into it — so callers never branch on platform.
+//
+// Pass a nil workloadDigests for a guest that runs no workload measurer, which
+// is the case an in-guest service checking its own staged key wants: the
+// register must then equal the bare operator-key seed exactly, and any
+// extension beyond it means an unexpected measurer ran or the value was
+// tampered with. A verifier checking a guest that does measure workloads passes
+// the digests it expects.
+//
+// A mismatch is an error naming both values. They are public-key digests, not
+// secrets, so the comparison is a plain one and the error may be logged.
+func VerifyOperatorKey(r *teetypes.VerificationResult, pubkey []byte, workloadDigests []string) error {
+	got, err := Binding(r)
+	if err != nil {
+		return err
+	}
+	want, err := ExpectedBinding(r.Platform, pubkey, workloadDigests)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(got, want) {
+		return fmt.Errorf(
+			"guest is not bound to this operator key: %s carries %s, key implies %s",
+			bindingName(r.Platform), hex.EncodeToString(got), hex.EncodeToString(want))
+	}
+	return nil
+}
+
+// bindingName names the field the binding lives in, so a mismatch error tells
+// an operator where to look rather than quoting two bare hex strings.
+func bindingName(p teetypes.PlatformType) string {
+	if p.Family() == teetypes.FamilySNP {
+		return "HOSTDATA"
+	}
+	return "RTMR[3]"
+}

@@ -1,0 +1,121 @@
+package runtimemeasure
+
+import (
+	"bytes"
+	"encoding/hex"
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
+)
+
+var operatorPub = []byte("-----BEGIN PUBLIC KEY-----\nMFkw\n-----END PUBLIC KEY-----\n")
+
+// tdxResult builds a verified-result stand-in whose RTMR[3] claim is reg.
+func tdxResult(p teetypes.PlatformType, reg []byte) *teetypes.VerificationResult {
+	return &teetypes.VerificationResult{
+		Platform: p,
+		Claims: teetypes.Claims{
+			PlatformData: map[string]any{"rtmr_3": hex.EncodeToString(reg)},
+		},
+	}
+}
+
+func snpResult(p teetypes.PlatformType, hostData []byte) *teetypes.VerificationResult {
+	return &teetypes.VerificationResult{
+		Platform: p,
+		Claims:   teetypes.Claims{InitData: hostData},
+	}
+}
+
+func TestBindingReadsTheRightField(t *testing.T) {
+	seed := ForOperatorKey(operatorPub)
+	hostData := HostDataForOperatorKey(operatorPub)
+
+	got, err := Binding(tdxResult(teetypes.PlatformTDX, seed[:]))
+	if err != nil {
+		t.Fatalf("Binding(tdx) = _, %v", err)
+	}
+	if !bytes.Equal(got, seed[:]) {
+		t.Errorf("Binding(tdx) = %x, want RTMR[3] %x", got, seed)
+	}
+
+	got, err = Binding(snpResult(teetypes.PlatformSNP, hostData[:]))
+	if err != nil {
+		t.Fatalf("Binding(snp) = _, %v", err)
+	}
+	if !bytes.Equal(got, hostData[:]) {
+		t.Errorf("Binding(snp) = %x, want HOSTDATA %x", got, hostData)
+	}
+}
+
+// A TDX report reaching the SNP arm carries a 48-byte MR_CONFIG_ID where
+// HOSTDATA is expected. It must be refused by width, never silently truncated.
+func TestBindingRejectsWrongWidthHostData(t *testing.T) {
+	mrConfigID := make([]byte, Size)
+	_, err := Binding(snpResult(teetypes.PlatformSNP, mrConfigID))
+	if err == nil || !strings.Contains(err.Error(), "want 32") {
+		t.Errorf("Binding(snp with 48-byte InitData) = _, %v, want a width error", err)
+	}
+}
+
+func TestBindingUnknownPlatform(t *testing.T) {
+	if _, err := Binding(snpResult("nonsense", nil)); !errors.Is(err, ErrNoRegister) {
+		t.Errorf("Binding(unknown) = _, %v, want ErrNoRegister", err)
+	}
+	if _, err := Binding(nil); err == nil {
+		t.Error("Binding(nil) = _, nil, want an error")
+	}
+}
+
+func TestVerifyOperatorKey(t *testing.T) {
+	digests := []string{"sha256:" + strings.Repeat("ab", 32)}
+	seeded := FromDigestsSeeded(ForOperatorKey(operatorPub), digests)
+	bare := ForOperatorKey(operatorPub)
+	hostData := HostDataForOperatorKey(operatorPub)
+
+	for _, tc := range []struct {
+		name    string
+		result  *teetypes.VerificationResult
+		digests []string
+		wantErr bool
+	}{
+		{"tdx bare seed", tdxResult(teetypes.PlatformTDX, bare[:]), nil, false},
+		{"tdx seeded chain", tdxResult(teetypes.PlatformTDX, seeded[:]), digests, false},
+		{"tdx cloud overlay", tdxResult(teetypes.PlatformAzTDX, bare[:]), nil, false},
+		{"tdx chain where none expected", tdxResult(teetypes.PlatformTDX, seeded[:]), nil, true},
+		{"tdx wrong key", tdxResult(teetypes.PlatformTDX, Zero[:]), nil, true},
+		{"snp hostdata", snpResult(teetypes.PlatformSNP, hostData[:]), nil, false},
+		{"snp cloud overlay", snpResult(teetypes.PlatformGcpSNP, hostData[:]), nil, false},
+		{"snp wrong key", snpResult(teetypes.PlatformSNP, make([]byte, HostDataSize)), nil, true},
+		{"snp with workload digests", snpResult(teetypes.PlatformSNP, hostData[:]), digests, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := VerifyOperatorKey(tc.result, operatorPub, tc.digests)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("VerifyOperatorKey() = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// The two families' bindings differ in width, so no accidental cross-platform
+// match is possible even for one key. Guards against a future refactor that
+// compares them as raw byte slices.
+func TestOperatorKeyBindingsAreNotInterchangeable(t *testing.T) {
+	tdx := ForOperatorKey(operatorPub)
+	snp := HostDataForOperatorKey(operatorPub)
+	if bytes.Equal(tdx[:], snp[:]) {
+		t.Fatal("TDX seed equals SNP HOSTDATA for the same key")
+	}
+	if err := VerifyOperatorKey(snpResult(teetypes.PlatformSNP, tdx[:len(snp)]), operatorPub, nil); err == nil {
+		t.Error("a truncated TDX seed verified as SNP HOSTDATA")
+	}
+}
+
+func TestExpectedBindingUnknownPlatform(t *testing.T) {
+	if _, err := ExpectedBinding("nonsense", operatorPub, nil); !errors.Is(err, ErrNoRegister) {
+		t.Errorf("ExpectedBinding(unknown) = _, %v, want ErrNoRegister", err)
+	}
+}

@@ -38,6 +38,45 @@ res, err := teeverify.Verify(evidenceJSON, teetypes.VerifyParams{
 Packages: `teeverify` (dispatcher) · `snp`, `tdx` (bare-metal) · `azsnp`, `aztdx`
 (Azure vTPM) · `tpmcommon` (HCL/vTPM layer) · `teetypes` (shared types).
 
+## Runtime measurement (`attestation/runtimemeasure`)
+
+Launch measurement covers what booted. Runtime measurement covers what the
+guest committed afterwards — which key it was launched to trust, and which
+workloads it admitted. The two families express this differently, and this
+package is the seam that hides the difference:
+
+| | Intel TDX | AMD SEV-SNP |
+|---|---|---|
+| Where the binding lives | RTMR[3], hardware append-only | HOSTDATA, fixed at launch |
+| Width | 48 bytes (SHA-384) | 32 bytes (SHA-256) |
+| Per-workload extends | Yes | None — `ErrNoRegister` |
+
+Callers asking "is this guest bound to my operator key" never branch on
+platform:
+
+```go
+import "github.com/confidential-dot-ai/attestation-go/attestation/runtimemeasure"
+
+// res is a *teetypes.VerificationResult from teeverify.Verify.
+// Pass nil digests for a guest that runs no workload measurer.
+err := runtimemeasure.VerifyOperatorKey(res, operatorPubKeyPEM, workloadDigests)
+```
+
+An in-guest measurer drives the register directly. `Open` returns
+`ErrNoRegister` on SEV-SNP rather than a no-op, so a caller that must extend
+fails closed:
+
+```go
+reg, err := runtimemeasure.Open(teetypes.PlatformTDX)
+event := runtimemeasure.Event("sha256:...") // one workload image
+err = reg.Extend(event[:])
+current, err := reg.Extension()
+```
+
+`pubkey` bytes are hashed verbatim — pass the public key file exactly as
+written, never round-tripped through a PEM parser, or the digest differs and
+verification fails silently.
+
 | Platform tag | Status | Notes |
 |---|---|---|
 | `snp` | ✅ verify | bare-metal SEV-SNP; report sig + VCEK chain + policy via go-sev-guest |
