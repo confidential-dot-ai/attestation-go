@@ -174,6 +174,12 @@ PCR pins are checked alongside the launch measurement, not instead of it, so a
 matching paravisor cannot excuse a wrong guest. Read individual registers from
 verified claims with `teetypes.Claims.PCR(i)`.
 
+The AK signature covers only the registers the quote selected; the rest of the
+bank the attester supplies is its own word. The in-process verifiers publish
+only selected registers, and `EnforcePCRs` re-reads the selection from the
+evidence, so a pin on an unselected register is refused whatever the report
+carries.
+
 Both `Policy.PCRs` and `Policy.RTMRs` refuse a pin the platform cannot answer
 rather than skipping it — reference values are per-platform, so a PCR pin
 reaching bare-metal SNP means the wrong policy was loaded, and silently passing

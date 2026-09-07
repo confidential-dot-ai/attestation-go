@@ -417,6 +417,19 @@ func CheckInitData(message []byte, pcrs [][]byte, expected []byte) (*bool, error
 	return teetypes.Ptr(true), nil
 }
 
+// SignedPCRSelection returns the PCR indices the quote's signed pcrDigest
+// covers, in ascending order. Only those PCR values are authenticated by the
+// AK signature; any other value carried alongside the quote is attester-chosen.
+// Callers must have verified the quote signature first.
+func SignedPCRSelection(message []byte) ([]int, error) {
+	selected, _, err := parseQuoteInfo(message)
+	if err != nil {
+		return nil, err
+	}
+	slices.Sort(selected)
+	return selected, nil
+}
+
 func parseQuoteInfo(message []byte) ([]int, []byte, error) {
 	if len(message) < 10 {
 		return nil, nil, fmt.Errorf("TPMS_ATTEST too short")
@@ -477,10 +490,22 @@ func parseQuoteInfo(message []byte) ([]int, []byte, error) {
 // ApplyTPMClaims overlays the vTPM data onto bare-platform claims: signed_data
 // becomes the (null-trimmed) TPM nonce, and platform_data["tpm"] gets the PCR
 // bank + nonce. Mirrors attestation-rs build_tpm_verification_result.
+//
+// Only PCRs in the quote's signed selection are published. The attester
+// supplies the whole bank, but the AK signature covers just the selected
+// registers, so an unselected value is the attester's word and must not be
+// readable as a verified claim. Callers must have run VerifyTPMPCRs first; a
+// message the selection cannot be parsed from publishes no registers.
 func ApplyTPMClaims(claims *teetypes.Claims, pcrs [][]byte, message []byte) {
 	tpm := map[string]any{}
-	for i, pcr := range pcrs {
-		tpm[fmt.Sprintf("pcr%02d", i)] = hex.EncodeToString(pcr)
+	selected, err := SignedPCRSelection(message)
+	if err != nil {
+		selected = nil
+	}
+	for _, i := range selected {
+		if i < len(pcrs) {
+			tpm[fmt.Sprintf("pcr%02d", i)] = hex.EncodeToString(pcrs[i])
+		}
 	}
 	if nonce, err := ExtractTPMNonce(message); err == nil {
 		tpm["nonce"] = hex.EncodeToString(nonce)

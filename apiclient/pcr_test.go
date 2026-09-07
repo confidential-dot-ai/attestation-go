@@ -29,21 +29,58 @@ func pcrKey(i int) string {
 	return "pcr" + string(rune('0'+i/10)) + string(rune('0'+i%10))
 }
 
+// azEvidence builds Azure-shaped evidence whose tpm_quote selects exactly the
+// given PCRs. The digest is not checked here; the service does that.
+func azEvidence(platform teetypes.PlatformType, selected ...int) teetypes.AttestationEvidence {
+	var bitmap [3]byte
+	for _, i := range selected {
+		bitmap[i/8] |= 1 << (i % 8)
+	}
+	var msg []byte
+	msg = append(msg, 0xFF, 0x54, 0x43, 0x47) // magic
+	msg = append(msg, 0x80, 0x18)             // TPM_ST_ATTEST_QUOTE
+	msg = append(msg, 0x00, 0x00)             // qualifiedSigner size 0
+	msg = append(msg, 0x00, 0x05, 'n', 'o', 'n', 'c', 'e')
+	msg = append(msg, make([]byte, 17)...)    // clockInfo
+	msg = append(msg, make([]byte, 8)...)     // firmwareVersion
+	msg = append(msg, 0x00, 0x00, 0x00, 0x01) // one TPMS_PCR_SELECTION
+	msg = append(msg, 0x00, 0x0B, 0x03)       // SHA-256, 3-byte bitmap
+	msg = append(msg, bitmap[:]...)
+	msg = append(msg, 0x00, 0x20)
+	msg = append(msg, make([]byte, 32)...) // pcrDigest
+	body, _ := json.Marshal(map[string]any{"tpm_quote": map[string]any{
+		"message": hex.EncodeToString(msg), "signature": "", "pcrs": []string{},
+	}})
+	return teetypes.AttestationEvidence{Platform: platform, Evidence: body}
+}
+
 func TestEnforcePCRs(t *testing.T) {
 	claims := claimsWithPCRs(map[int][]byte{4: pcr(4), 11: pcr(11)})
+	ev := azEvidence(teetypes.PlatformAzSNP, 4, 11)
 
-	if err := EnforcePCRs(claims, nil, teetypes.PlatformAzSNP); err != nil {
-		t.Errorf("EnforcePCRs(no pins) = %v, want nil", err)
-	}
-	if err := EnforcePCRs(claims, map[int][]byte{4: pcr(4), 11: pcr(11)}, teetypes.PlatformAzTDX); err != nil {
-		t.Errorf("EnforcePCRs(matching) = %v, want nil", err)
-	}
-	if err := EnforcePCRs(claims, map[int][]byte{4: pcr(9)}, teetypes.PlatformAzSNP); !errors.Is(err, ErrPCRNotAllowed) {
-		t.Errorf("EnforcePCRs(mismatch) = %v, want ErrPCRNotAllowed", err)
-	}
-	// A pinned register the evidence does not carry is a refusal.
-	if err := EnforcePCRs(claims, map[int][]byte{7: pcr(7)}, teetypes.PlatformAzSNP); !errors.Is(err, ErrPCRNotAllowed) {
-		t.Errorf("EnforcePCRs(unreported) = %v, want ErrPCRNotAllowed", err)
+	for _, tc := range []struct {
+		name     string
+		evidence teetypes.AttestationEvidence
+		pinned   map[int][]byte
+		want     error
+	}{
+		{"no pins", ev, nil, nil},
+		{"matching", azEvidence(teetypes.PlatformAzTDX, 4, 11), map[int][]byte{4: pcr(4), 11: pcr(11)}, nil},
+		{"mismatch", ev, map[int][]byte{4: pcr(9)}, ErrPCRNotAllowed},
+		// A pinned register the evidence does not carry is a refusal.
+		{"unreported", azEvidence(teetypes.PlatformAzSNP, 4, 7, 11), map[int][]byte{7: pcr(7)}, ErrPCRNotAllowed},
+		// The bypass: the report carries the pinned value, but the quote's
+		// signed selection excludes that register, so the value is the
+		// attester's word rather than the AK's.
+		{"reported but not signed", azEvidence(teetypes.PlatformAzSNP, 11), map[int][]byte{4: pcr(4)}, ErrPCRNotAllowed},
+		{"no tpm_quote in evidence", teetypes.AttestationEvidence{Platform: teetypes.PlatformAzSNP, Evidence: json.RawMessage(`{}`)}, map[int][]byte{4: pcr(4)}, ErrPCRNotAllowed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := EnforcePCRs(tc.evidence, claims, tc.pinned)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("EnforcePCRs() = %v, want %v", err, tc.want)
+			}
+		})
 	}
 }
 
@@ -55,7 +92,7 @@ func TestEnforcePCRsRefusesPinsWithoutAVTPM(t *testing.T) {
 		teetypes.PlatformSNP, teetypes.PlatformTDX,
 		teetypes.PlatformGcpSNP, teetypes.PlatformGcpTDX, "nonsense",
 	} {
-		err := EnforcePCRs(claims, map[int][]byte{4: pcr(4)}, platform)
+		err := EnforcePCRs(azEvidence(platform, 4), claims, map[int][]byte{4: pcr(4)})
 		if !errors.Is(err, ErrPCRNotAllowed) {
 			t.Errorf("EnforcePCRs(pins, %q) = %v, want ErrPCRNotAllowed", platform, err)
 		}
@@ -68,20 +105,21 @@ func TestEnforcePCRsRefusesPinsWithoutAVTPM(t *testing.T) {
 func TestEnforcePinsChecksPCRsAlongsideTheLaunchMeasurement(t *testing.T) {
 	digest, _ := hex.DecodeString(digestHex)
 	resp := VerifyResponse{Result: teetypes.VerificationResult{Claims: claimsWithPCRs(map[int][]byte{4: pcr(4)})}}
+	ev := azEvidence(teetypes.PlatformAzSNP, 4)
 
 	policy := Policy{Measurements: [][]byte{digest}, PCRs: map[int][]byte{4: pcr(4)}}
-	if err := EnforcePins(resp, policy, teetypes.PlatformAzSNP); err != nil {
+	if err := EnforcePins(resp, policy, ev); err != nil {
 		t.Fatalf("EnforcePins(both matching) = %v, want nil", err)
 	}
 
 	policy.PCRs = map[int][]byte{4: pcr(0xff)}
-	if err := EnforcePins(resp, policy, teetypes.PlatformAzSNP); !errors.Is(err, ErrPCRNotAllowed) {
+	if err := EnforcePins(resp, policy, ev); !errors.Is(err, ErrPCRNotAllowed) {
 		t.Fatalf("EnforcePins(good measurement, bad PCR) = %v, want ErrPCRNotAllowed", err)
 	}
 
 	// Image pins take the same treatment.
 	policy = Policy{Images: []ImagePin{{Name: "a", Digest: digest}}, PCRs: map[int][]byte{4: pcr(0xff)}}
-	if err := EnforcePins(resp, policy, teetypes.PlatformAzSNP); !errors.Is(err, ErrPCRNotAllowed) {
+	if err := EnforcePins(resp, policy, ev); !errors.Is(err, ErrPCRNotAllowed) {
 		t.Fatalf("EnforcePins(image pin, bad PCR) = %v, want ErrPCRNotAllowed", err)
 	}
 }

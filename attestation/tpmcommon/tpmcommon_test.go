@@ -1,6 +1,7 @@
 package tpmcommon
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
@@ -9,7 +10,10 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"slices"
 	"testing"
+
+	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
 )
 
 //go:embed testdata/hcl-report.bin
@@ -225,5 +229,44 @@ func TestParseHCLReport_Fixture(t *testing.T) {
 	reportData := hcl.TEEReport[0x50 : 0x50+64]
 	if err := VerifyHCLVarDataBinding(reportData, hcl.VarData); err != nil {
 		t.Fatalf("var_data binding should hold on real evidence: %v", err)
+	}
+}
+
+// The attester supplies every PCR, but the AK signature covers only the
+// quote's selection. An unselected value is attester-chosen and must not
+// surface as a verified claim.
+func TestApplyTPMClaimsPublishesOnlySignedPCRs(t *testing.T) {
+	pcrs := zeroPCRs()
+	pcrs[4] = bytes.Repeat([]byte{4}, 32)
+	pcrs[8] = bytes.Repeat([]byte{8}, 32)
+	// Selection bitmap: PCR 0 and PCR 8 (bit 0 of byte 0, bit 0 of byte 1).
+	digest := sha256.Sum256(append(append([]byte{}, pcrs[0]...), pcrs[8]...))
+	msg := buildTPMSAttest([]byte("nonce"), []byte{0x03, 0x01, 0x01, 0x00}, digest[:])
+	if err := VerifyTPMPCRs(msg, pcrs); err != nil {
+		t.Fatalf("VerifyTPMPCRs: %v", err)
+	}
+
+	var claims teetypes.Claims
+	ApplyTPMClaims(&claims, pcrs, msg)
+	tpm := claims.PlatformData["tpm"].(map[string]any)
+	if _, ok := tpm["pcr08"]; !ok {
+		t.Error("selected pcr08 not published")
+	}
+	if _, ok := tpm["pcr00"]; !ok {
+		t.Error("selected pcr00 not published")
+	}
+	if v, ok := tpm["pcr04"]; ok {
+		t.Errorf("unselected pcr04 published as %v", v)
+	}
+	if _, err := claims.PCR(4); err == nil {
+		t.Error("Claims.PCR(4) read an unsigned register")
+	}
+	if got, err := claims.PCR(8); err != nil || !bytes.Equal(got, pcrs[8]) {
+		t.Errorf("Claims.PCR(8) = %x, %v, want %x", got, err, pcrs[8])
+	}
+
+	sel, err := SignedPCRSelection(msg)
+	if err != nil || !slices.Equal(sel, []int{0, 8}) {
+		t.Errorf("SignedPCRSelection() = %v, %v, want [0 8]", sel, err)
 	}
 }
