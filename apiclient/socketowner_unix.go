@@ -15,7 +15,7 @@ import (
 func checkSocketOwner(fi fs.FileInfo, socketPath string) error {
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	if !ok {
-		return nil
+		return fmt.Errorf("attestation-api socket %q: ownership cannot be read from %T", socketPath, fi.Sys())
 	}
 	if st.Uid != 0 && int(st.Uid) != os.Getuid() {
 		return fmt.Errorf("attestation-api socket %q is owned by uid %d (want root or this process's uid)", socketPath, st.Uid)

@@ -18,8 +18,9 @@
 //
 // A routable HTTP address lets anything that can influence name resolution or
 // routing answer in the service's place. The socket's owner and mode are
-// re-checked on every dial, so a socket swapped or made world-writable after
-// startup fails closed rather than being trusted for the process's lifetime.
+// re-checked on every request — connections are not pooled — so a socket
+// swapped or made world-writable after startup fails closed rather than being
+// trusted for the process's lifetime.
 //
 // # Platform neutrality
 //
@@ -41,12 +42,19 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
 )
 
 // maxErrorBodyBytes caps how much of a non-2xx body is read into an error. The
 // body can come from an unhealthy or untrusted endpoint and flows into error
 // strings and logs.
 const maxErrorBodyBytes = 8 << 10
+
+// maxResponseBytes caps a 2xx body. The largest response is /attest, whose
+// evidence fields the verifiers bound at teetypes.MaxEvidenceFieldSize; a
+// TPM-bearing envelope carries a few, plus JSON framing.
+const maxResponseBytes = 4 * teetypes.MaxEvidenceFieldSize
 
 // requestTimeout bounds one call; the peer decides whether it ever answers.
 const requestTimeout = 60 * time.Second
@@ -68,16 +76,7 @@ type Client struct {
 // socket instead of a routable HTTP address; see the package documentation for
 // why that is the safer default.
 func NewClient(baseURL string) Client {
-	if socket, ok := strings.CutPrefix(baseURL, "unix://"); ok {
-		return Client{
-			baseURL:    "http://unix",
-			httpClient: &http.Client{Transport: socketTransport(socket), Timeout: requestTimeout},
-		}
-	}
-	return Client{
-		baseURL:    strings.TrimRight(baseURL, "/"),
-		httpClient: &http.Client{Timeout: requestTimeout},
-	}
+	return NewClientWithHTTP(baseURL, &http.Client{Timeout: requestTimeout})
 }
 
 // NewClientWithHTTP is [NewClient] with a caller-supplied HTTP client, for
@@ -99,10 +98,12 @@ func NewClientWithHTTP(baseURL string, httpClient *http.Client) Client {
 }
 
 // socketTransport dials socketPath for every request, validating it first so
-// the caller never talks to a socket an untrusted actor replaced.
+// the caller never talks to a socket an untrusted actor replaced. Keep-alive is
+// off: a pooled connection would outlive the check that admitted it.
 func socketTransport(socketPath string) *http.Transport {
 	dialer := net.Dialer{Timeout: socketDialTimeout}
 	return &http.Transport{
+		DisableKeepAlives: true,
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			if err := validateSocket(socketPath); err != nil {
 				return nil, err
@@ -200,7 +201,7 @@ func (c Client) doAndDecode(req *http.Request, out any) error {
 		}
 		return &UnexpectedError{Status: resp.StatusCode, Text: string(body)}
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	return json.NewDecoder(io.LimitReader(resp.Body, maxResponseBytes)).Decode(out)
 }
 
 // RequestError is a transport-level failure: the request never got an answer.

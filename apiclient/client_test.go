@@ -9,7 +9,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
 )
@@ -104,40 +106,122 @@ func TestUnixSocketTransport(t *testing.T) {
 	}
 }
 
-// The socket is re-checked on every dial, so a socket made world-writable
-// after the client was built still fails closed.
-func TestSocketValidation(t *testing.T) {
+func TestValidateSocket(t *testing.T) {
 	dir := t.TempDir()
-
-	if err := validateSocket("relative.sock"); err == nil {
-		t.Error("relative path accepted, want an error")
-	}
-	if err := validateSocket(filepath.Join(dir, "absent")); err == nil {
-		t.Error("missing socket accepted, want an error")
-	}
-
 	notSocket := filepath.Join(dir, "regular")
 	if err := os.WriteFile(notSocket, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateSocket(notSocket); err == nil {
-		t.Error("regular file accepted, want an error")
-	}
-
 	sock := filepath.Join(dir, "attest.sock")
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Skipf("unix sockets unavailable: %v", err)
 	}
 	defer func() { _ = ln.Close() }()
+	link := filepath.Join(dir, "link.sock")
+	if err := os.Symlink(sock, link); err != nil {
+		t.Fatal(err)
+	}
+	open := filepath.Join(dir, "open.sock")
+	openLn, err := net.Listen("unix", open)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = openLn.Close() }()
+	if err := os.Chmod(open, 0o777); err != nil {
+		t.Fatal(err)
+	}
 
-	if err := validateSocket(sock); err != nil {
-		t.Fatalf("validateSocket on a good socket = %v, want nil", err)
+	for _, tc := range []struct {
+		name    string
+		path    string
+		wantErr bool
+	}{
+		{"good socket", sock, false},
+		{"relative path", "relative.sock", true},
+		{"absent", filepath.Join(dir, "absent"), true},
+		{"regular file", notSocket, true},
+		{"symlink to a socket", link, true},
+		{"world-writable", open, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateSocket(tc.path)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("validateSocket(%q) = %v, wantErr %v", tc.path, err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// The socket is re-checked on every request, not only on the first dial: a
+// socket made world-writable after the client has already used it fails
+// closed on the next call.
+func TestSocketRecheckedOnEveryRequest(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "attest.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Skipf("unix sockets unavailable: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(HealthResponse{Status: "ok"})
+	})}
+	go func() { _ = srv.Serve(ln) }()
+	defer func() { _ = srv.Close() }()
+
+	c := NewClient("unix://" + sock)
+	if _, err := c.Health(context.Background()); err != nil {
+		t.Fatalf("first Health: %v", err)
 	}
 	if err := os.Chmod(sock, 0o777); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateSocket(sock); err == nil {
-		t.Error("world-writable socket accepted, want an error")
+	if _, err := c.Health(context.Background()); err == nil {
+		t.Fatal("Health over a socket made world-writable after first use = nil, want an error")
+	}
+}
+
+// A caller-supplied client keeps its own timeout on a unix:// address and
+// gets the socket transport it cannot build itself.
+func TestNewClientWithHTTPKeepsCallerTimeoutOnUnix(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "attest.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Skipf("unix sockets unavailable: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	// Accept and never answer.
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			defer func() { _ = conn.Close() }()
+		}
+	}()
+
+	c := NewClientWithHTTP("unix://"+sock, &http.Client{Timeout: 50 * time.Millisecond})
+	if c.httpClient.Timeout != 50*time.Millisecond {
+		t.Fatalf("Timeout = %v, want the caller's 50ms", c.httpClient.Timeout)
+	}
+	start := time.Now()
+	_, err = c.Health(context.Background())
+	var reqErr *RequestError
+	if !errors.As(err, &reqErr) {
+		t.Fatalf("Health against a silent peer = %v, want *RequestError", err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("Health took %v; the caller's timeout was not applied", elapsed)
+	}
+}
+
+func TestAttestRequestOmitsEmptyPlatform(t *testing.T) {
+	body, err := json.Marshal(AttestRequest{ReportData: []byte("x")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "platform") {
+		t.Errorf("empty platform is sent, which the service refuses: %s", body)
 	}
 }

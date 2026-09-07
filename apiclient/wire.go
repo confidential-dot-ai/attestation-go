@@ -25,9 +25,13 @@ const PlatformAuto teetypes.PlatformType = "auto"
 // 48-byte SHA-384 digest: the service zero-extends it into the platform's
 // report-data field. It travels as standard base64, which is what
 // encoding/json does with a []byte.
+//
+// Platform left empty is omitted, and the service then detects the local
+// platform as it does for [PlatformAuto]; an explicit empty string would be
+// refused as an unknown platform.
 type AttestRequest struct {
 	ReportData []byte                `json:"report_data"`
-	Platform   teetypes.PlatformType `json:"platform"`
+	Platform   teetypes.PlatformType `json:"platform,omitempty"`
 }
 
 // AttestResponse is the body of a successful POST /attest.
