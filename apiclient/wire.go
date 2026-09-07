@@ -4,6 +4,8 @@ import (
 	"crypto/sha512"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
 )
@@ -114,36 +116,53 @@ type VerifyParams struct {
 // registers, so a non-empty map on any other platform is a policy error
 // reported here rather than at the service.
 //
+// Each call replaces all six expected-measurement fields: a register or the
+// other family's digest left over from an earlier call would otherwise ride
+// along as a pin the caller no longer asked for. On error p is unchanged.
+//
 // This pins ONE measurement. A policy accepting any of several images cannot be
 // expressed server-side — use [Policy].Measurements or [Policy].Images, which
 // [Client.VerifyEvidence] enforces against the returned report.
 func (p *VerifyParams) SetExpectedMeasurements(platform teetypes.PlatformType, launchMeasurement []byte, rtmrs map[int][]byte) error {
-	if n := len(launchMeasurement); n > 0 && n != measurementSize {
-		return fmt.Errorf("launch measurement is %d bytes, want %d", n, measurementSize)
+	if err := checkMeasurementWidth("launch measurement", launchMeasurement); err != nil {
+		return err
 	}
 	if len(rtmrs) > 0 && !platform.IsTDX() {
 		return fmt.Errorf("platform %q has no runtime measurement registers, so %d register pin(s) cannot be enforced", platform, len(rtmrs))
 	}
 
+	var mrtd, launchDigest []byte
 	switch platform.Family() {
 	case teetypes.FamilyTDX:
-		p.ExpectedMRTD = launchMeasurement
+		mrtd = launchMeasurement
 	case teetypes.FamilySNP:
-		p.ExpectedLaunchDigest = launchMeasurement
+		launchDigest = launchMeasurement
 	default:
 		return fmt.Errorf("unknown platform %q: no measurement fields apply", platform)
 	}
 
-	slots := map[int]*[]byte{0: &p.ExpectedRTMR0, 1: &p.ExpectedRTMR1, 2: &p.ExpectedRTMR2, 3: &p.ExpectedRTMR3}
-	for idx, want := range rtmrs {
-		slot, ok := slots[idx]
-		if !ok {
-			return fmt.Errorf("RTMR index %d out of range 0..3", idx)
+	var registers [4][]byte
+	// Sorted so the error an operator sees is stable across runs.
+	for _, idx := range slices.Sorted(maps.Keys(rtmrs)) {
+		if idx < 0 || idx >= len(registers) {
+			return fmt.Errorf("RTMR index %d out of range 0..%d", idx, len(registers)-1)
 		}
-		if len(want) != measurementSize {
-			return fmt.Errorf("RTMR[%d] pin is %d bytes, want %d", idx, len(want), measurementSize)
+		if err := checkMeasurementWidth(fmt.Sprintf("RTMR[%d] pin", idx), rtmrs[idx]); err != nil {
+			return err
 		}
-		*slot = want
+		registers[idx] = rtmrs[idx]
+	}
+
+	p.ExpectedMRTD, p.ExpectedLaunchDigest = mrtd, launchDigest
+	p.ExpectedRTMR0, p.ExpectedRTMR1, p.ExpectedRTMR2, p.ExpectedRTMR3 = registers[0], registers[1], registers[2], registers[3]
+	return nil
+}
+
+// checkMeasurementWidth rejects a non-empty measurement that is not SHA-384
+// sized; empty means unpinned.
+func checkMeasurementWidth(name string, b []byte) error {
+	if n := len(b); n > 0 && n != measurementSize {
+		return fmt.Errorf("%s is %d bytes, want %d", name, n, measurementSize)
 	}
 	return nil
 }

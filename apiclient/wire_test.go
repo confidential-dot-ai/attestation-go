@@ -57,6 +57,39 @@ func TestSetExpectedMeasurementsRegisters(t *testing.T) {
 	}
 }
 
+// Each call replaces every expected-measurement field, so nothing from an
+// earlier call survives as a pin the caller no longer asked for.
+func TestSetExpectedMeasurementsReplacesEarlierPins(t *testing.T) {
+	var p VerifyParams
+	if err := p.SetExpectedMeasurements(teetypes.PlatformSNP, measurement(0x01), nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.SetExpectedMeasurements(teetypes.PlatformTDX, measurement(0x02), map[int][]byte{3: measurement(0x03)}); err != nil {
+		t.Fatal(err)
+	}
+	if p.ExpectedLaunchDigest != nil {
+		t.Errorf("expected_launch_digest survived a switch to TDX: %x", p.ExpectedLaunchDigest)
+	}
+	if err := p.SetExpectedMeasurements(teetypes.PlatformTDX, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if p.ExpectedMRTD != nil || p.ExpectedRTMR3 != nil {
+		t.Errorf("pins survived a clearing call: mrtd=%x rtmr3=%x", p.ExpectedMRTD, p.ExpectedRTMR3)
+	}
+
+	// A failed call leaves the previous pins in place rather than half of the
+	// new ones.
+	if err := p.SetExpectedMeasurements(teetypes.PlatformTDX, measurement(0x04), map[int][]byte{1: measurement(0x01)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.SetExpectedMeasurements(teetypes.PlatformTDX, measurement(0x05), map[int][]byte{0: measurement(0x00), 2: measurement(0x02)[:5]}); err == nil {
+		t.Fatal("short register pin accepted")
+	}
+	if !bytes.Equal(p.ExpectedMRTD, measurement(0x04)) || !bytes.Equal(p.ExpectedRTMR1, measurement(0x01)) || p.ExpectedRTMR0 != nil {
+		t.Errorf("failed call changed pins: mrtd=%x rtmr0=%x rtmr1=%x", p.ExpectedMRTD, p.ExpectedRTMR0, p.ExpectedRTMR1)
+	}
+}
+
 func TestSetExpectedMeasurementsRejectsBadInput(t *testing.T) {
 	good := measurement(0xaa)
 	for _, tc := range []struct {
