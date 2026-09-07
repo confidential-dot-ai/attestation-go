@@ -36,6 +36,10 @@ var (
 	// malformed, or does not match what the policy pins.
 	ErrRTMRNotAllowed = errors.New("apiclient: RTMR not allowed")
 
+	// ErrMinTcbNotAllowed: the policy floors the SEV-SNP TCB but the evidence
+	// is from another family, where the floor pins nothing.
+	ErrMinTcbNotAllowed = errors.New("apiclient: TCB floor not allowed")
+
 	// ErrInitDataMismatch: the request pinned an init-data hash and the
 	// verdict is absent or false.
 	ErrInitDataMismatch = errors.New("apiclient: init data mismatch in attestation evidence")
@@ -60,9 +64,10 @@ type Policy struct {
 	// the policy mean anything.
 	AllowDebug bool
 
-	// MinTcb, when set, floors the platform TCB. Sent on SEV-SNP only: the
-	// service's TDX verifier has no minimum-TCB parameter, so it would pin
-	// nothing there.
+	// MinTcb, when set, floors the SEV-SNP TCB. It names SNP components, so
+	// evidence from any other family is refused with [ErrMinTcbNotAllowed]
+	// rather than verified under no floor; a mixed fleet needs one Policy per
+	// family. The service ignores FMC.
 	MinTcb *teetypes.SnpTcb
 
 	// Images pins whole images — a launch digest together with the registers
@@ -81,8 +86,9 @@ type Policy struct {
 	// command line — carrying the dm-verity root hash — into RTMR[2]. Without
 	// these a host can boot a different guest image under the pinned MRTD.
 	//
-	// Ignored where the platform has no registers. Absent indices are
-	// unpinned; RTMR[0] should stay that way, as it carries the TD HOB and so
+	// A pin against a platform without registers is refused with
+	// [ErrRTMRNotAllowed], never skipped. Absent indices are unpinned;
+	// RTMR[0] should stay that way, as it carries the TD HOB and so
 	// varies with the guest's vCPU and memory shape. RTMR[3] is extended by
 	// in-guest software and cannot speak to guest identity on its own — a
 	// substituted guest extends it with whatever it likes.
@@ -180,18 +186,16 @@ func (c Client) VerifyEvidence(ctx context.Context, evidence teetypes.Attestatio
 		reportData = policy.ExpectedReportData[:sha512.Size384]
 	}
 
-	// MinTcb is SEV-SNP's alone; sending it with TDX evidence pins nothing and
-	// would read as a policy that is enforced when it is not.
-	minTcb := policy.MinTcb
-	if family != teetypes.FamilySNP {
-		minTcb = nil
+	// MinTcb is SEV-SNP's alone. Dropping it for another family would verify
+	// under no floor while the caller believes one was applied.
+	if policy.MinTcb != nil && family != teetypes.FamilySNP {
+		return VerifyResponse{}, fmt.Errorf("%w: platform %q has no SEV-SNP TCB", ErrMinTcbNotAllowed, evidence.Platform)
 	}
 
-	allowDebug := policy.AllowDebug
 	resp, err := c.VerifyEnforced(ctx, NewVerifyRequest(evidence, &VerifyParams{
 		ExpectedReportData: reportData,
-		AllowDebug:         &allowDebug,
-		MinTcb:             minTcb,
+		AllowDebug:         teetypes.Ptr(policy.AllowDebug),
+		MinTcb:             policy.MinTcb,
 	}, false))
 	if err != nil {
 		return VerifyResponse{}, err

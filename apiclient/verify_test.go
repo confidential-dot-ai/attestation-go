@@ -76,28 +76,33 @@ func TestVerifyEvidenceReportDataWidthFollowsPlatform(t *testing.T) {
 	}
 }
 
-// MinTcb names SEV-SNP components. Sending it with TDX evidence would read as
-// an enforced floor while pinning nothing.
-func TestVerifyEvidenceSendsMinTcbOnSNPOnly(t *testing.T) {
+// MinTcb names SEV-SNP components. On any other family it is refused rather
+// than dropped, so a caller never verifies under no floor while believing one
+// was applied.
+func TestVerifyEvidenceRefusesMinTcbOffSNP(t *testing.T) {
 	floor := &teetypes.SnpTcb{Bootloader: 10, Tee: 0, Snp: 27, Microcode: 28}
 	for _, tc := range []struct {
 		platform teetypes.PlatformType
-		wantSent bool
+		want     error
 	}{
-		{teetypes.PlatformSNP, true},
-		{teetypes.PlatformAzSNP, true},
-		{teetypes.PlatformTDX, false},
-		{teetypes.PlatformAzTDX, false},
+		{teetypes.PlatformSNP, nil},
+		{teetypes.PlatformAzSNP, nil},
+		{teetypes.PlatformTDX, ErrMinTcbNotAllowed},
+		{teetypes.PlatformAzTDX, ErrMinTcbNotAllowed},
 	} {
 		t.Run(string(tc.platform), func(t *testing.T) {
 			s := &verifyServer{resp: okResult(tc.platform, digestHex)}
 			c := s.start(t)
 			ev := teetypes.AttestationEvidence{Platform: tc.platform, Evidence: json.RawMessage(`{}`)}
-			if _, err := c.VerifyEvidence(context.Background(), ev, Policy{MinTcb: floor}); err != nil {
-				t.Fatalf("VerifyEvidence: %v", err)
+			_, err := c.VerifyEvidence(context.Background(), ev, Policy{MinTcb: floor})
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("VerifyEvidence(MinTcb) = %v, want %v", err, tc.want)
 			}
-			if sent := s.got.Params.MinTcb != nil; sent != tc.wantSent {
-				t.Errorf("min_tcb sent = %v, want %v", sent, tc.wantSent)
+			if tc.want == nil && s.got.Params.MinTcb == nil {
+				t.Error("min_tcb was not sent")
+			}
+			if tc.want != nil && s.got.Platform != "" {
+				t.Error("evidence was sent to the service despite the refused floor")
 			}
 		})
 	}
