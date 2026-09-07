@@ -1,10 +1,16 @@
 package apiclient
 
 import (
+	"crypto/sha512"
 	"encoding/json"
+	"fmt"
 
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
 )
+
+// measurementSize is the byte length of every measurement the service compares:
+// the SEV-SNP launch digest, the TDX MRTD and every RTMR are SHA-384.
+const measurementSize = sha512.Size384
 
 // PlatformAuto is request-only: it asks POST /attest to pick whichever platform
 // the local machine is. No verified response ever carries it, so it is defined
@@ -60,6 +66,16 @@ func NewVerifyRequest(evidence teetypes.AttestationEvidence, params *VerifyParam
 
 // VerifyParams are the optional checks /verify performs server-side. An empty
 // field is not checked; the caller enforces anything it leaves out.
+//
+// The expected-measurement fields fail closed at the service: a mismatch and an
+// expectation the evidence cannot answer — a register pin against SEV-SNP
+// evidence, say — are both refusals, returned as an [APIError] rather than a
+// report the caller must inspect. Fill them with [VerifyParams.SetExpectedMeasurements]
+// rather than by hand; the service splits one concept across two platform
+// fields, which that method hides.
+//
+// Each expected measurement is exactly 48 bytes. The service rejects any other
+// length, so [VerifyParams.SetExpectedMeasurements] checks it before the round trip.
 type VerifyParams struct {
 	ExpectedReportData   []byte `json:"expected_report_data,omitempty"`
 	ExpectedInitDataHash []byte `json:"expected_init_data_hash,omitempty"`
@@ -67,6 +83,69 @@ type VerifyParams struct {
 	// MinTcb is an SEV-SNP floor. The service's TDX verifier has no
 	// minimum-TCB parameter, so sending it with TDX evidence pins nothing.
 	MinTcb *teetypes.SnpTcb `json:"min_tcb,omitempty"`
+
+	// ExpectedLaunchDigest pins the SEV-SNP launch measurement. SNP only.
+	ExpectedLaunchDigest []byte `json:"expected_launch_digest,omitempty"`
+	// ExpectedMRTD pins the Intel TDX MRTD. TDX only. It is the same concept
+	// as ExpectedLaunchDigest under the platform's own name.
+	ExpectedMRTD []byte `json:"expected_mrtd,omitempty"`
+	// ExpectedRTMR0 pins TDX RTMR[0]. It carries the TD HOB, so it varies with
+	// the guest's vCPU and memory shape; pinning it denies guests by size
+	// rather than by identity.
+	ExpectedRTMR0 []byte `json:"expected_rtmr0,omitempty"`
+	// ExpectedRTMR1 pins TDX RTMR[1], the guest kernel image.
+	ExpectedRTMR1 []byte `json:"expected_rtmr1,omitempty"`
+	// ExpectedRTMR2 pins TDX RTMR[2], the kernel command line and rootfs chain.
+	ExpectedRTMR2 []byte `json:"expected_rtmr2,omitempty"`
+	// ExpectedRTMR3 pins TDX RTMR[3], extended by in-guest software after
+	// launch. See the runtimemeasure package for what a guest puts there.
+	ExpectedRTMR3 []byte `json:"expected_rtmr3,omitempty"`
+}
+
+// SetExpectedMeasurements asks the service to enforce a launch measurement and
+// registers, instead of the caller checking them against the returned report.
+//
+// launchMeasurement lands in expected_mrtd on Intel TDX and in
+// expected_launch_digest on AMD SEV-SNP: the service splits one concept across
+// two fields, and the caller should not have to know which. Pass nil to pin
+// neither.
+//
+// rtmrs pins registers by index (0 to 3); nil pins none. Only TDX has
+// registers, so a non-empty map on any other platform is a policy error
+// reported here rather than at the service.
+//
+// This pins ONE measurement. A policy accepting any of several images cannot be
+// expressed server-side — use [Policy].Measurements or [Policy].Images, which
+// [Client.VerifyEvidence] enforces against the returned report.
+func (p *VerifyParams) SetExpectedMeasurements(platform teetypes.PlatformType, launchMeasurement []byte, rtmrs map[int][]byte) error {
+	if n := len(launchMeasurement); n > 0 && n != measurementSize {
+		return fmt.Errorf("launch measurement is %d bytes, want %d", n, measurementSize)
+	}
+	if len(rtmrs) > 0 && !platform.IsTDX() {
+		return fmt.Errorf("platform %q has no runtime measurement registers, so %d register pin(s) cannot be enforced", platform, len(rtmrs))
+	}
+
+	switch platform.Family() {
+	case teetypes.FamilyTDX:
+		p.ExpectedMRTD = launchMeasurement
+	case teetypes.FamilySNP:
+		p.ExpectedLaunchDigest = launchMeasurement
+	default:
+		return fmt.Errorf("unknown platform %q: no measurement fields apply", platform)
+	}
+
+	slots := map[int]*[]byte{0: &p.ExpectedRTMR0, 1: &p.ExpectedRTMR1, 2: &p.ExpectedRTMR2, 3: &p.ExpectedRTMR3}
+	for idx, want := range rtmrs {
+		slot, ok := slots[idx]
+		if !ok {
+			return fmt.Errorf("RTMR index %d out of range 0..3", idx)
+		}
+		if len(want) != measurementSize {
+			return fmt.Errorf("RTMR[%d] pin is %d bytes, want %d", idx, len(want), measurementSize)
+		}
+		*slot = want
+	}
+	return nil
 }
 
 // VerifyResponse is the body of a successful POST /verify. Result carries the

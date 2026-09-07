@@ -131,6 +131,29 @@ resp, err := c.VerifyEvidence(ctx, evidence, apiclient.Policy{
 themselves; `Client.VerifyEnforced` is the middle ground (verdict gated,
 reference values not).
 
+### Letting the service enforce measurements
+
+`VerifyParams` can carry the expected measurements, in which case the service
+refuses rather than reporting. It fails closed on both a mismatch and a pin the
+evidence cannot answer — a register pin against SEV-SNP evidence, say — and
+returns an `*APIError`.
+
+The service names one concept twice, `expected_mrtd` on TDX and
+`expected_launch_digest` on SEV-SNP. `SetExpectedMeasurements` picks the field
+so callers do not:
+
+```go
+var params apiclient.VerifyParams
+err := params.SetExpectedMeasurements(platform, launchMeasurement, map[int][]byte{
+    1: rtmr1, // guest kernel image
+    2: rtmr2, // kernel command line and rootfs chain
+})
+```
+
+This pins **one** measurement. A policy that accepts any of several images
+cannot be expressed server-side; use `Policy.Measurements` or `Policy.Images`
+with `VerifyEvidence`, which checks the returned report instead.
+
 ### Choosing an address
 
 The `/verify` verdict is not signed, so the client trusts whatever answers.
