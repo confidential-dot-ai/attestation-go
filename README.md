@@ -121,7 +121,7 @@ the report without gating on it accepts anything the service could parse. Use
 
 ```go
 resp, err := c.VerifyEvidence(ctx, evidence, apiclient.Policy{
-    ExpectedReportData: expected,          // full 64 bytes; width adapts per platform
+    ExpectedReportData: digest[:],         // the bytes sent to /attest, verbatim
     AllowDebug:         false,             // a debug guest's memory is host-readable
     Images:             pins,              // whole-image pins: digest + registers
 })
@@ -166,15 +166,17 @@ swapped or made world-writable after startup fails closed.
 
 Nothing here asks the caller which TEE it is on. The envelope's tag selects the
 rules; tags are compared by family, so `az-*`/`gcp-*` route like their
-bare-metal counterparts and an unknown tag fails closed. Two per-platform
-details the client handles so callers do not:
+bare-metal counterparts and an unknown tag fails closed.
 
-- **Report-data width.** A vTPM platform's quote nonce is the bare 48-byte
-  digest; a native platform carries the 64-byte hardware field. Sending the
-  wrong width fails evidence that is in fact correct.
-- **`MinTcb`.** It names SEV-SNP components, so it is sent only with SNP
-  evidence. Sending it with TDX would read as an enforced floor while pinning
-  nothing.
+`ExpectedReportData` is the value sent to `/attest`, passed verbatim: a native
+verifier zero-pads it to the 64-byte hardware field, a vTPM verifier compares
+it with the quote nonce as attested. There is no per-platform width to get
+wrong.
+
+A policy element the platform cannot answer is refused, never skipped, so a
+policy is never reported as enforced when nothing checked it: `MinTcb` names
+SEV-SNP components and fails on any other family, and register pins fail on a
+platform without registers. A mixed fleet keeps one `Policy` per family.
 
 | Platform tag | Status | Notes |
 |---|---|---|

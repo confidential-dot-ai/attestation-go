@@ -1,8 +1,8 @@
 package apiclient
 
 import (
+	"bytes"
 	"context"
-	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -49,28 +49,34 @@ const digestHex = "aabbccddeeff00112233445566778899" +
 	"aabbccddeeff00112233445566778899" +
 	"aabbccddeeff00112233445566778899"
 
-func TestVerifyEvidenceReportDataWidthFollowsPlatform(t *testing.T) {
-	for _, tc := range []struct {
-		platform teetypes.PlatformType
-		wantLen  int
-	}{
-		{teetypes.PlatformSNP, 64},
-		{teetypes.PlatformTDX, 64},
-		{teetypes.PlatformGcpSNP, 64},
-		{teetypes.PlatformGcpTDX, 64},
-		{teetypes.PlatformAzSNP, sha512.Size384},
-		{teetypes.PlatformAzTDX, sha512.Size384},
+// The expected report data is the value sent to /attest and travels verbatim:
+// native verifiers zero-pad it to the hardware field, vTPM verifiers compare
+// it with the quote nonce as attested. An empty value pins nothing.
+func TestVerifyEvidenceSendsReportDataVerbatim(t *testing.T) {
+	digest := measurement(0x5a)
+	for _, platform := range []teetypes.PlatformType{
+		teetypes.PlatformSNP, teetypes.PlatformTDX,
+		teetypes.PlatformGcpSNP, teetypes.PlatformGcpTDX,
+		teetypes.PlatformAzSNP, teetypes.PlatformAzTDX,
 	} {
-		t.Run(string(tc.platform), func(t *testing.T) {
-			s := &verifyServer{resp: okResult(tc.platform, digestHex)}
+		t.Run(string(platform), func(t *testing.T) {
+			s := &verifyServer{resp: okResult(platform, digestHex)}
 			c := s.start(t)
-			ev := teetypes.AttestationEvidence{Platform: tc.platform, Evidence: json.RawMessage(`{}`)}
-			if _, err := c.VerifyEvidence(context.Background(), ev, Policy{}); err != nil {
+			ev := teetypes.AttestationEvidence{Platform: platform, Evidence: json.RawMessage(`{}`)}
+
+			if _, err := c.VerifyEvidence(context.Background(), ev, Policy{ExpectedReportData: digest}); err != nil {
 				t.Fatalf("VerifyEvidence: %v", err)
 			}
-			got := s.got.Params.ExpectedReportData
-			if len(got) != tc.wantLen {
-				t.Errorf("expected_report_data is %d bytes, want %d", len(got), tc.wantLen)
+			if got := s.got.Params.ExpectedReportData; !bytes.Equal(got, digest) {
+				t.Errorf("expected_report_data = %x, want %x", got, digest)
+			}
+
+			s.got, s.resp.Result.ReportDataMatch = VerifyRequest{}, nil
+			if _, err := c.VerifyEvidence(context.Background(), ev, Policy{}); err != nil {
+				t.Fatalf("VerifyEvidence(zero policy): %v", err)
+			}
+			if got := s.got.Params.ExpectedReportData; got != nil {
+				t.Errorf("zero policy sent expected_report_data %x, want none", got)
 			}
 		})
 	}

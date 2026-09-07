@@ -3,7 +3,6 @@ package apiclient
 import (
 	"bytes"
 	"context"
-	"crypto/sha512"
 	"errors"
 	"fmt"
 	"maps"
@@ -53,11 +52,13 @@ var (
 // verdict. The zero value checks only the verdict: any attested guest passes,
 // which is a development posture, not a deployment one.
 type Policy struct {
-	// ExpectedReportData is the full 64-byte report data the evidence must
-	// bind (SHA-384 in bytes 0-47, zero-padded). The wire form follows the
-	// platform: a vTPM platform compares the bare 48-byte digest, a native one
-	// compares all 64. See teetypes.PlatformType.UsesTPMNonce.
-	ExpectedReportData [64]byte
+	// ExpectedReportData is the value the evidence must bind: the same bytes
+	// that were sent to /attest, typically a 48-byte SHA-384 digest. It is
+	// sent verbatim. A native platform zero-pads it to the 64-byte hardware
+	// field before comparing; a vTPM platform compares it byte for byte with
+	// the quote nonce, which is what /attest received. Empty leaves the
+	// binding unchecked.
+	ExpectedReportData []byte
 
 	// AllowDebug accepts guests whose debug bit is set. A debug guest's memory
 	// is readable by the host, so leaving this false is what makes the rest of
@@ -178,14 +179,6 @@ func (c Client) VerifyEvidence(ctx context.Context, evidence teetypes.Attestatio
 		return VerifyResponse{}, fmt.Errorf("%w: %q", ErrUnsupportedPlatform, evidence.Platform)
 	}
 
-	// A vTPM platform binds the key through a quote whose nonce is the bare
-	// 48-byte digest; a native platform carries the hardware field and compares
-	// all 64. Sending the wrong width fails evidence that is in fact correct.
-	reportData := policy.ExpectedReportData[:]
-	if evidence.Platform.UsesTPMNonce() {
-		reportData = policy.ExpectedReportData[:sha512.Size384]
-	}
-
 	// MinTcb is SEV-SNP's alone. Dropping it for another family would verify
 	// under no floor while the caller believes one was applied.
 	if policy.MinTcb != nil && family != teetypes.FamilySNP {
@@ -193,7 +186,7 @@ func (c Client) VerifyEvidence(ctx context.Context, evidence teetypes.Attestatio
 	}
 
 	resp, err := c.VerifyEnforced(ctx, NewVerifyRequest(evidence, &VerifyParams{
-		ExpectedReportData: reportData,
+		ExpectedReportData: policy.ExpectedReportData,
 		AllowDebug:         teetypes.Ptr(policy.AllowDebug),
 		MinTcb:             policy.MinTcb,
 	}, false))
