@@ -73,13 +73,10 @@ func (r tdxRegister) Extend(event []byte) error {
 	}
 	_, werr := f.Write(event)
 	// Close reports write errors the kernel deferred, so it is checked and
-	// reported rather than deferred away.
-	cerr := f.Close()
-	if werr != nil {
-		return fmt.Errorf("extend %s: %w", r.path, werr)
-	}
-	if cerr != nil {
-		return fmt.Errorf("extend %s: %w", r.path, cerr)
+	// reported rather than deferred away. Joined: a failed write often fails
+	// the close too, and each names a different reason the extend did not land.
+	if err := errors.Join(werr, f.Close()); err != nil {
+		return fmt.Errorf("extend %s: %w", r.path, err)
 	}
 	return nil
 }
