@@ -38,7 +38,7 @@ res, err := teeverify.Verify(evidenceJSON, teetypes.VerifyParams{
 Packages: `teeverify` (dispatcher) · `snp`, `tdx` (bare-metal) · `azsnp`, `aztdx`
 (Azure vTPM) · `tpmcommon` (HCL/vTPM layer) · `teetypes` (shared types).
 
-## Runtime measurement (`attestation/runtimemeasure`)
+## Runtime measurement (`runtimemeasure`)
 
 Launch measurement covers what booted. Runtime measurement covers what the
 guest committed afterwards — which key it was launched to trust, and which
@@ -55,7 +55,7 @@ Callers asking "is this guest bound to my operator key" never branch on
 platform:
 
 ```go
-import "github.com/confidential-dot-ai/attestation-go/attestation/runtimemeasure"
+import "github.com/confidential-dot-ai/attestation-go/runtimemeasure"
 
 // res is a *teetypes.VerificationResult from teeverify.Verify.
 // Pass nil digests for a guest that runs no workload measurer.
