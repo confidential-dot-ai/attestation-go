@@ -8,9 +8,8 @@ import (
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
 )
 
-// Binding returns the post-launch operator-key binding a verified result
-// carries: RTMR[3] on Intel TDX (Size bytes), HOSTDATA on AMD SEV-SNP
-// (HostDataSize bytes).
+// Binding returns the post-launch binding a verified result carries: RTMR[3]
+// on Intel TDX (Size bytes), HOSTDATA on AMD SEV-SNP (HostDataSize bytes).
 //
 // It takes a whole VerificationResult, not bare Claims, because the value is
 // only meaningful once the hardware signature over it has been checked: the
@@ -18,7 +17,7 @@ import (
 //
 // The two widths are never interchangeable. A caller comparing them by hand
 // risks matching a 48-byte TDX value against a 32-byte SNP one; use
-// [VerifyOperatorKey] rather than comparing what this returns.
+// [VerifyBinding] rather than comparing what this returns.
 func Binding(r *teetypes.VerificationResult) ([]byte, error) {
 	if r == nil {
 		return nil, fmt.Errorf("no verification result")
@@ -40,61 +39,57 @@ func Binding(r *teetypes.VerificationResult) ([]byte, error) {
 }
 
 // ExpectedBinding returns the value [Binding] must equal for a guest launched
-// to trust pubkey, having measured workloadDigests in that order.
+// with anchor, having measured workloadDigests in that order.
 //
-// pubkey is the EXACT bytes the guest hashed — the public key file verbatim, as
-// written by `openssl ec -pubout` (PKIX PEM text, armor and trailing newline
-// included). Any re-encoding, re-wrapping or stripped newline yields a
-// different digest and a silent verification failure, so pass file bytes
-// through unmodified rather than round-tripping through a PEM parser.
+// anchor is whatever the guest was launched to trust; see [Seed]. It is hashed
+// byte for byte, so pass the exact bytes the guest committed.
 //
 // workloadDigests are canonical "sha256:<64-hex>" strings (see
 // [CanonicalDigest]), deduplicated and in extend order. SEV-SNP has no runtime
 // extends, so a non-empty list there is a policy error rather than a value this
 // function could compute.
-func ExpectedBinding(p teetypes.PlatformType, pubkey []byte, workloadDigests []string) ([]byte, error) {
+func ExpectedBinding(p teetypes.PlatformType, anchor []byte, workloadDigests []string) ([]byte, error) {
 	switch p.Family() {
 	case teetypes.FamilyTDX:
-		reg := FromDigestsSeeded(ForOperatorKey(pubkey), workloadDigests)
+		reg := FromDigestsSeeded(Seed(anchor), workloadDigests)
 		return reg[:], nil
 	case teetypes.FamilySNP:
 		if len(workloadDigests) > 0 {
-			return nil, fmt.Errorf("platform %q has no runtime extends, so %d workload digests cannot be measured into its binding: %w",
+			return nil, fmt.Errorf("platform %q has no runtime extends, so %d workload digest(s) cannot be measured into its binding: %w",
 				p, len(workloadDigests), ErrNoRegister)
 		}
-		hd := HostDataForOperatorKey(pubkey)
+		hd := HostData(anchor)
 		return hd[:], nil
 	default:
 		return nil, fmt.Errorf("platform %q: %w", p, ErrNoRegister)
 	}
 }
 
-// VerifyOperatorKey reports whether the guest that produced r was launched to
-// trust pubkey, having measured workloadDigests. It resolves the whole
-// TDX-versus-SNP difference — which field carries the binding, how wide it is,
-// and how the key digest folds into it — so callers never branch on platform.
+// VerifyBinding reports whether the guest that produced r was launched with
+// anchor, having measured workloadDigests. It resolves the whole TDX-versus-SNP
+// difference — which field carries the binding, how wide it is, and how the
+// anchor digest folds into it — so callers never branch on platform.
 //
 // Pass a nil workloadDigests for a guest that runs no workload measurer, which
-// is the case an in-guest service checking its own staged key wants: the
-// register must then equal the bare operator-key seed exactly, and any
-// extension beyond it means an unexpected measurer ran or the value was
-// tampered with. A verifier checking a guest that does measure workloads passes
-// the digests it expects.
+// is the case an in-guest service checking its own staged anchor wants: the
+// register must then equal the bare seed exactly, and any extension beyond it
+// means an unexpected measurer ran or the value was tampered with. A verifier
+// checking a guest that does measure workloads passes the digests it expects.
 //
-// A mismatch is an error naming both values. They are public-key digests, not
-// secrets, so the comparison is a plain one and the error may be logged.
-func VerifyOperatorKey(r *teetypes.VerificationResult, pubkey []byte, workloadDigests []string) error {
+// A mismatch is an error naming both values. They are digests, not the anchor
+// itself, so the comparison is a plain one and the error may be logged.
+func VerifyBinding(r *teetypes.VerificationResult, anchor []byte, workloadDigests []string) error {
 	got, err := Binding(r)
 	if err != nil {
 		return err
 	}
-	want, err := ExpectedBinding(r.Platform, pubkey, workloadDigests)
+	want, err := ExpectedBinding(r.Platform, anchor, workloadDigests)
 	if err != nil {
 		return err
 	}
 	if !bytes.Equal(got, want) {
 		return fmt.Errorf(
-			"guest is not bound to this operator key: %s carries %s, key implies %s",
+			"guest is not bound to the expected anchor: %s carries %s, anchor implies %s",
 			bindingName(r.Platform), hex.EncodeToString(got), hex.EncodeToString(want))
 	}
 	return nil

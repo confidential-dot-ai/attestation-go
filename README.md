@@ -41,9 +41,13 @@ Packages: `teeverify` (dispatcher) · `snp`, `tdx` (bare-metal) · `azsnp`, `azt
 ## Runtime measurement (`runtimemeasure`)
 
 Launch measurement covers what booted. Runtime measurement covers what the
-guest committed afterwards — which key it was launched to trust, and which
-workloads it admitted. The two families express this differently, and this
-package is the seam that hides the difference:
+guest committed afterwards — the *anchor* it was launched to trust, and the
+workloads it admitted. An anchor is whatever bytes distinguish one launch from
+another: a public key, a policy document, a configuration digest. The package
+hashes those bytes and does not interpret them.
+
+The two families express all this differently, and this package is the seam
+that hides the difference:
 
 | | Intel TDX | AMD SEV-SNP |
 |---|---|---|
@@ -51,7 +55,7 @@ package is the seam that hides the difference:
 | Width | 48 bytes (SHA-384) | 32 bytes (SHA-256) |
 | Per-workload extends | Yes | None — `ErrNoRegister` |
 
-Callers asking "is this guest bound to my operator key" never branch on
+Callers asking "was this guest launched with my anchor" never branch on
 platform:
 
 ```go
@@ -59,7 +63,7 @@ import "github.com/confidential-dot-ai/attestation-go/runtimemeasure"
 
 // res is a *teetypes.VerificationResult from teeverify.Verify.
 // Pass nil digests for a guest that runs no workload measurer.
-err := runtimemeasure.VerifyOperatorKey(res, operatorPubKeyPEM, workloadDigests)
+err := runtimemeasure.VerifyBinding(res, anchor, workloadDigests)
 ```
 
 An in-guest measurer drives the register directly. `Open` returns
@@ -73,9 +77,9 @@ err = reg.Extend(event[:])
 current, err := reg.Extension()
 ```
 
-`pubkey` bytes are hashed verbatim — pass the public key file exactly as
-written, never round-tripped through a PEM parser, or the digest differs and
-verification fails silently.
+Anchor bytes are hashed verbatim. Where they come from a file, pass the file
+contents exactly as written — never round-tripped through a parser — or the
+digest differs and verification fails silently.
 
 | Platform tag | Status | Notes |
 |---|---|---|

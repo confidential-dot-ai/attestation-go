@@ -10,7 +10,8 @@ import (
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
 )
 
-var operatorPub = []byte("-----BEGIN PUBLIC KEY-----\nMFkw\n-----END PUBLIC KEY-----\n")
+// Arbitrary launch-anchor bytes; the package does not interpret them.
+var anchor = []byte("anchor-bytes-v1\n")
 
 // tdxResult builds a verified-result stand-in whose RTMR[3] claim is reg.
 func tdxResult(p teetypes.PlatformType, reg []byte) *teetypes.VerificationResult {
@@ -30,8 +31,8 @@ func snpResult(p teetypes.PlatformType, hostData []byte) *teetypes.VerificationR
 }
 
 func TestBindingReadsTheRightField(t *testing.T) {
-	seed := ForOperatorKey(operatorPub)
-	hostData := HostDataForOperatorKey(operatorPub)
+	seed := Seed(anchor)
+	hostData := HostData(anchor)
 
 	got, err := Binding(tdxResult(teetypes.PlatformTDX, seed[:]))
 	if err != nil {
@@ -69,11 +70,11 @@ func TestBindingUnknownPlatform(t *testing.T) {
 	}
 }
 
-func TestVerifyOperatorKey(t *testing.T) {
+func TestVerifyBinding(t *testing.T) {
 	digests := []string{"sha256:" + strings.Repeat("ab", 32)}
-	seeded := FromDigestsSeeded(ForOperatorKey(operatorPub), digests)
-	bare := ForOperatorKey(operatorPub)
-	hostData := HostDataForOperatorKey(operatorPub)
+	seeded := FromDigestsSeeded(Seed(anchor), digests)
+	bare := Seed(anchor)
+	hostData := HostData(anchor)
 
 	for _, tc := range []struct {
 		name    string
@@ -92,30 +93,30 @@ func TestVerifyOperatorKey(t *testing.T) {
 		{"snp with workload digests", snpResult(teetypes.PlatformSNP, hostData[:]), digests, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := VerifyOperatorKey(tc.result, operatorPub, tc.digests)
+			err := VerifyBinding(tc.result, anchor, tc.digests)
 			if (err != nil) != tc.wantErr {
-				t.Fatalf("VerifyOperatorKey() = %v, wantErr %v", err, tc.wantErr)
+				t.Fatalf("VerifyBinding() = %v, wantErr %v", err, tc.wantErr)
 			}
 		})
 	}
 }
 
 // The two families' bindings differ in width, so no accidental cross-platform
-// match is possible even for one key. Guards against a future refactor that
+// match is possible even for one anchor. Guards against a future refactor that
 // compares them as raw byte slices.
-func TestOperatorKeyBindingsAreNotInterchangeable(t *testing.T) {
-	tdx := ForOperatorKey(operatorPub)
-	snp := HostDataForOperatorKey(operatorPub)
+func TestBindingsAreNotInterchangeable(t *testing.T) {
+	tdx := Seed(anchor)
+	snp := HostData(anchor)
 	if bytes.Equal(tdx[:], snp[:]) {
-		t.Fatal("TDX seed equals SNP HOSTDATA for the same key")
+		t.Fatal("TDX seed equals SNP HOSTDATA for the same anchor")
 	}
-	if err := VerifyOperatorKey(snpResult(teetypes.PlatformSNP, tdx[:len(snp)]), operatorPub, nil); err == nil {
+	if err := VerifyBinding(snpResult(teetypes.PlatformSNP, tdx[:len(snp)]), anchor, nil); err == nil {
 		t.Error("a truncated TDX seed verified as SNP HOSTDATA")
 	}
 }
 
 func TestExpectedBindingUnknownPlatform(t *testing.T) {
-	if _, err := ExpectedBinding("nonsense", operatorPub, nil); !errors.Is(err, ErrNoRegister) {
+	if _, err := ExpectedBinding("nonsense", anchor, nil); !errors.Is(err, ErrNoRegister) {
 		t.Errorf("ExpectedBinding(unknown) = _, %v, want ErrNoRegister", err)
 	}
 }

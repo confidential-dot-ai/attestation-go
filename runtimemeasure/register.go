@@ -10,7 +10,7 @@ import (
 
 // ErrNoRegister reports that the platform has no runtime measurement register.
 // SEV-SNP guests commit their post-launch identity at launch instead (see
-// HostDataForOperatorKey), so there is nothing to extend or read back locally.
+// [HostData]), so there is nothing to extend or read back locally.
 // Callers gating on an extend must treat this as a hard stop, not a skip.
 var ErrNoRegister = errors.New("platform has no runtime measurement register")
 

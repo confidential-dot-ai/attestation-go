@@ -4,29 +4,32 @@
 // Runtime measurement is the counterpart to launch measurement. A launch
 // measurement (MRTD on Intel TDX, the launch digest on AMD SEV-SNP) covers what
 // booted and is fixed at launch. What a guest commits afterwards can carry
-// identity a launch measurement cannot: which key the guest was launched to
-// trust, and which workloads it admitted.
+// identity a launch measurement cannot: the anchor it was launched to trust,
+// and the workloads it admitted.
 //
-// The two families express this differently, and the difference is the reason
-// this package exists:
+// An anchor is whatever bytes distinguish one launch from another — a public
+// key, a policy document, a configuration digest. This package hashes those
+// bytes and says nothing about what they mean.
+//
+// The two families express all this differently, and the difference is the
+// reason this package exists:
 //
 //   - Intel TDX has RTMR[3], a hardware append-only register. A guest seeds it
-//     with an operator-key digest (ForOperatorKey), then chains zero or more
-//     per-workload image extends on top (Event, Extend). [Register] is the
-//     local device; [Binding] reads the result back out of verified claims.
+//     with the anchor digest ([Seed]), then chains zero or more per-workload
+//     image extends on top ([Event], [Extend]). [Register] is the local device.
 //   - AMD SEV-SNP has no runtime-extend register. The launcher commits the
-//     operator-key digest into the report's immutable HOSTDATA field at launch
-//     (HostDataForOperatorKey), and per-workload extends do not exist, so
-//     [Register] reports ErrNoRegister and Event/FromDigests do not apply.
+//     anchor digest into the report's immutable HOSTDATA field at launch
+//     ([HostData]), and per-workload extends do not exist, so [Register]
+//     reports [ErrNoRegister] and Event/FromDigests do not apply.
 //
-// Callers that only need "is this guest bound to my key" should use
-// [VerifyOperatorKey], which resolves the difference and never asks the caller
+// Callers that only need "was this guest launched with my anchor" use
+// [VerifyBinding], which resolves the difference and never asks the caller
 // which platform it is on. Callers driving the register directly (an in-guest
 // measurer) use [Register].
 //
 // A verifier cannot interpret a TDX register without knowing its seed, so a
-// guest launched with an operator key must be verified with
-// FromDigestsSeeded(ForOperatorKey(pub), ...) rather than FromDigests.
+// guest launched with an anchor must be verified with
+// FromDigestsSeeded(Seed(anchor), ...) rather than FromDigests.
 package runtimemeasure
 
 import (
@@ -64,16 +67,16 @@ func Extend(reg, event [Size]byte) [Size]byte {
 // image is extended exactly once (the measurer dedups restarts/replicas
 // before extending); callers pass the deduped, ordered set.
 //
-// Use FromDigestsSeeded for a node launched with an operator key: its
+// Use FromDigestsSeeded for a guest launched with an anchor: its
 // register does not start from Zero.
 func FromDigests(canonicalDigests []string) [Size]byte {
 	return FromDigestsSeeded(Zero, canonicalDigests)
 }
 
 // FromDigestsSeeded is FromDigests starting from an arbitrary register
-// value, so per-workload extends can chain onto an operator-key seed:
+// value, so per-workload extends can chain onto an anchor seed:
 //
-//	FromDigestsSeeded(ForOperatorKey(pub), digests)
+//	FromDigestsSeeded(Seed(anchor), digests)
 func FromDigestsSeeded(seed [Size]byte, canonicalDigests []string) [Size]byte {
 	reg := seed
 	for _, d := range canonicalDigests {
@@ -82,49 +85,47 @@ func FromDigestsSeeded(seed [Size]byte, canonicalDigests []string) [Size]byte {
 	return reg
 }
 
-// ForOperatorKey computes the register value as it reads back on a node
-// launched with an operator key and no per-workload extends:
+// Seed computes the TDX register value as it reads back on a guest launched
+// with anchor bytes and no per-workload extends:
 //
-//	reg = SHA384( 0x00*48 ‖ SHA384(pubkey) )
+//	reg = SHA384( 0x00*48 ‖ SHA384(anchor) )
 //
-// The guest initrd hashes the operator public key off the opkeydata disk and
-// extends that digest into the register before switch_root, so the operator
-// can verify offline that the guest trusts only their key. An in-guest service
-// re-derives the same value to confirm a staged on-disk pubkey is the measured
-// one; see [VerifyOperatorKey].
+// anchor is whatever the guest was launched to trust — a public key, a policy
+// document, a configuration digest. This package does not interpret it. The
+// measured initrd hashes those bytes and extends the digest into the register
+// before switch_root, so a remote party can tell offline which anchor the guest
+// was launched for. An in-guest service re-derives the same value to confirm a
+// staged on-disk copy is the one that was measured; see [VerifyBinding].
 //
-// pubkey is the EXACT bytes the initrd hashed — the pubkey file verbatim, as
-// written by `openssl ec -pubout` (PKIX PEM text, armor and trailing newline
-// included). Any re-encoding, re-wrapping, or stripped newline yields a
-// different digest and a silent verification failure, so pass file bytes
-// through unmodified rather than round-tripping through a PEM parser.
-func ForOperatorKey(pubkey []byte) [Size]byte {
-	return Extend(Zero, sha512.Sum384(pubkey))
+// anchor is the EXACT bytes the initrd hashed, byte for byte. Re-encoding,
+// re-wrapping, or a stripped trailing newline yields a different digest and a
+// silent verification failure. Where the bytes come from a file, pass the file
+// contents through unmodified rather than round-tripping them through a parser.
+func Seed(anchor []byte) [Size]byte {
+	return Extend(Zero, sha512.Sum384(anchor))
 }
 
-// HostDataSize is the byte length of the SNP HOSTDATA field, and so of the
-// operator-key binding value on SNP (SHA-256).
+// HostDataSize is the byte length of the SEV-SNP HOSTDATA field, and so of the
+// launch-time binding value on SNP (SHA-256).
 const HostDataSize = 32
 
-// HostDataForOperatorKey computes the SNP launch-time operator-key binding:
-// the value the launcher commits as HOSTDATA when launching a node CVM for
-// this key:
+// HostData computes the SEV-SNP launch-time binding: the value a launcher
+// commits as HOSTDATA when launching a guest for these anchor bytes.
 //
-//	HOSTDATA = SHA256(pubkey)
+//	HOSTDATA = SHA256(anchor)
 //
-// It is the SNP analog of ForOperatorKey. SEV-SNP has no runtime-extend
-// register, so instead of the measured initrd extending the key digest into
-// RTMR[3] after launch, the (untrusted) launcher commits it into the report's
-// immutable HOSTDATA field at launch. The trust argument is unchanged: the
-// host could set any value, but a verifier that checks HOSTDATA against the
-// key it expects rejects a wrong-key launch, exactly as it would reject a
-// wrong RTMR[3]. A VM launched without an operator key carries all-zero
-// HOSTDATA, which no SHA-256 output equals.
+// It is the SNP counterpart of [Seed]. SNP has no runtime-extend register, so
+// instead of a measured initrd extending the digest after launch, the
+// (untrusted) launcher commits it at launch. The trust argument is unchanged:
+// the host can set any value, but a verifier that checks HOSTDATA against the
+// anchor it expects rejects a wrong-anchor launch, exactly as it would reject a
+// wrong RTMR[3]. A guest launched with no anchor carries all-zero HOSTDATA,
+// which no SHA-256 output equals, so that fails closed too.
 //
-// pubkey is the EXACT bytes staged as the opkeydata disk's pubkey file (see
-// ForOperatorKey); any re-encoding yields a different digest.
-func HostDataForOperatorKey(pubkey []byte) [HostDataSize]byte {
-	return sha256.Sum256(pubkey)
+// anchor is the EXACT bytes committed, with the same byte-for-byte requirement
+// as [Seed].
+func HostData(anchor []byte) [HostDataSize]byte {
+	return sha256.Sum256(anchor)
 }
 
 // CanonicalDigest strictly canonicalizes an image reference to the
