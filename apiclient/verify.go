@@ -108,12 +108,12 @@ func EnforceVerdict(req VerifyRequest, resp VerifyResponse) error {
 	if !resp.Result.SignatureValid {
 		return ErrSignatureInvalid
 	}
-	if req.Params != nil && req.Params.ExpectedReportData != nil {
+	if req.Params != nil && len(req.Params.ExpectedReportData) > 0 {
 		if resp.Result.ReportDataMatch == nil || !*resp.Result.ReportDataMatch {
 			return ErrReportDataMismatch
 		}
 	}
-	if req.Params != nil && req.Params.ExpectedInitDataHash != nil {
+	if req.Params != nil && len(req.Params.ExpectedInitDataHash) > 0 {
 		if resp.Result.InitDataMatch == nil || !*resp.Result.InitDataMatch {
 			return fmt.Errorf("apiclient: init data mismatch in attestation evidence")
 		}
@@ -148,10 +148,9 @@ func (c Client) VerifyEvidence(ctx context.Context, evidence teetypes.Attestatio
 		minTcb = nil
 	}
 
-	expected := NewBase64Bytes(reportData)
 	allowDebug := policy.AllowDebug
 	resp, err := c.VerifyEnforced(ctx, NewVerifyRequest(evidence, &VerifyParams{
-		ExpectedReportData: &expected,
+		ExpectedReportData: reportData,
 		AllowDebug:         &allowDebug,
 		MinTcb:             minTcb,
 	}, false))

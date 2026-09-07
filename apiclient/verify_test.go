@@ -68,7 +68,7 @@ func TestVerifyEvidenceReportDataWidthFollowsPlatform(t *testing.T) {
 			if _, err := c.VerifyEvidence(context.Background(), ev, Policy{}); err != nil {
 				t.Fatalf("VerifyEvidence: %v", err)
 			}
-			got := s.got.Params.ExpectedReportData.Bytes()
+			got := s.got.Params.ExpectedReportData
 			if len(got) != tc.wantLen {
 				t.Errorf("expected_report_data is %d bytes, want %d", len(got), tc.wantLen)
 			}
@@ -118,8 +118,7 @@ func TestVerifyEvidenceUnknownPlatformFailsClosed(t *testing.T) {
 
 func TestEnforceVerdict(t *testing.T) {
 	yes, no := true, false
-	rd := NewBase64Bytes([]byte("x"))
-	withRD := VerifyRequest{Params: &VerifyParams{ExpectedReportData: &rd}}
+	withRD := VerifyRequest{Params: &VerifyParams{ExpectedReportData: []byte("x")}}
 
 	for _, tc := range []struct {
 		name string
@@ -148,8 +147,7 @@ func TestEnforceVerdict(t *testing.T) {
 // An init-data pin the caller asked for must be affirmatively matched, not
 // tolerated when the service omits the verdict.
 func TestEnforceVerdictInitDataFailsClosed(t *testing.T) {
-	rd := NewBase64Bytes([]byte("x"))
-	req := VerifyRequest{Params: &VerifyParams{ExpectedInitDataHash: &rd}}
+	req := VerifyRequest{Params: &VerifyParams{ExpectedInitDataHash: []byte("x")}}
 
 	resp := VerifyResponse{Result: teetypes.VerificationResult{SignatureValid: true}}
 	if err := EnforceVerdict(req, resp); err == nil {

@@ -106,7 +106,7 @@ on, so the caller need not know:
 c := apiclient.NewClient("unix:///run/attestation/attest.sock")
 
 resp, err := c.Attest(ctx, apiclient.AttestRequest{
-    ReportData: apiclient.NewBase64Bytes(digest[:]),
+    ReportData: digest[:], // travels as base64, per encoding/json
     Platform:   apiclient.PlatformAuto,
 })
 evidence := resp.Envelope() // teetypes.AttestationEvidence

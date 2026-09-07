@@ -1,7 +1,6 @@
 package apiclient
 
 import (
-	"encoding/base64"
 	"encoding/json"
 
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
@@ -16,9 +15,10 @@ const PlatformAuto teetypes.PlatformType = "auto"
 //
 // ReportData is the value to bind into the hardware report. Send the bare
 // 48-byte SHA-384 digest: the service zero-extends it into the platform's
-// report-data field.
+// report-data field. It travels as standard base64, which is what
+// encoding/json does with a []byte.
 type AttestRequest struct {
-	ReportData Base64Bytes           `json:"report_data"`
+	ReportData []byte                `json:"report_data"`
 	Platform   teetypes.PlatformType `json:"platform"`
 }
 
@@ -58,12 +58,12 @@ func NewVerifyRequest(evidence teetypes.AttestationEvidence, params *VerifyParam
 	}
 }
 
-// VerifyParams are the optional checks /verify performs server-side. A nil
+// VerifyParams are the optional checks /verify performs server-side. An empty
 // field is not checked; the caller enforces anything it leaves out.
 type VerifyParams struct {
-	ExpectedReportData   *Base64Bytes `json:"expected_report_data,omitempty"`
-	ExpectedInitDataHash *Base64Bytes `json:"expected_init_data_hash,omitempty"`
-	AllowDebug           *bool        `json:"allow_debug,omitempty"`
+	ExpectedReportData   []byte `json:"expected_report_data,omitempty"`
+	ExpectedInitDataHash []byte `json:"expected_init_data_hash,omitempty"`
+	AllowDebug           *bool  `json:"allow_debug,omitempty"`
 	// MinTcb is an SEV-SNP floor. The service's TDX verifier has no
 	// minimum-TCB parameter, so sending it with TDX evidence pins nothing.
 	MinTcb *teetypes.SnpTcb `json:"min_tcb,omitempty"`
@@ -95,33 +95,4 @@ type CacheStats struct {
 type ErrorResponse struct {
 	Error   string `json:"error"`
 	Message string `json:"message"`
-}
-
-// Base64Bytes is a byte slice carried as standard-base64 JSON, matching the
-// service's serde encoding for binary fields.
-type Base64Bytes struct {
-	data []byte
-}
-
-// NewBase64Bytes wraps raw bytes for the wire.
-func NewBase64Bytes(data []byte) Base64Bytes { return Base64Bytes{data: data} }
-
-// Bytes returns the wrapped bytes.
-func (b Base64Bytes) Bytes() []byte { return b.data }
-
-func (b Base64Bytes) MarshalJSON() ([]byte, error) {
-	return json.Marshal(base64.StdEncoding.EncodeToString(b.data))
-}
-
-func (b *Base64Bytes) UnmarshalJSON(data []byte) error {
-	var s string
-	if err := json.Unmarshal(data, &s); err != nil {
-		return err
-	}
-	decoded, err := base64.StdEncoding.DecodeString(s)
-	if err != nil {
-		return err
-	}
-	b.data = decoded
-	return nil
 }

@@ -31,14 +31,14 @@ func TestAttestRoundTrip(t *testing.T) {
 	defer srv.Close()
 
 	resp, err := NewClient(srv.URL).Attest(context.Background(), AttestRequest{
-		ReportData: NewBase64Bytes([]byte("nonce")),
+		ReportData: []byte("nonce"),
 		Platform:   PlatformAuto,
 	})
 	if err != nil {
 		t.Fatalf("Attest: %v", err)
 	}
-	if string(got.ReportData.Bytes()) != "nonce" {
-		t.Errorf("report_data = %q, want %q", got.ReportData.Bytes(), "nonce")
+	if string(got.ReportData) != "nonce" {
+		t.Errorf("report_data = %q, want %q", got.ReportData, "nonce")
 	}
 	if got.Platform != PlatformAuto {
 		t.Errorf("platform = %q, want %q", got.Platform, PlatformAuto)
