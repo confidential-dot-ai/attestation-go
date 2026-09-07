@@ -61,3 +61,23 @@ func (p PlatformType) IsSNP() bool { return p.Family() == FamilySNP }
 func NormalizePlatform(platform string) PlatformType {
 	return PlatformType(strings.ToLower(strings.TrimSpace(platform)))
 }
+
+// UsesTPMNonce reports whether the platform binds the attester's key through a
+// vTPM quote rather than through the hardware report's own report-data field.
+//
+// It decides how wide an expected report-data value must be on the wire: a vTPM
+// platform's quote nonce is the bare 48-byte SHA-384 digest, while a native
+// platform carries the hardware field and compares all 64 bytes. Sending 64
+// bytes to a vTPM platform, or 48 to a native one, fails verification against
+// evidence that is in fact correct.
+//
+// The Azure overlays quote a vTPM; the GCP ones carry the native field despite
+// also exposing a vTPM, so this is a per-tag property and not a family one.
+func (p PlatformType) UsesTPMNonce() bool {
+	switch NormalizePlatform(string(p)) {
+	case PlatformAzSNP, PlatformAzTDX:
+		return true
+	default:
+		return false
+	}
+}

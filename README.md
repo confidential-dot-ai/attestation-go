@@ -80,6 +80,78 @@ current, err := reg.Extension()
 Anchor bytes are hashed verbatim. Where they come from a file, pass the file
 contents exactly as written — never round-tripped through a parser — or the
 digest differs and verification fails silently.
+## attestation-api client (`apiclient`)
+
+`teeverify` verifies evidence in this process. `apiclient` is the alternative:
+it talks to **attestation-api**, the `attestation-rs` HTTP service that both
+produces evidence on a confidential host and verifies it. Use it when the
+evidence has to be generated locally, or when verification should follow the
+service's collateral cache rather than this process's.
+
+### Endpoints
+
+| Method | Endpoint | Wrapper |
+|---|---|---|
+| `POST` | `/attest` | `Client.Attest` — produce evidence binding a report-data value |
+| `POST` | `/verify` | `Client.Verify` — parse and check evidence, returning a report |
+| `GET` | `/health` | `Client.Health` — status, platform, collateral cache stats |
+
+### Producing evidence
+
+Send the bare 48-byte SHA-384 digest; the service zero-extends it into the
+platform's report-data field. `PlatformAuto` asks the service which TEE it is
+on, so the caller need not know:
+
+```go
+c := apiclient.NewClient("unix:///run/attestation/attest.sock")
+
+resp, err := c.Attest(ctx, apiclient.AttestRequest{
+    ReportData: apiclient.NewBase64Bytes(digest[:]),
+    Platform:   apiclient.PlatformAuto,
+})
+evidence := resp.Envelope() // teetypes.AttestationEvidence
+```
+
+### Verifying evidence
+
+**`/verify` returns a report, not a decision.** It says what the evidence
+contained — including that the signature did not check out. A caller that reads
+the report without gating on it accepts anything the service could parse. Use
+`VerifyEvidence`, which enforces the verdict and then your reference values:
+
+```go
+resp, err := c.VerifyEvidence(ctx, evidence, apiclient.Policy{
+    ExpectedReportData: expected,          // full 64 bytes; width adapts per platform
+    AllowDebug:         false,             // a debug guest's memory is host-readable
+    Images:             pins,              // whole-image pins: digest + registers
+})
+```
+
+`Client.Verify` is the raw endpoint, for callers enforcing the verdict
+themselves; `Client.VerifyEnforced` is the middle ground (verdict gated,
+reference values not).
+
+### Choosing an address
+
+The `/verify` verdict is not signed, so the client trusts whatever answers.
+Prefer a Unix-domain socket inside the trust boundary — a routable address lets
+anything that can influence name resolution or routing answer in the service's
+place. The socket's owner and mode are re-checked on **every dial**, so one
+swapped or made world-writable after startup fails closed.
+
+### Platform neutrality
+
+Nothing here asks the caller which TEE it is on. The envelope's tag selects the
+rules; tags are compared by family, so `az-*`/`gcp-*` route like their
+bare-metal counterparts and an unknown tag fails closed. Two per-platform
+details the client handles so callers do not:
+
+- **Report-data width.** A vTPM platform's quote nonce is the bare 48-byte
+  digest; a native platform carries the 64-byte hardware field. Sending the
+  wrong width fails evidence that is in fact correct.
+- **`MinTcb`.** It names SEV-SNP components, so it is sent only with SNP
+  evidence. Sending it with TDX would read as an enforced floor while pinning
+  nothing.
 
 | Platform tag | Status | Notes |
 |---|---|---|
