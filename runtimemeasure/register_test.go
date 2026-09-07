@@ -14,26 +14,28 @@ import (
 func TestOpenByFamily(t *testing.T) {
 	for _, tc := range []struct {
 		platform teetypes.PlatformType
-		want     bool // a register exists
+		want     error // nil: a register exists
 	}{
-		{teetypes.PlatformTDX, true},
-		{teetypes.PlatformAzTDX, true},
-		{teetypes.PlatformGcpTDX, true},
-		{teetypes.PlatformSNP, false},
-		{teetypes.PlatformAzSNP, false},
-		{teetypes.PlatformGcpSNP, false},
-		{teetypes.PlatformDstack, false},
-		{"nonsense", false},
+		{teetypes.PlatformTDX, nil},
+		{teetypes.PlatformAzTDX, nil},
+		{teetypes.PlatformGcpTDX, nil},
+		{teetypes.PlatformSNP, ErrNoRegister},
+		{teetypes.PlatformAzSNP, ErrNoRegister},
+		{teetypes.PlatformGcpSNP, ErrNoRegister},
+		// A tag with no rules is not "SNP, nothing to extend": a caller that
+		// skips on ErrNoRegister must not skip a mistyped TDX tag.
+		{teetypes.PlatformDstack, ErrUnknownPlatform},
+		{"nonsense", ErrUnknownPlatform},
 	} {
 		reg, err := Open(tc.platform)
-		if tc.want {
+		if tc.want == nil {
 			if err != nil {
 				t.Errorf("Open(%q) = _, %v, want a register", tc.platform, err)
 			}
 			continue
 		}
-		if !errors.Is(err, ErrNoRegister) {
-			t.Errorf("Open(%q) = _, %v, want ErrNoRegister", tc.platform, err)
+		if !errors.Is(err, tc.want) {
+			t.Errorf("Open(%q) = _, %v, want %v", tc.platform, err, tc.want)
 		}
 		if reg != nil {
 			t.Errorf("Open(%q) returned a register alongside its error", tc.platform)

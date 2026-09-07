@@ -116,11 +116,17 @@ const HostDataSize = 32
 //
 // It is the SNP counterpart of [Seed]. SNP has no runtime-extend register, so
 // instead of a measured initrd extending the digest after launch, the
-// (untrusted) launcher commits it at launch. The trust argument is unchanged:
-// the host can set any value, but a verifier that checks HOSTDATA against the
-// anchor it expects rejects a wrong-anchor launch, exactly as it would reject a
-// wrong RTMR[3]. A guest launched with no anchor carries all-zero HOSTDATA,
-// which no SHA-256 output equals, so that fails closed too.
+// (untrusted) launcher commits it at launch. The host can set any value, but a
+// verifier that checks HOSTDATA against the anchor it expects rejects a
+// wrong-anchor launch, exactly as it would reject a wrong RTMR[3]. A guest
+// launched with no anchor carries all-zero HOSTDATA, which no SHA-256 output
+// equals, so that fails closed too.
+//
+// What HOSTDATA proves is which anchor the launcher committed, not that the
+// guest honours it. The measured-initrd argument on TDX holds because the
+// image that hashed the anchor is the one that goes on to enforce it; on SNP
+// the verifier must also pin a launch digest of an image known to read
+// HOSTDATA and refuse any anchor that does not match it.
 //
 // anchor is the EXACT bytes committed, with the same byte-for-byte requirement
 // as [Seed].
