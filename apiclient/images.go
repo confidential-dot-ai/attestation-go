@@ -32,11 +32,14 @@ type ImagePin struct {
 }
 
 // EnforceImages accepts evidence matching one pinned image whole: its launch
-// digest and, where the platform has registers, every register that image pins.
+// digest and every register that image pins.
 //
-// Registers are checked only where the platform has them. SEV-SNP folds the
-// guest image into its launch digest and reports none, so an SNP pin is its
-// digest alone.
+// An image that pins registers cannot match evidence from a platform without
+// them: the pin asked for a check the evidence cannot answer, and passing on
+// the digest alone would report it as enforced. A mixed reference set still
+// works, since another image pinning only its digest can match instead. SEV-SNP
+// folds the guest image into its launch digest and reports no registers, so an
+// SNP pin is its digest alone.
 func EnforceImages(resp VerifyResponse, images []ImagePin, platform teetypes.PlatformType) error {
 	if len(images) == 0 {
 		return nil
@@ -45,7 +48,6 @@ func EnforceImages(resp VerifyResponse, images []ImagePin, platform teetypes.Pla
 	if err != nil {
 		return err
 	}
-	checkRTMRs := platform.IsTDX()
 
 	// The last register mismatch is kept so a near-miss reports which image it
 	// nearly was, rather than the generic "nothing matched".
@@ -54,8 +56,13 @@ func EnforceImages(resp VerifyResponse, images []ImagePin, platform teetypes.Pla
 		if !bytes.Equal(digest, img.Digest) {
 			continue
 		}
-		if !checkRTMRs || len(img.RTMRs) == 0 {
+		if len(img.RTMRs) == 0 {
 			return nil
+		}
+		if !platform.IsTDX() {
+			lastErr = fmt.Errorf("%s: %w: %d register(s) pinned but platform %q has none",
+				img.Name, ErrRTMRNotAllowed, len(img.RTMRs), platform)
+			continue
 		}
 		if err := enforceRTMRsAgainst(resp.Result.Claims, img.RTMRs); err != nil {
 			lastErr = fmt.Errorf("%s: %w", img.Name, err)

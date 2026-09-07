@@ -245,6 +245,14 @@ func TestEnforceImagesMatchesWholeImages(t *testing.T) {
 	}{
 		{"digest only, snp", []ImagePin{{Name: "a", Digest: digest}}, teetypes.PlatformSNP, false},
 		{"wrong digest", []ImagePin{{Name: "a", Digest: other}}, teetypes.PlatformSNP, true},
+		// A register pin the platform cannot answer is a non-match, not a pass
+		// on the digest alone.
+		{"registers pinned, snp", []ImagePin{{Name: "a", Digest: digest, RTMRs: map[int][]byte{3: rtmr}}}, teetypes.PlatformSNP, true},
+		{"registers pinned, unknown platform", []ImagePin{{Name: "a", Digest: digest, RTMRs: map[int][]byte{3: rtmr}}}, "dstack", true},
+		{"mixed set, digest-only candidate matches", []ImagePin{
+			{Name: "tdx", Digest: digest, RTMRs: map[int][]byte{1: rtmr}},
+			{Name: "snp", Digest: digest},
+		}, teetypes.PlatformSNP, false},
 		{"digest and register", []ImagePin{{Name: "a", Digest: digest, RTMRs: map[int][]byte{1: rtmr}}}, teetypes.PlatformTDX, false},
 		{"right digest, wrong register", []ImagePin{{Name: "a", Digest: digest, RTMRs: map[int][]byte{1: other}}}, teetypes.PlatformTDX, true},
 		// The crossed pairing an image pin exists to refuse.
