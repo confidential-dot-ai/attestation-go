@@ -150,8 +150,45 @@ func TestEnforceVerdictInitDataFailsClosed(t *testing.T) {
 	req := VerifyRequest{Params: &VerifyParams{ExpectedInitDataHash: []byte("x")}}
 
 	resp := VerifyResponse{Result: teetypes.VerificationResult{SignatureValid: true}}
-	if err := EnforceVerdict(req, resp); err == nil {
-		t.Fatal("EnforceVerdict with an unanswered init-data pin = nil, want an error")
+	if err := EnforceVerdict(req, resp); !errors.Is(err, ErrInitDataMismatch) {
+		t.Fatalf("EnforceVerdict with an unanswered init-data pin = %v, want ErrInitDataMismatch", err)
+	}
+}
+
+// A service that predates the expected-measurement request fields ignores
+// them and returns a clean report. The pins are enforced against the returned
+// claims, so a report for one image is refused when another was requested.
+func TestVerifyEnforcedChecksExpectedMeasurementsAgainstClaims(t *testing.T) {
+	reported, _ := hex.DecodeString(digestHex)
+	other := measurement(0xbb)
+	claims := teetypes.Claims{LaunchDigest: digestHex, PlatformData: map[string]any{"rtmr_1": digestHex}}
+
+	for _, tc := range []struct {
+		name   string
+		launch []byte
+		rtmrs  map[int][]byte
+		want   error
+	}{
+		{"launch digest differs", other, nil, ErrMeasurementNotAllowed},
+		{"register differs", reported, map[int][]byte{1: other}, ErrRTMRNotAllowed},
+		{"register not reported", reported, map[int][]byte{2: reported}, ErrRTMRNotAllowed},
+		{"both match", reported, map[int][]byte{1: reported}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &verifyServer{resp: okResult(teetypes.PlatformTDX, digestHex)}
+			s.resp.Result.Claims = claims
+			c := s.start(t)
+
+			var params VerifyParams
+			if err := params.SetExpectedMeasurements(teetypes.PlatformTDX, tc.launch, tc.rtmrs); err != nil {
+				t.Fatal(err)
+			}
+			ev := teetypes.AttestationEvidence{Platform: teetypes.PlatformTDX, Evidence: json.RawMessage(`{}`)}
+			_, err := c.VerifyEnforced(context.Background(), NewVerifyRequest(ev, &params, false))
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("VerifyEnforced() = %v, want %v", err, tc.want)
+			}
+		})
 	}
 }
 

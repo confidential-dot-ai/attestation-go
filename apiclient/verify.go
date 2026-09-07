@@ -36,6 +36,10 @@ var (
 	// malformed, or does not match what the policy pins.
 	ErrRTMRNotAllowed = errors.New("apiclient: RTMR not allowed")
 
+	// ErrInitDataMismatch: the request pinned an init-data hash and the
+	// verdict is absent or false.
+	ErrInitDataMismatch = errors.New("apiclient: init data mismatch in attestation evidence")
+
 	// ErrUnsupportedPlatform: the envelope names a platform with no
 	// verification rules here, so verification fails closed.
 	ErrUnsupportedPlatform = errors.New("apiclient: unsupported platform for evidence verification")
@@ -101,24 +105,59 @@ func (c Client) VerifyEnforced(ctx context.Context, req VerifyRequest) (VerifyRe
 }
 
 // EnforceVerdict fails closed on a /verify response: the hardware signature
-// must be valid, and where req asked for a report-data match the verdict must
-// be affirmatively true. For callers holding a response from a fakeable
-// interface; callers with a concrete [Client] use [Client.VerifyEnforced].
+// must be valid, where req asked for a report-data or init-data match the
+// verdict must be affirmatively true, and every expected measurement req
+// carried must equal the claim the service returned. For callers holding a
+// response from a fakeable interface; callers with a concrete [Client] use
+// [Client.VerifyEnforced].
+//
+// Measurements are re-checked here rather than trusted to the service's
+// verdict: a service predating those request fields ignores them and returns
+// a clean report, so the only evidence that a pin was enforced is the claim
+// itself.
 func EnforceVerdict(req VerifyRequest, resp VerifyResponse) error {
 	if !resp.Result.SignatureValid {
 		return ErrSignatureInvalid
 	}
-	if req.Params != nil && len(req.Params.ExpectedReportData) > 0 {
+	if req.Params == nil {
+		return nil
+	}
+	if len(req.Params.ExpectedReportData) > 0 {
 		if resp.Result.ReportDataMatch == nil || !*resp.Result.ReportDataMatch {
 			return ErrReportDataMismatch
 		}
 	}
-	if req.Params != nil && len(req.Params.ExpectedInitDataHash) > 0 {
+	if len(req.Params.ExpectedInitDataHash) > 0 {
 		if resp.Result.InitDataMatch == nil || !*resp.Result.InitDataMatch {
-			return fmt.Errorf("apiclient: init data mismatch in attestation evidence")
+			return ErrInitDataMismatch
 		}
 	}
-	return nil
+	return enforceExpectedMeasurements(*req.Params, resp)
+}
+
+// enforceExpectedMeasurements compares the request's expected measurements
+// with the returned claims. Both launch fields compare against the one
+// normalized launch digest, since the service maps MRTD and the SNP launch
+// measurement onto it.
+func enforceExpectedMeasurements(params VerifyParams, resp VerifyResponse) error {
+	var allowed [][]byte
+	for _, m := range [][]byte{params.ExpectedLaunchDigest, params.ExpectedMRTD} {
+		if len(m) > 0 {
+			allowed = append(allowed, m)
+		}
+	}
+	if len(allowed) > 0 {
+		if err := EnforceLaunchMeasurement(resp, allowed); err != nil {
+			return err
+		}
+	}
+	pinned := map[int][]byte{}
+	for idx, m := range [][]byte{params.ExpectedRTMR0, params.ExpectedRTMR1, params.ExpectedRTMR2, params.ExpectedRTMR3} {
+		if len(m) > 0 {
+			pinned[idx] = m
+		}
+	}
+	return EnforceRTMRs(resp, pinned)
 }
 
 // VerifyEvidence verifies an evidence envelope against policy, enforcing the
