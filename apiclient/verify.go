@@ -39,6 +39,11 @@ var (
 	// is from another family, where the floor pins nothing.
 	ErrMinTcbNotAllowed = errors.New("apiclient: TCB floor not allowed")
 
+	// ErrPCRNotAllowed: a pinned vTPM platform configuration register is
+	// absent, malformed, not covered by the quote's signed selection, or does
+	// not match what the policy pins.
+	ErrPCRNotAllowed = errors.New("apiclient: vTPM PCR not allowed")
+
 	// ErrInitDataMismatch: the request pinned an init-data hash and the
 	// verdict is absent or false.
 	ErrInitDataMismatch = errors.New("apiclient: init data mismatch in attestation evidence")
@@ -94,6 +99,24 @@ type Policy struct {
 	// in-guest software and cannot speak to guest identity on its own — a
 	// substituted guest extends it with whatever it likes.
 	RTMRs map[int][]byte
+
+	// PCRs pins vTPM platform configuration registers by index, and is what
+	// makes an Azure guest's OS attested rather than just Microsoft's
+	// paravisor: on an Azure confidential VM the launch measurement covers the
+	// paravisor image, while the guest kernel and initrd measure here.
+	//
+	// Values are SHA-256, 32 bytes. Pins apply only where the platform carries
+	// a vTPM quote (teetypes.PlatformType.HasVTPMQuote); elsewhere there is
+	// nothing for them to narrow, so a mixed fleet keeps working. Which
+	// indices carry guest-OS identity depends on the image's measured-boot
+	// layout.
+	PCRs map[int][]byte
+
+	// ExpectedInitDataHash, when set, is sent as expected_init_data_hash and
+	// the verdict must come back affirmatively true. The platform decides what
+	// backs it: SEV-SNP HOST_DATA, TDX MRCONFIGID zero-padded, or vTPM PCR[8]
+	// on the Azure overlays.
+	ExpectedInitDataHash []byte
 }
 
 // VerifyEnforced posts req to /verify and fails closed on the verdict
@@ -186,9 +209,10 @@ func (c Client) VerifyEvidence(ctx context.Context, evidence teetypes.Attestatio
 	}
 
 	resp, err := c.VerifyEnforced(ctx, NewVerifyRequest(evidence, &VerifyParams{
-		ExpectedReportData: policy.ExpectedReportData,
-		AllowDebug:         teetypes.Ptr(policy.AllowDebug),
-		MinTcb:             policy.MinTcb,
+		ExpectedReportData:   policy.ExpectedReportData,
+		ExpectedInitDataHash: policy.ExpectedInitDataHash,
+		AllowDebug:           teetypes.Ptr(policy.AllowDebug),
+		MinTcb:               policy.MinTcb,
 	}, false))
 	if err != nil {
 		return VerifyResponse{}, err
@@ -206,6 +230,12 @@ func (c Client) VerifyEvidence(ctx context.Context, evidence teetypes.Attestatio
 // Images are matched whole; the flat measurement/RTMR pair keeps its own path,
 // so an operator who set only that sees exactly the decisions it always made.
 func EnforcePins(resp VerifyResponse, policy Policy, platform teetypes.PlatformType) error {
+	// PCR pins are orthogonal to the launch measurement: on an Azure guest the
+	// launch measurement identifies the paravisor and the PCRs identify the
+	// guest OS, so both forms apply to the same evidence.
+	if err := EnforcePCRs(resp.Result.Claims, policy.PCRs, platform); err != nil {
+		return err
+	}
 	if len(policy.Images) > 0 {
 		return EnforceImages(resp, policy.Images, platform)
 	}
@@ -220,6 +250,39 @@ func EnforcePins(resp VerifyResponse, policy Policy, platform teetypes.PlatformT
 	if len(policy.RTMRs) > 0 {
 		return fmt.Errorf("%w: %d register(s) pinned but platform %q has none",
 			ErrRTMRNotAllowed, len(policy.RTMRs), platform)
+	}
+	return nil
+}
+
+// EnforcePCRs requires each pinned vTPM register to byte-equal what the
+// verifier reported.
+//
+// A pinned register the evidence does not carry is a refusal, not a pass. So is
+// a pin against a platform with no vTPM quote: the policy asked for a check
+// that could never run, which is a policy error rather than something to skip
+// quietly. Reference values are per-platform, so a pin reaching the wrong
+// platform means the wrong policy was loaded.
+//
+// The reported values are bound to the quote's signed PCR digest by the
+// verifier, so their integrity rests on that verifier being inside the caller's
+// trust boundary — the same footing as the launch digest.
+func EnforcePCRs(claims teetypes.Claims, pinned map[int][]byte, platform teetypes.PlatformType) error {
+	if len(pinned) == 0 {
+		return nil
+	}
+	if !platform.HasVTPMQuote() {
+		return fmt.Errorf("%w: %d register(s) pinned but platform %q carries no vTPM quote",
+			ErrPCRNotAllowed, len(pinned), platform)
+	}
+	// Sorted so the error an operator sees is stable across runs.
+	for _, idx := range slices.Sorted(maps.Keys(pinned)) {
+		got, err := claims.PCR(idx)
+		if err != nil {
+			return fmt.Errorf("%w: %w", ErrPCRNotAllowed, err)
+		}
+		if !bytes.Equal(got, pinned[idx]) {
+			return fmt.Errorf("%w: PCR[%d] does not match", ErrPCRNotAllowed, idx)
+		}
 	}
 	return nil
 }
