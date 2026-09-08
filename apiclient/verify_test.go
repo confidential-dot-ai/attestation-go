@@ -231,10 +231,11 @@ func TestEnforceRTMRs(t *testing.T) {
 func TestEnforcePinsRefusesRTMRPinsOnSNP(t *testing.T) {
 	resp := VerifyResponse{Result: teetypes.VerificationResult{Claims: teetypes.Claims{LaunchDigest: digestHex}}}
 	policy := Policy{RTMRs: map[int][]byte{1: make([]byte, 48)}}
-	if err := EnforcePins(resp, policy, teetypes.PlatformSNP); !errors.Is(err, ErrRTMRNotAllowed) {
+	snp := teetypes.AttestationEvidence{Platform: teetypes.PlatformSNP}
+	if err := EnforcePins(resp, policy, snp); !errors.Is(err, ErrRTMRNotAllowed) {
 		t.Fatalf("EnforcePins(snp with RTMR pins) = %v, want ErrRTMRNotAllowed", err)
 	}
-	if err := EnforcePins(resp, Policy{}, teetypes.PlatformSNP); err != nil {
+	if err := EnforcePins(resp, Policy{}, snp); err != nil {
 		t.Fatalf("EnforcePins(snp, no pins) = %v, want nil", err)
 	}
 }

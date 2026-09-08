@@ -5,6 +5,7 @@
 package teetypes
 
 import (
+	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
@@ -167,6 +168,50 @@ func (c Claims) RTMR(i int) ([]byte, error) {
 	}
 	if len(b) != sha512.Size384 {
 		return nil, fmt.Errorf("%s is %d bytes, want %d", key, len(b), sha512.Size384)
+	}
+	return b, nil
+}
+
+// PCRCount is the number of vTPM platform configuration registers, so a valid
+// PCR index is 0 to PCRCount-1.
+const PCRCount = 24
+
+// PCR returns the 32-byte SHA-256 value of vTPM PCR[i] from the platform-data
+// claims, as tpmcommon.ApplyTPMClaims recorded it.
+//
+// On Azure confidential VMs the launch measurement covers the Microsoft
+// paravisor image alone: the guest kernel and initrd measure into these
+// registers instead. A caller that pins only the launch measurement there has
+// proved the paravisor booted, not which guest ran, so PCR pins are what make
+// an az-snp or az-tdx guest's own OS attested.
+//
+// It fails for claims from a platform with no vTPM quote (see
+// PlatformType.HasVTPMQuote) and for a missing or malformed register, so a
+// caller pinning a register fails closed rather than treating an unreported
+// value as a pass.
+//
+// Which indices carry guest-OS identity depends on the image's measured-boot
+// layout; this package does not assign meaning to an index. PCR[8] is the one
+// exception worth naming: the az verifiers bind init data through it.
+func (c Claims) PCR(i int) ([]byte, error) {
+	if i < 0 || i >= PCRCount {
+		return nil, fmt.Errorf("PCR index %d out of range 0..%d", i, PCRCount-1)
+	}
+	tpm, ok := c.PlatformData["tpm"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("claims carry no vTPM data, so PCR[%d] cannot be read", i)
+	}
+	key := fmt.Sprintf("pcr%02d", i)
+	v, ok := tpm[key].(string)
+	if !ok || v == "" {
+		return nil, fmt.Errorf("claims carry no %s", key)
+	}
+	b, err := hex.DecodeString(v)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", key, err)
+	}
+	if len(b) != sha256.Size {
+		return nil, fmt.Errorf("%s is %d bytes, want %d", key, len(b), sha256.Size)
 	}
 	return b, nil
 }

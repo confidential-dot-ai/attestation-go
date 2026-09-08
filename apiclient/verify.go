@@ -3,12 +3,15 @@ package apiclient
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
 	"slices"
 
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
+	"github.com/confidential-dot-ai/attestation-go/attestation/tpmcommon"
 )
 
 // Sentinel errors for the enforced verification paths, matchable with
@@ -38,6 +41,11 @@ var (
 	// ErrMinTcbNotAllowed: the policy floors the SEV-SNP TCB but the evidence
 	// is from another family, where the floor pins nothing.
 	ErrMinTcbNotAllowed = errors.New("apiclient: TCB floor not allowed")
+
+	// ErrPCRNotAllowed: a pinned vTPM platform configuration register is
+	// absent, malformed, not covered by the quote's signed selection, or does
+	// not match what the policy pins.
+	ErrPCRNotAllowed = errors.New("apiclient: vTPM PCR not allowed")
 
 	// ErrInitDataMismatch: the request pinned an init-data hash and the
 	// verdict is absent or false.
@@ -94,6 +102,24 @@ type Policy struct {
 	// in-guest software and cannot speak to guest identity on its own — a
 	// substituted guest extends it with whatever it likes.
 	RTMRs map[int][]byte
+
+	// PCRs pins vTPM platform configuration registers by index, and is what
+	// makes an Azure guest's OS attested rather than just Microsoft's
+	// paravisor: on an Azure confidential VM the launch measurement covers the
+	// paravisor image, while the guest kernel and initrd measure here.
+	//
+	// Values are SHA-256, 32 bytes. Pins apply only where the platform carries
+	// a vTPM quote (teetypes.PlatformType.HasVTPMQuote); elsewhere there is
+	// nothing for them to narrow, so a mixed fleet keeps working. Which
+	// indices carry guest-OS identity depends on the image's measured-boot
+	// layout.
+	PCRs map[int][]byte
+
+	// ExpectedInitDataHash, when set, is sent as expected_init_data_hash and
+	// the verdict must come back affirmatively true. The platform decides what
+	// backs it: SEV-SNP HOST_DATA, TDX MRCONFIGID zero-padded, or vTPM PCR[8]
+	// on the Azure overlays.
+	ExpectedInitDataHash []byte
 }
 
 // VerifyEnforced posts req to /verify and fails closed on the verdict
@@ -186,14 +212,15 @@ func (c Client) VerifyEvidence(ctx context.Context, evidence teetypes.Attestatio
 	}
 
 	resp, err := c.VerifyEnforced(ctx, NewVerifyRequest(evidence, &VerifyParams{
-		ExpectedReportData: policy.ExpectedReportData,
-		AllowDebug:         teetypes.Ptr(policy.AllowDebug),
-		MinTcb:             policy.MinTcb,
+		ExpectedReportData:   policy.ExpectedReportData,
+		ExpectedInitDataHash: policy.ExpectedInitDataHash,
+		AllowDebug:           teetypes.Ptr(policy.AllowDebug),
+		MinTcb:               policy.MinTcb,
 	}, false))
 	if err != nil {
 		return VerifyResponse{}, err
 	}
-	if err := EnforcePins(resp, policy, evidence.Platform); err != nil {
+	if err := EnforcePins(resp, policy, evidence); err != nil {
 		return VerifyResponse{}, err
 	}
 	return resp, nil
@@ -205,7 +232,14 @@ func (c Client) VerifyEvidence(ctx context.Context, evidence teetypes.Attestatio
 //
 // Images are matched whole; the flat measurement/RTMR pair keeps its own path,
 // so an operator who set only that sees exactly the decisions it always made.
-func EnforcePins(resp VerifyResponse, policy Policy, platform teetypes.PlatformType) error {
+func EnforcePins(resp VerifyResponse, policy Policy, evidence teetypes.AttestationEvidence) error {
+	platform := evidence.Platform
+	// PCR pins are orthogonal to the launch measurement: on an Azure guest the
+	// launch measurement identifies the paravisor and the PCRs identify the
+	// guest OS, so both forms apply to the same evidence.
+	if err := EnforcePCRs(evidence, resp.Result.Claims, policy.PCRs); err != nil {
+		return err
+	}
 	if len(policy.Images) > 0 {
 		return EnforceImages(resp, policy.Images, platform)
 	}
@@ -222,6 +256,70 @@ func EnforcePins(resp VerifyResponse, policy Policy, platform teetypes.PlatformT
 			ErrRTMRNotAllowed, len(policy.RTMRs), platform)
 	}
 	return nil
+}
+
+// EnforcePCRs requires each pinned vTPM register to byte-equal what the
+// verifier reported, and to be covered by the quote's signed PCR selection.
+//
+// The attester supplies the whole PCR bank alongside the quote, but the AK
+// signature covers only the registers the quote selected. A verifier that
+// publishes the bank verbatim therefore reports attester-chosen values for the
+// rest, and a guest could quote a selection that excludes the register a policy
+// pins and supply the pinned value for it. The selection is re-read here from
+// the evidence the service verified, so a pin outside it is a refusal
+// regardless of what the report carries.
+//
+// A pinned register the evidence does not carry is a refusal, not a pass. So is
+// a pin against a platform with no vTPM quote: the policy asked for a check
+// that could never run, which is a policy error rather than something to skip
+// quietly. Reference values are per-platform, so a pin reaching the wrong
+// platform means the wrong policy was loaded.
+func EnforcePCRs(evidence teetypes.AttestationEvidence, claims teetypes.Claims, pinned map[int][]byte) error {
+	if len(pinned) == 0 {
+		return nil
+	}
+	if !evidence.Platform.HasVTPMQuote() {
+		return fmt.Errorf("%w: %d register(s) pinned but platform %q carries no vTPM quote",
+			ErrPCRNotAllowed, len(pinned), evidence.Platform)
+	}
+	signed, err := signedPCRSelection(evidence.Evidence)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrPCRNotAllowed, err)
+	}
+	// Sorted so the error an operator sees is stable across runs.
+	for _, idx := range slices.Sorted(maps.Keys(pinned)) {
+		if !slices.Contains(signed, idx) {
+			return fmt.Errorf("%w: PCR[%d] is not in the quote's signed selection %v", ErrPCRNotAllowed, idx, signed)
+		}
+		got, err := claims.PCR(idx)
+		if err != nil {
+			return fmt.Errorf("%w: %w", ErrPCRNotAllowed, err)
+		}
+		if !bytes.Equal(got, pinned[idx]) {
+			return fmt.Errorf("%w: PCR[%d] does not match", ErrPCRNotAllowed, idx)
+		}
+	}
+	return nil
+}
+
+// signedPCRSelection reads the quote's PCR selection from the tpm_quote the
+// Azure evidence carries. The service verified the AK signature over these
+// same bytes, which is what makes the selection authoritative.
+func signedPCRSelection(evidence json.RawMessage) ([]int, error) {
+	var ev struct {
+		TPMQuote *tpmcommon.RawTPMQuote `json:"tpm_quote"`
+	}
+	if err := json.Unmarshal(evidence, &ev); err != nil {
+		return nil, fmt.Errorf("evidence: %w", err)
+	}
+	if ev.TPMQuote == nil {
+		return nil, fmt.Errorf("evidence carries no tpm_quote")
+	}
+	message, err := hex.DecodeString(ev.TPMQuote.Message)
+	if err != nil {
+		return nil, fmt.Errorf("tpm_quote.message hex: %w", err)
+	}
+	return tpmcommon.SignedPCRSelection(message)
 }
 
 // EnforceRTMRs requires each pinned register to byte-equal what the service

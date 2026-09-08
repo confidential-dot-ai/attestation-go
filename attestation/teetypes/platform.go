@@ -61,3 +61,18 @@ func (p PlatformType) IsSNP() bool { return p.Family() == FamilySNP }
 func NormalizePlatform(platform string) PlatformType {
 	return PlatformType(strings.ToLower(strings.TrimSpace(platform)))
 }
+
+// HasVTPMQuote reports whether verified evidence from the platform carries a
+// vTPM quote, and so the PCR bank Claims.PCR reads.
+//
+// It is a per-tag property, not a family one: the Azure overlays quote a vTPM,
+// while GCP guests expose a vTPM but attest through the native hardware
+// report, so their evidence carries no PCR bank.
+func (p PlatformType) HasVTPMQuote() bool {
+	switch NormalizePlatform(string(p)) {
+	case PlatformAzSNP, PlatformAzTDX:
+		return true
+	default:
+		return false
+	}
+}

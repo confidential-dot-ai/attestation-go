@@ -154,6 +154,37 @@ This pins **one** measurement. A policy that accepts any of several images
 cannot be expressed server-side; use `Policy.Measurements` or `Policy.Images`
 with `VerifyEvidence`, which checks the returned report instead.
 
+### Pinning Azure vTPM PCRs
+
+On an Azure confidential VM the launch measurement covers the Microsoft
+paravisor image alone — the guest kernel and initrd measure into the **vTPM
+PCRs**. Pinning only the launch measurement there proves the paravisor booted,
+not which guest ran. `Policy.PCRs` closes that:
+
+```go
+resp, err := c.VerifyEvidence(ctx, evidence, apiclient.Policy{
+    ExpectedReportData:   expected,
+    Measurements:         launchDigests, // the paravisor
+    PCRs:                 pcrPins,       // the guest OS, SHA-256
+    ExpectedInitDataHash: initData,      // PCR[8] on az, HOST_DATA on snp, MRCONFIGID on tdx
+})
+```
+
+PCR pins are checked alongside the launch measurement, not instead of it, so a
+matching paravisor cannot excuse a wrong guest. Read individual registers from
+verified claims with `teetypes.Claims.PCR(i)`.
+
+The AK signature covers only the registers the quote selected; the rest of the
+bank the attester supplies is its own word. The in-process verifiers publish
+only selected registers, and `EnforcePCRs` re-reads the selection from the
+evidence, so a pin on an unselected register is refused whatever the report
+carries.
+
+Both `Policy.PCRs` and `Policy.RTMRs` refuse a pin the platform cannot answer
+rather than skipping it — reference values are per-platform, so a PCR pin
+reaching bare-metal SNP means the wrong policy was loaded, and silently passing
+would report it as enforced.
+
 ### Choosing an address
 
 The `/verify` verdict is not signed, so the client trusts whatever answers.
