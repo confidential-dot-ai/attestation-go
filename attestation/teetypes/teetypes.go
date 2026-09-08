@@ -100,6 +100,16 @@ type VerificationResult struct {
 	// LaunchDigestMatch is nil when no ExpectedLaunchDigest was supplied, else
 	// true (a mismatch is returned as an error, not false).
 	LaunchDigestMatch *bool `json:"launch_digest_match,omitempty"`
+	// MRTDMatch and RTMR0Match through RTMR3Match are nil when the matching
+	// ExpectedMRTD or ExpectedRTMRs entry was not supplied, or when the
+	// service predates them. A false is a mismatch the service chose to
+	// report rather than refuse, so a caller pins through the claims, not
+	// these.
+	MRTDMatch  *bool `json:"mrtd_match,omitempty"`
+	RTMR0Match *bool `json:"rtmr0_match,omitempty"`
+	RTMR1Match *bool `json:"rtmr1_match,omitempty"`
+	RTMR2Match *bool `json:"rtmr2_match,omitempty"`
+	RTMR3Match *bool `json:"rtmr3_match,omitempty"`
 	// CollateralVerified is true when collateral (CRL/TCB/QE identity) was
 	// available and all collateral checks passed; false when skipped.
 	CollateralVerified bool `json:"collateral_verified"`

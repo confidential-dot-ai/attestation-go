@@ -80,6 +80,103 @@ current, err := reg.Extension()
 Anchor bytes are hashed verbatim. Where they come from a file, pass the file
 contents exactly as written — never round-tripped through a parser — or the
 digest differs and verification fails silently.
+## attestation-api client (`apiclient`)
+
+`teeverify` verifies evidence in this process. `apiclient` is the alternative:
+it talks to **attestation-api**, the `attestation-rs` HTTP service that both
+produces evidence on a confidential host and verifies it. Use it when the
+evidence has to be generated locally, or when verification should follow the
+service's collateral cache rather than this process's.
+
+### Endpoints
+
+| Method | Endpoint | Wrapper |
+|---|---|---|
+| `POST` | `/attest` | `Client.Attest` — produce evidence binding a report-data value |
+| `POST` | `/verify` | `Client.Verify` — parse and check evidence, returning a report |
+| `GET` | `/health` | `Client.Health` — status, platform, collateral cache stats |
+
+### Producing evidence
+
+Send the bare 48-byte SHA-384 digest; the service zero-extends it into the
+platform's report-data field. `PlatformAuto` asks the service which TEE it is
+on, so the caller need not know:
+
+```go
+c := apiclient.NewClient("unix:///run/attestation/attest.sock")
+
+resp, err := c.Attest(ctx, apiclient.AttestRequest{
+    ReportData: digest[:], // travels as base64, per encoding/json
+    Platform:   apiclient.PlatformAuto,
+})
+evidence := resp.Envelope() // teetypes.AttestationEvidence
+```
+
+### Verifying evidence
+
+**`/verify` returns a report, not a decision.** It says what the evidence
+contained — including that the signature did not check out. A caller that reads
+the report without gating on it accepts anything the service could parse. Use
+`VerifyEvidence`, which enforces the verdict and then your reference values:
+
+```go
+resp, err := c.VerifyEvidence(ctx, evidence, apiclient.Policy{
+    ExpectedReportData: digest[:],         // the bytes sent to /attest, verbatim
+    AllowDebug:         false,             // a debug guest's memory is host-readable
+    Images:             pins,              // whole-image pins: digest + registers
+})
+```
+
+`Client.Verify` is the raw endpoint, for callers enforcing the verdict
+themselves; `Client.VerifyEnforced` is the middle ground (verdict gated,
+reference values not).
+
+### Letting the service enforce measurements
+
+`VerifyParams` can carry the expected measurements, in which case the service
+refuses rather than reporting. It fails closed on both a mismatch and a pin the
+evidence cannot answer — a register pin against SEV-SNP evidence, say — and
+returns an `*APIError`.
+
+The service names one concept twice, `expected_mrtd` on TDX and
+`expected_launch_digest` on SEV-SNP. `SetExpectedMeasurements` picks the field
+so callers do not:
+
+```go
+var params apiclient.VerifyParams
+err := params.SetExpectedMeasurements(platform, launchMeasurement, map[int][]byte{
+    1: rtmr1, // guest kernel image
+    2: rtmr2, // kernel command line and rootfs chain
+})
+```
+
+This pins **one** measurement. A policy that accepts any of several images
+cannot be expressed server-side; use `Policy.Measurements` or `Policy.Images`
+with `VerifyEvidence`, which checks the returned report instead.
+
+### Choosing an address
+
+The `/verify` verdict is not signed, so the client trusts whatever answers.
+Prefer a Unix-domain socket inside the trust boundary — a routable address lets
+anything that can influence name resolution or routing answer in the service's
+place. The socket's owner and mode are re-checked on **every dial**, so one
+swapped or made world-writable after startup fails closed.
+
+### Platform neutrality
+
+Nothing here asks the caller which TEE it is on. The envelope's tag selects the
+rules; tags are compared by family, so `az-*`/`gcp-*` route like their
+bare-metal counterparts and an unknown tag fails closed.
+
+`ExpectedReportData` is the value sent to `/attest`, passed verbatim: a native
+verifier zero-pads it to the 64-byte hardware field, a vTPM verifier compares
+it with the quote nonce as attested. There is no per-platform width to get
+wrong.
+
+A policy element the platform cannot answer is refused, never skipped, so a
+policy is never reported as enforced when nothing checked it: `MinTcb` names
+SEV-SNP components and fails on any other family, and register pins fail on a
+platform without registers. A mixed fleet keeps one `Policy` per family.
 
 | Platform tag | Status | Notes |
 |---|---|---|
