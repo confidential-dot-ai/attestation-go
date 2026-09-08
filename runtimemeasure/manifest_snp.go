@@ -76,6 +76,9 @@ func LoadSNPImageManifest(path string) (SNPImagePins, error) {
 	if err := json.Unmarshal(data, &m); err != nil {
 		return SNPImagePins{}, fmt.Errorf("image manifest %s is not a JSON object: %w", path, err)
 	}
+	if _, err := rejectDuplicateKeys(data); err != nil {
+		return SNPImagePins{}, fmt.Errorf("image manifest %s: %w", path, err)
+	}
 	if len(m.SNPVariants) == 0 {
 		return SNPImagePins{}, fmt.Errorf(
 			"image manifest %s: no %q — an SNP image pin is the per-SMP launch-digest set from one provenanced build-artifact manifest; a TDX tuple or a generic artifact-hash manifest.json is not it",

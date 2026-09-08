@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
+	"strings"
 )
 
 // ImagePins is the complete TDX measurement identity of one guest image:
@@ -55,13 +57,22 @@ func LoadImageManifest(path string) (ImagePins, error) {
 	if err := json.Unmarshal(data, &m); err != nil {
 		return pins, fmt.Errorf("image manifest %s is not a JSON object: %w", path, err)
 	}
-	scope := "" // top level; a confos manifest nests the tuple under "tdx"
-	if m.TDX != nil {
-		m.MRTD, m.RTMR1, m.RTMR2 = m.TDX.MRTD, m.TDX.RTMR1, m.TDX.RTMR2
-		scope = "tdx"
-	}
-	if err := rejectDuplicateRegisters(data, scope); err != nil {
+	keys, err := rejectDuplicateKeys(data)
+	if err != nil {
 		return ImagePins{}, fmt.Errorf("image manifest %s: %w", path, err)
+	}
+	if m.TDX != nil {
+		// The nested object would win over a flat tuple, so a flat register
+		// next to it is a second spelling of the same pin: refuse the
+		// ambiguity rather than pick one.
+		for _, k := range keys {
+			for _, reg := range []string{"mrtd", "rtmr1", "rtmr2"} {
+				if strings.EqualFold(k, reg) {
+					return ImagePins{}, fmt.Errorf("image manifest %s: %q is named both at the top level and under \"tdx\"; use one form", path, k)
+				}
+			}
+		}
+		m.MRTD, m.RTMR1, m.RTMR2 = m.TDX.MRTD, m.TDX.RTMR1, m.TDX.RTMR2
 	}
 	for _, f := range []struct {
 		name string
@@ -84,64 +95,69 @@ func LoadImageManifest(path string) (ImagePins, error) {
 	return pins, nil
 }
 
-// rejectDuplicateRegisters fails a manifest that names any of the three
-// register keys more than once. encoding/json silently keeps the LAST
-// occurrence, so {"mrtd":"<published>","mrtd":"<attacker>"} loads as one value
-// while a human (and any diff or signature-over-the-published-line review)
-// reads the other. Unknown extra fields stay tolerated — build manifests carry
-// plenty — but the three registers this pin is made of must be unambiguous.
-//
-// scope names the object the registers were read from: "" for the top level,
-// or "tdx" for a confos manifest that nests them. The check must follow the
-// tuple, or a duplicate inside the nested object would go unnoticed.
-func rejectDuplicateRegisters(data []byte, scope string) error {
+// rejectDuplicateKeys walks the whole document and fails on any key that
+// repeats within its object, compared the way encoding/json matches struct
+// fields: case-insensitively. Unmarshal keeps the last of two such keys, so
+// "mrtd" followed by "MRTD" loads a value other than the one a reviewer read.
+// It returns the top-level keys as written.
+func rejectDuplicateKeys(data []byte) ([]string, error) {
 	dec := json.NewDecoder(bytes.NewReader(data))
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, fmt.Errorf("manifest is not valid JSON: %w", err)
+	}
+	if delim, ok := tok.(json.Delim); !ok || delim != '{' {
+		return nil, fmt.Errorf("manifest is not a JSON object")
+	}
+	return walkObject(dec)
+}
+
+// walkObject consumes an object whose opening brace has been read and returns
+// its keys.
+func walkObject(dec *json.Decoder) ([]string, error) {
+	var keys []string
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return nil, fmt.Errorf("manifest is not valid JSON: %w", err)
+		}
+		key, ok := tok.(string)
+		if !ok {
+			return nil, fmt.Errorf("manifest is not valid JSON: object key is %T", tok)
+		}
+		if slices.ContainsFunc(keys, func(seen string) bool { return strings.EqualFold(seen, key) }) {
+			return nil, fmt.Errorf("duplicate %q key — a key may be named only once in any letter case, since JSON parsing would silently keep the last value", key)
+		}
+		keys = append(keys, key)
+		if err := walkValue(dec); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := dec.Token(); err != nil {
+		return nil, fmt.Errorf("manifest is not valid JSON: %w", err)
+	}
+	return keys, nil
+}
+
+// walkValue consumes one value, descending into objects and arrays so every
+// nested object is checked too.
+func walkValue(dec *json.Decoder) error {
 	tok, err := dec.Token()
 	if err != nil {
 		return fmt.Errorf("manifest is not valid JSON: %w", err)
 	}
-	if delim, ok := tok.(json.Delim); !ok || delim != '{' {
-		return fmt.Errorf("manifest is not a JSON object")
-	}
-	seen := make(map[string]bool, 3)
-	var scoped []json.RawMessage
-	for dec.More() {
-		keyTok, err := dec.Token()
-		if err != nil {
-			return fmt.Errorf("manifest is not valid JSON: %w", err)
-		}
-		key, ok := keyTok.(string)
-		if !ok {
-			return fmt.Errorf("manifest is not valid JSON: object key is %T", keyTok)
-		}
-		// Decode consumes the whole value, nested objects and arrays included,
-		// so the loop only ever sees top-level keys.
-		var value json.RawMessage
-		if err := dec.Decode(&value); err != nil {
-			return fmt.Errorf("manifest is not valid JSON: %w", err)
-		}
-		if scope != "" {
-			if key == scope {
-				scoped = append(scoped, value)
+	switch tok {
+	case json.Delim('{'):
+		_, err := walkObject(dec)
+		return err
+	case json.Delim('['):
+		for dec.More() {
+			if err := walkValue(dec); err != nil {
+				return err
 			}
-			continue
 		}
-		switch key {
-		case "mrtd", "rtmr1", "rtmr2":
-			if seen[key] {
-				return fmt.Errorf("duplicate %q key — a register may be named only once, since JSON parsing would silently keep the last value", key)
-			}
-			seen[key] = true
-		}
-	}
-	// Every occurrence must be collected before recursing: Unmarshal keeps the
-	// last, so checking only the first would inspect bytes the pin never loads.
-	if scope != "" {
-		if len(scoped) > 1 {
-			return fmt.Errorf("duplicate %q key — a register object may be named only once, since JSON parsing would silently keep the last value", scope)
-		}
-		if len(scoped) == 1 {
-			return rejectDuplicateRegisters(scoped[0], "")
+		if _, err := dec.Token(); err != nil {
+			return fmt.Errorf("manifest is not valid JSON: %w", err)
 		}
 	}
 	return nil

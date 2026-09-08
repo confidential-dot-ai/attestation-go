@@ -14,6 +14,11 @@ import (
 // Callers gating on an extend must treat this as a hard stop, not a skip.
 var ErrNoRegister = errors.New("platform has no runtime measurement register")
 
+// ErrUnknownPlatform reports a platform tag this package has no rules for. It
+// is distinct from ErrNoRegister so a caller that skips the extend on SEV-SNP
+// does not also skip it on a mistyped or not-yet-mapped TDX tag.
+var ErrUnknownPlatform = errors.New("unknown platform")
+
 // Register is a guest's own runtime measurement register, as reached from
 // inside that guest. It is the local device; [Binding] is the remote-verifiable
 // view of the same value, read out of claims a verifier has accepted.
@@ -48,7 +53,7 @@ func Open(p teetypes.PlatformType) (Register, error) {
 		// An unrecognized tag gets no register rather than a TDX one: this
 		// module has no verifier for it, so nothing it reported could be
 		// checked anyway.
-		return nil, fmt.Errorf("unknown platform %q: %w", p, ErrNoRegister)
+		return nil, fmt.Errorf("%w %q", ErrUnknownPlatform, p)
 	}
 }
 

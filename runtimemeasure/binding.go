@@ -22,10 +22,16 @@ func Binding(r *teetypes.VerificationResult) ([]byte, error) {
 	if r == nil {
 		return nil, fmt.Errorf("no verification result")
 	}
+	if !r.SignatureValid {
+		return nil, fmt.Errorf("verification result does not carry a valid signature, so its claims are unverified")
+	}
+	if err := checkBindingPlatform(r.Platform); err != nil {
+		return nil, err
+	}
 	switch r.Platform.Family() {
 	case teetypes.FamilyTDX:
 		return r.Claims.RTMR(3)
-	case teetypes.FamilySNP:
+	default: // FamilySNP; checkBindingPlatform refused the rest.
 		// InitData is HOST_DATA on SNP. On TDX the same field is MR_CONFIG_ID
 		// at 48 bytes, which is why this arm is family-gated rather than
 		// reading InitData unconditionally.
@@ -33,36 +39,54 @@ func Binding(r *teetypes.VerificationResult) ([]byte, error) {
 			return nil, fmt.Errorf("HOSTDATA claim is %d bytes, want %d", n, HostDataSize)
 		}
 		return r.Claims.InitData, nil
-	default:
-		return nil, fmt.Errorf("platform %q: %w", r.Platform, ErrNoRegister)
 	}
+}
+
+// checkBindingPlatform refuses platforms whose evidence carries no
+// launcher-chosen binding. On az-snp the Azure paravisor owns HOSTDATA, so the
+// field says nothing about the anchor; the az verifiers bind init data through
+// vTPM PCR[8] instead, which this package does not read.
+func checkBindingPlatform(p teetypes.PlatformType) error {
+	switch p.Family() {
+	case teetypes.FamilyTDX, teetypes.FamilySNP:
+	default:
+		return fmt.Errorf("%w %q", ErrUnknownPlatform, p)
+	}
+	if teetypes.NormalizePlatform(string(p)) == teetypes.PlatformAzSNP {
+		return fmt.Errorf("platform %q: HOSTDATA is set by the Azure paravisor, not the launcher, so it carries no anchor binding: %w", p, ErrNoRegister)
+	}
+	return nil
 }
 
 // ExpectedBinding returns the value [Binding] must equal for a guest launched
 // with anchor, having measured workloadDigests in that order.
 //
 // anchor is whatever the guest was launched to trust; see [Seed]. It is hashed
-// byte for byte, so pass the exact bytes the guest committed.
+// byte for byte, so pass the exact bytes the guest committed. An empty anchor
+// is refused: its digest is a public constant, so a guest launched with an
+// empty anchor file would verify as bound to nothing in particular.
 //
 // workloadDigests are canonical "sha256:<64-hex>" strings (see
 // [CanonicalDigest]), deduplicated and in extend order. SEV-SNP has no runtime
 // extends, so a non-empty list there is a policy error rather than a value this
 // function could compute.
 func ExpectedBinding(p teetypes.PlatformType, anchor []byte, workloadDigests []string) ([]byte, error) {
-	switch p.Family() {
-	case teetypes.FamilyTDX:
+	if len(anchor) == 0 {
+		return nil, fmt.Errorf("anchor is empty; a binding to no anchor proves nothing")
+	}
+	if err := checkBindingPlatform(p); err != nil {
+		return nil, err
+	}
+	if p.Family() == teetypes.FamilyTDX {
 		reg := FromDigestsSeeded(Seed(anchor), workloadDigests)
 		return reg[:], nil
-	case teetypes.FamilySNP:
-		if len(workloadDigests) > 0 {
-			return nil, fmt.Errorf("platform %q has no runtime extends, so %d workload digest(s) cannot be measured into its binding: %w",
-				p, len(workloadDigests), ErrNoRegister)
-		}
-		hd := HostData(anchor)
-		return hd[:], nil
-	default:
-		return nil, fmt.Errorf("platform %q: %w", p, ErrNoRegister)
 	}
+	if len(workloadDigests) > 0 {
+		return nil, fmt.Errorf("platform %q has no runtime extends, so %d workload digest(s) cannot be measured into its binding: %w",
+			p, len(workloadDigests), ErrNoRegister)
+	}
+	hd := HostData(anchor)
+	return hd[:], nil
 }
 
 // VerifyBinding reports whether the guest that produced r was launched with

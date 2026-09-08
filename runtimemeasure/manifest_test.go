@@ -24,13 +24,12 @@ func writeManifest(t *testing.T, content string) string {
 }
 
 func TestLoadImageManifestValid(t *testing.T) {
-	// Extra unknown fields are allowed: build manifests carry other data, and
-	// only the three register keys must be unambiguous — a repeated unknown
-	// key (and a nested object naming "mrtd") is none of this loader's
-	// business.
+	// Extra unknown fields are allowed: build manifests carry other data. A
+	// nested object naming "mrtd" under some other key is not the pin and is
+	// none of this loader's business.
 	p := writeManifest(t, `{
-		"schema": 3, "schema": 4,
-		"artifacts": {"kernel": "deadbeef", "mrtd": "ignored", "mrtd": "ignored"},
+		"schema": 3,
+		"artifacts": {"kernel": "deadbeef", "mrtd": "ignored"},
 		"mrtd": "`+mrtdHex+`",
 		"rtmr1": "`+rtmr1Hex+`",
 		"rtmr2": "`+rtmr2Hex+`"
@@ -93,6 +92,25 @@ func TestLoadImageManifestRejects(t *testing.T) {
 		{"duplicate rtmr2",
 			`{"mrtd":"` + mrtdHex + `","rtmr1":"` + rtmr1Hex + `","rtmr2":"` + rtmr2Hex + `","rtmr2":"` + rtmr2Hex + `"}`,
 			`duplicate "rtmr2"`},
+		// encoding/json also matches keys case-insensitively, so a
+		// differently-cased duplicate is the same attack.
+		{"case-folded duplicate mrtd",
+			`{"mrtd":"` + mrtdHex + `","rtmr1":"` + rtmr1Hex + `","rtmr2":"` + rtmr2Hex + `","MRTD":"` + strings.Repeat("ff", Size) + `"}`,
+			`duplicate "MRTD"`},
+		{"case-folded duplicate tdx object",
+			`{"tdx":{"mrtd":"` + mrtdHex + `","rtmr1":"` + rtmr1Hex + `","rtmr2":"` + rtmr2Hex + `"},"TDX":{"mrtd":"` + strings.Repeat("ff", Size) + `","rtmr1":"` + rtmr1Hex + `","rtmr2":"` + rtmr2Hex + `"}}`,
+			`duplicate "TDX"`},
+		{"case-folded duplicate inside tdx",
+			`{"tdx":{"mrtd":"` + mrtdHex + `","Mrtd":"` + strings.Repeat("ff", Size) + `","rtmr1":"` + rtmr1Hex + `","rtmr2":"` + rtmr2Hex + `"}}`,
+			`duplicate "Mrtd"`},
+		// The nested object wins over the flat tuple, so a flat register next
+		// to it is a second spelling of the pin.
+		{"flat register beside a tdx object",
+			`{"mrtd":"` + mrtdHex + `","rtmr1":"` + rtmr1Hex + `","rtmr2":"` + rtmr2Hex + `","tdx":{"mrtd":"` + strings.Repeat("ff", Size) + `","rtmr1":"` + rtmr1Hex + `","rtmr2":"` + rtmr2Hex + `"}}`,
+			`both at the top level and under "tdx"`},
+		{"flat register beside an empty tdx object",
+			`{"mrtd":"` + mrtdHex + `","rtmr1":"` + rtmr1Hex + `","rtmr2":"` + rtmr2Hex + `","tdx":{}}`,
+			`both at the top level and under "tdx"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := LoadImageManifest(writeManifest(t, tc.content))
@@ -176,6 +194,11 @@ func TestLoadSNPImageManifestRejects(t *testing.T) {
 		"missing algorithm":           `{"snp_variants":[{"smp":2,"measurement":{"snp_launch_digest":"` + snpSMP2Digest + `"}}]}`,
 		"short digest":                `{"snp_variants":[{"smp":2,"measurement":{"snp_launch_digest":"abcd","algorithm":"sha384"}}]}`,
 		"uppercase digest":            `{"snp_variants":[{"smp":2,"measurement":{"snp_launch_digest":"` + strings.ToUpper(snpSMP2Digest) + `","algorithm":"sha384"}}]}`,
+		// Last key wins in encoding/json, at every level and in any case.
+		"duplicate snp_variants":      `{"snp_variants":[{"smp":2,"measurement":{"snp_launch_digest":"` + snpSMP2Digest + `","algorithm":"sha384"}}],"snp_variants":[{"smp":2,"measurement":{"snp_launch_digest":"` + snpSMP4Digest + `","algorithm":"sha384"}}]}`,
+		"case-folded duplicate list":  `{"snp_variants":[{"smp":2,"measurement":{"snp_launch_digest":"` + snpSMP2Digest + `","algorithm":"sha384"}}],"SNP_VARIANTS":[{"smp":2,"measurement":{"snp_launch_digest":"` + snpSMP4Digest + `","algorithm":"sha384"}}]}`,
+		"duplicate digest in variant": `{"snp_variants":[{"smp":2,"measurement":{"snp_launch_digest":"` + snpSMP2Digest + `","snp_launch_digest":"` + snpSMP4Digest + `","algorithm":"sha384"}}]}`,
+		"duplicate smp in variant":    `{"snp_variants":[{"smp":4,"smp":2,"measurement":{"snp_launch_digest":"` + snpSMP2Digest + `","algorithm":"sha384"}}]}`,
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
