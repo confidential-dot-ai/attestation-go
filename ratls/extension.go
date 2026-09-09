@@ -12,26 +12,10 @@ import (
 	"encoding/asn1"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
-)
-
-// OID arc under 66378, the confidential.ai Private Enterprise Number:
-//
-//	1.3.6.1.4.1.66378.1   — confidential TEE attestation arc
-//	1.3.6.1.4.1.66378.1.1 — RA-TLS attestation extension (this package)
-//
-// The remaining children are spoken for and must not be reused here: .1.2,
-// .1.4 and .1.5 are assigned to extensions that live with their own projects,
-// and .1.3 is retired — it carried an RA-TLS config-claims extension whose
-// semantics no longer exist, so a new extension under it would be read by old
-// verifiers as the old one.
-var (
-	// OIDConfidentialTEE is the arc every attestation extension hangs under.
-	OIDConfidentialTEE = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 66378, 1}
-	// OIDRATLSAttestation identifies the RA-TLS attestation extension.
-	OIDRATLSAttestation = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 66378, 1, 1}
 )
 
 // SNPReportSize is the exact size of an AMD SEV-SNP attestation report
@@ -138,11 +122,15 @@ type attestationASN1 struct {
 	CertChain []byte
 }
 
-// MarshalExtension encodes the attestation as a non-critical X.509 extension.
-// Non-critical so a TLS stack that does not know the OID still parses the
-// certificate: the binding is enforced by whoever verifies the evidence, not by
-// certificate parsing.
-func (a *Attestation) MarshalExtension() (pkix.Extension, error) {
+// MarshalExtension encodes the attestation as a non-critical X.509 extension
+// under oid, which the caller assigns from its own arc; this package claims no
+// identifier. Non-critical so a TLS stack that does not know the OID still
+// parses the certificate: the binding is enforced by whoever verifies the
+// evidence, not by certificate parsing.
+func (a *Attestation) MarshalExtension(oid asn1.ObjectIdentifier) (pkix.Extension, error) {
+	if len(oid) == 0 {
+		return pkix.Extension{}, errors.New("ratls: no extension OID")
+	}
 	value, err := asn1.Marshal(attestationASN1{
 		TEEType:   int(a.TEEType),
 		Report:    a.Report,
@@ -151,7 +139,7 @@ func (a *Attestation) MarshalExtension() (pkix.Extension, error) {
 	if err != nil {
 		return pkix.Extension{}, fmt.Errorf("ratls: marshal attestation: %w", err)
 	}
-	return pkix.Extension{Id: OIDRATLSAttestation, Critical: false, Value: value}, nil
+	return pkix.Extension{Id: oid, Critical: false, Value: value}, nil
 }
 
 // UnmarshalExtension decodes an extension value and normalizes the evidence it
@@ -283,19 +271,22 @@ type certChain struct {
 	Vcek string `json:"vcek"`
 }
 
-// ExtractAttestation parses the RA-TLS extension out of a certificate, failing
-// with [ErrNoAttestation] when there is none.
+// ExtractAttestation parses the RA-TLS extension carried under oid out of a
+// certificate, failing with [ErrNoAttestation] when there is none.
 //
 // It says nothing about the certificate itself: validity window, chain and
 // self-signature are the caller's to check, and the evidence binds only the
 // key, so every other field is unattested.
-func ExtractAttestation(cert *x509.Certificate) (*Attestation, error) {
+func ExtractAttestation(cert *x509.Certificate, oid asn1.ObjectIdentifier) (*Attestation, error) {
+	if len(oid) == 0 {
+		return nil, errors.New("ratls: no extension OID")
+	}
 	for _, ext := range cert.Extensions {
-		if ext.Id.Equal(OIDRATLSAttestation) {
+		if ext.Id.Equal(oid) {
 			return UnmarshalExtension(ext.Value)
 		}
 	}
-	return nil, fmt.Errorf("%w (OID %s)", ErrNoAttestation, OIDRATLSAttestation)
+	return nil, fmt.Errorf("%w (OID %s)", ErrNoAttestation, oid)
 }
 
 // ReportDataForKey computes the REPORTDATA that binds pub to a TEE:

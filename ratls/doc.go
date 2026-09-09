@@ -2,8 +2,8 @@
 //
 // The binding is one equality: the guest asks its hardware for an attestation
 // report whose REPORTDATA is SHA-384 over the public key (see
-// [ReportDataForKey]), and embeds that evidence in the certificate under OID
-// 1.3.6.1.4.1.66378.1.1. A relying party that verifies the evidence and
+// [ReportDataForKey]), and embeds that evidence in a certificate extension
+// under an OID the caller assigns from its own arc. A relying party that verifies the evidence and
 // recomputes the anchor knows the private key never left the TEE. Nothing here
 // signs, issues, or rotates certificates; that is the caller's lifecycle to run.
 //

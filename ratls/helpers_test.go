@@ -67,12 +67,16 @@ func testKey(t *testing.T) *ecdsa.PrivateKey {
 
 // certWithExtension self-signs a certificate carrying the RA-TLS extension for
 // att, and returns it with the key it binds.
+// testOID is the extension identifier the tests embed under; the package claims
+// none of its own.
+var testOID = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 99999, 7, 1}
+
 func certWithExtension(t *testing.T, att *Attestation) (*x509.Certificate, *ecdsa.PrivateKey) {
 	t.Helper()
 	key := testKey(t)
 	template := &x509.Certificate{SerialNumber: big.NewInt(1)}
 	if att != nil {
-		ext, err := att.MarshalExtension()
+		ext, err := att.MarshalExtension(testOID)
 		if err != nil {
 			t.Fatalf("MarshalExtension: %v", err)
 		}

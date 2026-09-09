@@ -269,7 +269,7 @@ platform tag parses through `teetypes.ParseFamily`).
 
 ## RA-TLS (`ratls`)
 
-An X.509 extension (OID `1.3.6.1.4.1.66378.1.1`) that binds a TLS key to a
+An X.509 extension, under an OID the caller assigns, that binds a TLS key to a
 TEE: REPORTDATA is SHA-384 over the public key, and the evidence rides in the
 certificate. Bare-metal and GCP SEV-SNP embed the raw AMD report; every other
 platform embeds the JSON envelope, with the TDX event log stripped so the
@@ -278,11 +278,11 @@ certificate fits a TLS record.
 ```go
 // Producer, with evidence from /attest bound to ReportDataForKey(pub, nil):
 att, err := ratls.NewAttestation(resp.Envelope())
-ext, err := att.MarshalExtension()
+ext, err := att.MarshalExtension(myOID)
 
 // Verifier, in-process or through the service:
-res, err := ratls.VerifyCertOffline(cert, nonce, teetypes.VerifyParams{}, teeverify.Options{})
-resp, err := ratls.VerifyCertWithService(ctx, client, cert, nonce, policy)
+res, err := ratls.VerifyCertOffline(cert, myOID, nonce, teetypes.VerifyParams{}, teeverify.Options{})
+resp, err := ratls.VerifyCertWithService(ctx, client, cert, myOID, nonce, policy)
 ```
 
 Certificate lifecycle — issuance, rotation, TLS configs — is the caller's.

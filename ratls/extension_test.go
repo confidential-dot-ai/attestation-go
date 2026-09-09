@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/sha512"
 	"crypto/x509"
+	"encoding/asn1"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -24,12 +25,6 @@ func TestTEETypeWireValues(t *testing.T) {
 	}
 	if SNPReportSize != 0x4A0 {
 		t.Fatalf("SNPReportSize = %#x, want 0x4A0 (1184)", SNPReportSize)
-	}
-	if !OIDRATLSAttestation.Equal([]int{1, 3, 6, 1, 4, 1, 66378, 1, 1}) {
-		t.Fatalf("OIDRATLSAttestation = %s, want 1.3.6.1.4.1.66378.1.1", OIDRATLSAttestation)
-	}
-	if !OIDConfidentialTEE.Equal([]int{1, 3, 6, 1, 4, 1, 66378, 1}) {
-		t.Fatalf("OIDConfidentialTEE = %s, want 1.3.6.1.4.1.66378.1", OIDConfidentialTEE)
 	}
 }
 
@@ -94,12 +89,12 @@ func TestExtensionRoundTrip(t *testing.T) {
 	chain := []byte("fake-vcek-der")
 	att := &Attestation{TEEType: TEETypeSEVSNP, Report: report, CertChain: chain}
 
-	ext, err := att.MarshalExtension()
+	ext, err := att.MarshalExtension(testOID)
 	if err != nil {
 		t.Fatalf("MarshalExtension: %v", err)
 	}
-	if !ext.Id.Equal(OIDRATLSAttestation) {
-		t.Errorf("extension OID = %v, want %v", ext.Id, OIDRATLSAttestation)
+	if !ext.Id.Equal(testOID) {
+		t.Errorf("extension OID = %v, want %v", ext.Id, testOID)
 	}
 	if ext.Critical {
 		t.Error("extension is critical; a TLS stack that does not know the OID must still parse the certificate")
@@ -440,7 +435,7 @@ func TestPublicKeyFromCert(t *testing.T) {
 func TestExtractAttestation(t *testing.T) {
 	t.Run("finds the extension", func(t *testing.T) {
 		cert, _ := certWithExtension(t, &Attestation{TEEType: TEETypeSEVSNP, Report: fakeSNPReport([64]byte{9})})
-		att, err := ExtractAttestation(cert)
+		att, err := ExtractAttestation(cert, testOID)
 		if err != nil {
 			t.Fatalf("ExtractAttestation: %v", err)
 		}
@@ -449,9 +444,27 @@ func TestExtractAttestation(t *testing.T) {
 		}
 	})
 
+	t.Run("other OID", func(t *testing.T) {
+		cert, _ := certWithExtension(t, &Attestation{TEEType: TEETypeSEVSNP, Report: fakeSNPReport([64]byte{9})})
+		if _, err := ExtractAttestation(cert, asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 99999, 7, 2}); !errors.Is(err, ErrNoAttestation) {
+			t.Fatalf("err = %v, want ErrNoAttestation for an extension under another OID", err)
+		}
+	})
+
+	t.Run("empty OID", func(t *testing.T) {
+		cert, _ := certWithExtension(t, nil)
+		if _, err := ExtractAttestation(cert, nil); err == nil {
+			t.Fatal("ExtractAttestation accepted an empty OID")
+		}
+		att := &Attestation{TEEType: TEETypeSEVSNP, Report: fakeSNPReport([64]byte{})}
+		if _, err := att.MarshalExtension(nil); err == nil {
+			t.Fatal("MarshalExtension accepted an empty OID")
+		}
+	})
+
 	t.Run("no extension", func(t *testing.T) {
 		cert, _ := certWithExtension(t, nil)
-		if _, err := ExtractAttestation(cert); !errors.Is(err, ErrNoAttestation) {
+		if _, err := ExtractAttestation(cert, testOID); !errors.Is(err, ErrNoAttestation) {
 			t.Fatalf("err = %v, want ErrNoAttestation", err)
 		}
 	})

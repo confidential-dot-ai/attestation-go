@@ -99,7 +99,7 @@ func TestVerifyOfflineRejectsUnsignedRawReport(t *testing.T) {
 
 func TestVerifyCertOfflineWithoutExtension(t *testing.T) {
 	cert, _ := certWithExtension(t, nil)
-	_, err := VerifyCertOffline(cert, nil, teetypes.VerifyParams{}, teeverify.Options{})
+	_, err := VerifyCertOffline(cert, testOID, nil, teetypes.VerifyParams{}, teeverify.Options{})
 	if !errors.Is(err, ErrNoAttestation) {
 		t.Fatalf("err = %v, want ErrNoAttestation", err)
 	}
@@ -261,7 +261,7 @@ func TestVerifyCertWithServiceBindsCertKey(t *testing.T) {
 	cert, key := certWithExtension(t, att)
 	spy := &verifySpy{result: passingVerdict(nil)}
 
-	if _, err := VerifyCertWithService(context.Background(), spy.client(t), cert, nil, apiclient.Policy{}); err != nil {
+	if _, err := VerifyCertWithService(context.Background(), spy.client(t), cert, testOID, nil, apiclient.Policy{}); err != nil {
 		t.Fatalf("VerifyCertWithService: %v", err)
 	}
 	anchor, err := ReportDataForKey(&key.PublicKey, nil)
@@ -277,7 +277,7 @@ func TestVerifyCertWithServiceBindsCertKey(t *testing.T) {
 func TestVerifyCertWithServiceWithoutExtension(t *testing.T) {
 	cert, _ := certWithExtension(t, nil)
 	spy := &verifySpy{result: passingVerdict(nil)}
-	_, err := VerifyCertWithService(context.Background(), spy.client(t), cert, nil, apiclient.Policy{})
+	_, err := VerifyCertWithService(context.Background(), spy.client(t), cert, testOID, nil, apiclient.Policy{})
 	if !errors.Is(err, ErrNoAttestation) {
 		t.Fatalf("err = %v, want ErrNoAttestation", err)
 	}

@@ -6,6 +6,7 @@ import (
 	"crypto"
 	"crypto/sha512"
 	"crypto/x509"
+	"encoding/asn1"
 	"encoding/json"
 	"fmt"
 
@@ -61,15 +62,16 @@ func VerifyOffline(att *Attestation, pub crypto.PublicKey, nonce []byte, params 
 	return result, nil
 }
 
-// VerifyCertOffline verifies the RA-TLS extension of cert against cert's own
-// public key, which is what makes the certificate self-attesting.
+// VerifyCertOffline verifies the RA-TLS extension cert carries under oid
+// against cert's own public key, which is what makes the certificate
+// self-attesting.
 //
 // It checks the evidence and nothing else: validity window, issuer chain and
 // self-signature are the caller's to verify. The evidence binds only the key,
 // so every other field of a self-issued certificate is attacker-writable under
 // a genuine extension.
-func VerifyCertOffline(cert *x509.Certificate, nonce []byte, params teetypes.VerifyParams, opts teeverify.Options) (*teetypes.VerificationResult, error) {
-	att, pub, err := attestationAndKey(cert)
+func VerifyCertOffline(cert *x509.Certificate, oid asn1.ObjectIdentifier, nonce []byte, params teetypes.VerifyParams, opts teeverify.Options) (*teetypes.VerificationResult, error) {
+	att, pub, err := attestationAndKey(cert, oid)
 	if err != nil {
 		return nil, err
 	}
@@ -103,12 +105,12 @@ func VerifyWithService(ctx context.Context, client apiclient.Client, att *Attest
 	return client.VerifyEvidence(ctx, env, policy)
 }
 
-// VerifyCertWithService verifies the RA-TLS extension of cert against cert's
-// own public key through an attestation service. Like [VerifyCertOffline] it
+// VerifyCertWithService verifies the RA-TLS extension cert carries under oid
+// against cert's own public key through an attestation service. Like [VerifyCertOffline] it
 // checks the evidence alone; the certificate's validity and chain remain the
 // caller's to verify.
-func VerifyCertWithService(ctx context.Context, client apiclient.Client, cert *x509.Certificate, nonce []byte, policy apiclient.Policy) (apiclient.VerifyResponse, error) {
-	att, pub, err := attestationAndKey(cert)
+func VerifyCertWithService(ctx context.Context, client apiclient.Client, cert *x509.Certificate, oid asn1.ObjectIdentifier, nonce []byte, policy apiclient.Policy) (apiclient.VerifyResponse, error) {
+	att, pub, err := attestationAndKey(cert, oid)
 	if err != nil {
 		return apiclient.VerifyResponse{}, err
 	}
@@ -136,8 +138,8 @@ func bindingAnchor(pub crypto.PublicKey, nonce, supplied []byte) ([]byte, error)
 
 // attestationAndKey pulls the pieces a certificate contributes to verification:
 // its RA-TLS extension and the key that extension must bind.
-func attestationAndKey(cert *x509.Certificate) (*Attestation, crypto.PublicKey, error) {
-	att, err := ExtractAttestation(cert)
+func attestationAndKey(cert *x509.Certificate, oid asn1.ObjectIdentifier) (*Attestation, crypto.PublicKey, error) {
+	att, err := ExtractAttestation(cert, oid)
 	if err != nil {
 		return nil, nil, err
 	}

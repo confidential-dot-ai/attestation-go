@@ -166,7 +166,7 @@ func TestNewAttestation(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewAttestation: %v", err)
 		}
-		ext, err := att.MarshalExtension()
+		ext, err := att.MarshalExtension(testOID)
 		if err != nil {
 			t.Fatalf("MarshalExtension: %v", err)
 		}
