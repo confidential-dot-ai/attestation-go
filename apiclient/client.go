@@ -28,6 +28,11 @@
 // teetypes.PlatformType and are compared by family, so the cloud overlays
 // (az-*, gcp-*) route like their bare-metal counterparts, and an unknown tag
 // fails closed instead of falling through to another platform's rules.
+//
+// # Testing
+//
+// The apiclienttest subpackage serves a stub attestation-api, so a test can
+// drive a real Client without a confidential host.
 package apiclient
 
 import (

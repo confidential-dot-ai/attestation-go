@@ -1,6 +1,9 @@
 package teetypes
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // Family is the hardware TEE behind a platform tag: the cloud-overlay tags
 // (az-*, gcp-*) name the same silicon as their bare-metal counterpart and are
@@ -19,6 +22,67 @@ const (
 	// FamilyTDX is Intel TDX: tdx, az-tdx, gcp-tdx.
 	FamilyTDX Family = "tdx"
 )
+
+// String returns the family's canonical name, and "unknown" for FamilyUnknown
+// so a message formatted from a family never shows an empty string. Use it for
+// display; use the constants for comparison.
+func (f Family) String() string {
+	if f == FamilyUnknown {
+		return "unknown"
+	}
+	return string(f)
+}
+
+// DefaultPlatform returns the bare-metal platform tag for the family, which is
+// what a config that names only a family needs when an API demands a tag —
+// opening a runtimemeasure.Register, or filling an apiclient.AttestRequest.
+//
+// The cloud overlays are never the default: they name the same silicon and
+// verify identically, so a guest that must announce az-snp or gcp-tdx says so
+// explicitly. FamilyUnknown maps to the empty tag, which routes to no verifier
+// and so fails closed.
+func (f Family) DefaultPlatform() PlatformType {
+	switch f {
+	case FamilySNP:
+		return PlatformSNP
+	case FamilyTDX:
+		return PlatformTDX
+	default:
+		return ""
+	}
+}
+
+// familySpellings is every input ParseFamily accepts, in the order its error
+// lists them, so the message cannot drift from what the function takes.
+var familySpellings = []string{
+	string(FamilySNP), string(PlatformSNP), string(PlatformAzSNP), string(PlatformGcpSNP),
+	string(FamilyTDX), string(PlatformAzTDX), string(PlatformGcpTDX),
+}
+
+// ParseFamily resolves a hardware TEE family from either spelling in use: a
+// family name ("sev-snp", its common alias "snp", or "tdx"), or any platform
+// tag this module verifies ("az-snp", "gcp-tdx", …). Surrounding space is
+// trimmed and ASCII case folded.
+//
+// Configuration names the family while evidence carries a tag, so a caller
+// holding a config string cannot reach for Family(): PlatformType("sev-snp")
+// has no verifier and answers FamilyUnknown by design. This is the one place
+// that bridges the two vocabularies.
+//
+// It never returns FamilyUnknown with a nil error — an unrecognized input is
+// an error quoting what was supplied, so a typo fails closed at config load
+// rather than at first handshake.
+func ParseFamily(s string) (Family, error) {
+	p := NormalizePlatform(s)
+	if p == PlatformType(FamilySNP) {
+		return FamilySNP, nil
+	}
+	if f := p.Family(); f != FamilyUnknown {
+		return f, nil
+	}
+	return FamilyUnknown, fmt.Errorf("unknown TEE platform or family %q, want one of: %s",
+		s, strings.Join(familySpellings, ", "))
+}
 
 // Family reports the hardware TEE family this module routes the tag to, and is
 // the single place that mapping is defined — teeverify's dispatcher is kept in

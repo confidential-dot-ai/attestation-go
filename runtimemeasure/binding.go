@@ -19,11 +19,8 @@ import (
 // risks matching a 48-byte TDX value against a 32-byte SNP one; use
 // [VerifyBinding] rather than comparing what this returns.
 func Binding(r *teetypes.VerificationResult) ([]byte, error) {
-	if r == nil {
-		return nil, fmt.Errorf("no verification result")
-	}
-	if !r.SignatureValid {
-		return nil, fmt.Errorf("verification result does not carry a valid signature, so its claims are unverified")
+	if err := checkVerified(r); err != nil {
+		return nil, err
 	}
 	if err := checkBindingPlatform(r.Platform); err != nil {
 		return nil, err

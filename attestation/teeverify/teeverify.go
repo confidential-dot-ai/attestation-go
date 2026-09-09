@@ -9,6 +9,7 @@
 package teeverify
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -37,9 +38,22 @@ func Verify(evidenceJSON []byte, params teetypes.VerifyParams) (*teetypes.Verifi
 	return VerifyWithOptions(evidenceJSON, params, Options{})
 }
 
-// VerifyWithOptions verifies a self-describing evidence envelope, dispatching on
-// the platform tag.
+// VerifyWithOptions verifies a self-describing evidence envelope with a
+// background context; see VerifyWithOptionsContext.
 func VerifyWithOptions(evidenceJSON []byte, params teetypes.VerifyParams, opts Options) (*teetypes.VerificationResult, error) {
+	return VerifyWithOptionsContext(context.Background(), evidenceJSON, params, opts)
+}
+
+// VerifyWithOptionsContext verifies a self-describing evidence envelope,
+// dispatching on the platform tag.
+//
+// ctx bounds the AMD KDS fetch the snp and gcp-snp arms make when the evidence
+// carries no inline VCEK and opts.SNP.Getter is set (see
+// snp.VerifyEvidenceContext) — a bare RA-TLS serving cert is the case that
+// needs it. Nothing else here reaches the network: az-snp always ships its VCEK
+// inside the HCL envelope, and the TDX arms verify against collateral already
+// in hand.
+func VerifyWithOptionsContext(ctx context.Context, evidenceJSON []byte, params teetypes.VerifyParams, opts Options) (*teetypes.VerificationResult, error) {
 	if len(evidenceJSON) > MaxEvidenceSize {
 		return nil, fmt.Errorf("evidence too large: %d bytes (max %d)", len(evidenceJSON), MaxEvidenceSize)
 	}
@@ -57,9 +71,9 @@ func VerifyWithOptions(evidenceJSON []byte, params teetypes.VerifyParams, opts O
 	// canonical constant, never the attester's spelling.
 	switch teetypes.NormalizePlatform(string(env.Platform)) {
 	case teetypes.PlatformSNP:
-		return verifySNP(env.Evidence, params, opts.SNP, teetypes.PlatformSNP)
+		return verifySNP(ctx, env.Evidence, params, opts.SNP, teetypes.PlatformSNP)
 	case teetypes.PlatformGcpSNP:
-		return verifySNP(env.Evidence, params, opts.SNP, teetypes.PlatformGcpSNP)
+		return verifySNP(ctx, env.Evidence, params, opts.SNP, teetypes.PlatformGcpSNP)
 	case teetypes.PlatformAzSNP:
 		return azsnp.VerifyEvidence(env.Evidence, params, opts.SNP)
 	case teetypes.PlatformTDX:
@@ -73,12 +87,12 @@ func VerifyWithOptions(evidenceJSON []byte, params teetypes.VerifyParams, opts O
 	}
 }
 
-func verifySNP(inner json.RawMessage, params teetypes.VerifyParams, opts snp.Options, platform teetypes.PlatformType) (*teetypes.VerificationResult, error) {
+func verifySNP(ctx context.Context, inner json.RawMessage, params teetypes.VerifyParams, opts snp.Options, platform teetypes.PlatformType) (*teetypes.VerificationResult, error) {
 	var ev snp.SnpEvidence
 	if err := json.Unmarshal(inner, &ev); err != nil {
 		return nil, fmt.Errorf("parsing snp evidence: %w", err)
 	}
-	res, err := snp.VerifyEvidence(ev, params, opts)
+	res, err := snp.VerifyEvidenceContext(ctx, ev, params, opts)
 	if err != nil {
 		return nil, err
 	}

@@ -80,6 +80,31 @@ current, err := reg.Extension()
 Anchor bytes are hashed verbatim. Where they come from a file, pass the file
 contents exactly as written — never round-tripped through a parser — or the
 digest differs and verification fails silently.
+
+An in-guest daemon that must extend exactly once per workload, across its own
+restarts, keeps a `Journal`: a log of digests already extended, written before
+each extend and reconciled against the register on open. A crash between the
+two can only under-extend, which the open repairs; a register that matches
+neither fold reports `ErrRegisterDiverged` and refuses further extends.
+
+```go
+j, err := runtimemeasure.OpenJournal("/run/measured", reg)
+extended, err := j.MeasureOnce("sha256:...") // false when already journaled
+```
+
+A verifier checking a whole node pins the image with the manifest its build
+published and the anchor with `VerifyBinding`; the manifest's shape names the
+family, so the caller loads it without knowing which:
+
+```go
+identity, err := runtimemeasure.LoadAnyImageManifest("manifest.json") // ImagePins or SNPImagePins
+err = identity.Verify(res)                                             // MRTD+RTMR[1,2], or launch digest in the per-SMP set
+err = runtimemeasure.VerifyBinding(res, anchor, workloadDigests)       // RTMR[3] or HOSTDATA
+```
+
+`InitDataAnchor` reads the 32-byte init-data digest back out of a verified
+result — SEV-SNP HOST_DATA verbatim, TDX MRCONFIGID with its zero padding
+checked — for a guest asking what document it was launched with.
 ## attestation-api client (`apiclient`)
 
 `teeverify` verifies evidence in this process. `apiclient` is the alternative:
@@ -221,8 +246,66 @@ platform without registers. A mixed fleet keeps one `Policy` per family.
 Limitations: collateral (CRL / Intel TCB status / QE identity) requires a network
 `Getter` and is skipped offline (`CollateralVerified=false`); guest-side
 generation (`attest`) for the envelope platforms is not implemented (verify
-only); Turin FMC TCB and Genoa-family model `0xA0` (Bergamo/Siena) offline root
+only — launch-measurement *prediction* is, see `launchmeasure`); Turin FMC TCB and Genoa-family model `0xA0` (Bergamo/Siena) offline root
 selection are gated by go-sev-guest support.
+
+## Reference values (`refvalues`)
+
+A verifier compares evidence against the images a deployment accepts. This
+package owns that set in its three shapes — the measurements config file, the
+flat digest and register lists older flags carry, and a build manifest — and
+converts any of them into the `apiclient.Policy` the service enforces:
+
+```go
+rv, err := refvalues.Load("measurements.json") // {"schema_version":"1","tee":"tdx","measurements":[...]}
+policy := rv.Policy()                            // Images pinned whole
+pins, err := refvalues.FromImageManifest("build/manifest.json", "worker", teetypes.FamilyTDX)
+```
+
+An image is one atomic tuple: SEV-SNP its launch digest, one pin per vCPU
+count; TDX its MRTD with RTMR[1] and RTMR[2], never RTMR[0] or RTMR[3]. The
+file names its family as `sev-snp` or `tdx` (`snp` is accepted; any known
+platform tag parses through `teetypes.ParseFamily`).
+
+## RA-TLS (`ratls`)
+
+An X.509 extension (OID `1.3.6.1.4.1.66378.1.1`) that binds a TLS key to a
+TEE: REPORTDATA is SHA-384 over the public key, and the evidence rides in the
+certificate. Bare-metal and GCP SEV-SNP embed the raw AMD report; every other
+platform embeds the JSON envelope, with the TDX event log stripped so the
+certificate fits a TLS record.
+
+```go
+// Producer, with evidence from /attest bound to ReportDataForKey(pub, nil):
+att, err := ratls.NewAttestation(resp.Envelope())
+ext, err := att.MarshalExtension()
+
+// Verifier, in-process or through the service:
+res, err := ratls.VerifyCertOffline(cert, nonce, teetypes.VerifyParams{}, teeverify.Options{})
+resp, err := ratls.VerifyCertWithService(ctx, client, cert, nonce, policy)
+```
+
+Certificate lifecycle — issuance, rotation, TLS configs — is the caller's.
+
+## Launch measurement prediction (`launchmeasure/snp`, `launchmeasure/tdx`)
+
+The produce side of the reference values above: what a guest image *will*
+measure, computed offline from the firmware and boot artifacts.
+
+```go
+digest, err := snp.LaunchDigest(snp.Config{FirmwarePath: "OVMF.fd", VCPUs: 4, VCPUSig: sig, KernelHashes: &kh})
+mrtd, err := tdx.MRTD(tdvfBytes)
+```
+
+An SNP launch digest is per guest shape (vCPU count, kernel hashes); a TDX
+MRTD is per TDVF build, with the guest reaching RTMR[0..2]. These two packages
+pull `sev-snp-measure-go` and `gce-tcb-verifier`; nothing else in the module
+depends on them.
+
+## Test stub (`apiclient/apiclienttest`)
+
+A stub attestation-api over HTTP or a Unix socket, driven through a real
+`apiclient.Client`, for tests of anything that consumes the service.
 
 ## Installation
 

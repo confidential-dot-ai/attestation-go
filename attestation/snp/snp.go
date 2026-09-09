@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/go-sev-guest/abi"
 	"github.com/google/go-sev-guest/kds"
@@ -66,22 +67,67 @@ type Options struct {
 	Getter trust.HTTPSGetter
 }
 
-// VerifyEvidence verifies a bare-metal SNP evidence envelope and returns
-// normalized claims. The VCEK must be supplied in cert_chain (offline);
-// fetching from AMD KDS is intentionally not done here.
+// VerifyEvidence verifies a bare-metal SNP evidence envelope with a background
+// context; see VerifyEvidenceContext for what the envelope must carry.
 func VerifyEvidence(ev SnpEvidence, params teetypes.VerifyParams, opts Options) (*teetypes.VerificationResult, error) {
-	if ev.CertChain == nil || ev.CertChain.Vcek == "" {
-		return nil, fmt.Errorf("snp: evidence is missing cert_chain.vcek (offline verification requires the VCEK)")
+	return VerifyEvidenceContext(context.Background(), ev, params, opts)
+}
+
+// VerifyEvidenceContext verifies a bare-metal SNP evidence envelope and returns
+// normalized claims.
+//
+// An inline cert_chain.vcek is the offline path: the endorsement key travels
+// with the report and nothing is fetched. Evidence that omits it — a bare
+// RA-TLS serving cert carries the report alone — needs opts.Getter, and the
+// VCEK is then fetched from AMD KDS bounded by ctx. Without a Getter a missing
+// VCEK is an error: offline stays offline rather than silently reaching the
+// network.
+func VerifyEvidenceContext(ctx context.Context, ev SnpEvidence, params teetypes.VerifyParams, opts Options) (*teetypes.VerificationResult, error) {
+	inlineVCEK := ev.CertChain != nil && ev.CertChain.Vcek != ""
+	if !inlineVCEK && opts.Getter == nil {
+		return nil, fmt.Errorf("snp: evidence is missing cert_chain.vcek and no Getter is set (offline verification requires the VCEK inline)")
 	}
 	reportBytes, err := base64.StdEncoding.DecodeString(ev.AttestationReport)
 	if err != nil {
 		return nil, fmt.Errorf("snp: decoding attestation_report: %w", err)
 	}
-	vcekDER, err := base64.StdEncoding.DecodeString(ev.CertChain.Vcek)
-	if err != nil {
-		return nil, fmt.Errorf("snp: decoding vcek: %w", err)
+	var vcekDER []byte
+	if inlineVCEK {
+		if vcekDER, err = base64.StdEncoding.DecodeString(ev.CertChain.Vcek); err != nil {
+			return nil, fmt.Errorf("snp: decoding vcek: %w", err)
+		}
 	}
-	return VerifyReport(reportBytes, vcekDER, params, teetypes.PlatformSNP, MinReportVersion, opts)
+	return VerifyReportContext(ctx, reportBytes, vcekDER, params, teetypes.PlatformSNP, MinReportVersion, opts)
+}
+
+// KDS fetch defaults, applied by DefaultKDSGetter to a non-positive argument.
+// AMD KDS rate-limits (HTTP 429), so a getter that gives up at the first
+// failure turns a routine throttle into an unverifiable guest.
+const (
+	DefaultKDSMaxFetch      = 2 * time.Minute
+	DefaultKDSMaxRetryDelay = 8 * time.Second
+)
+
+// DefaultKDSGetter returns the collateral getter to put in Options.Getter: an
+// HTTPS client wrapped in go-sev-guest's retry policy.
+//
+// maxFetch bounds the whole fetch including retries and maxRetryDelay caps the
+// backoff between attempts; a non-positive value takes the corresponding
+// Default constant, since a zero MaxRetryDelay makes go-sev-guest retry in a
+// tight loop. The context passed to VerifyReportContext bounds the fetch too —
+// whichever deadline comes first wins.
+func DefaultKDSGetter(maxFetch, maxRetryDelay time.Duration) trust.HTTPSGetter {
+	if maxFetch <= 0 {
+		maxFetch = DefaultKDSMaxFetch
+	}
+	if maxRetryDelay <= 0 {
+		maxRetryDelay = DefaultKDSMaxRetryDelay
+	}
+	return &trust.RetryHTTPSGetter{
+		Timeout:       maxFetch,
+		MaxRetryDelay: maxRetryDelay,
+		Getter:        &trust.SimpleHTTPSGetter{},
+	}
 }
 
 // VerifyReport verifies a raw 1184-byte SNP report against the given VCEK DER:

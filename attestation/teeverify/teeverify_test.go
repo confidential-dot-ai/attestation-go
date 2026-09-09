@@ -1,12 +1,21 @@
 package teeverify
 
 import (
+	"context"
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/google/go-sev-guest/abi"
+	"github.com/google/go-sev-guest/kds"
+	test "github.com/google/go-sev-guest/testing"
+	"github.com/google/go-sev-guest/verify/trust"
+
+	"github.com/confidential-dot-ai/attestation-go/attestation/snp"
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
 )
 
@@ -19,6 +28,8 @@ var (
 	azTdxEnvelope []byte
 	//go:embed testdata/tdx-quote.dat
 	tdxQuote []byte
+	//go:embed testdata/snp-genoa.json
+	snpEnvelope []byte
 )
 
 // TestVerify_Dispatch drives the unified entry point across platforms, confirming
@@ -117,4 +128,91 @@ func TestDispatchMatchesFamily(t *testing.T) {
 				p, routed, p.Family(), want, err)
 		}
 	}
+}
+
+// TestVerifyWithOptionsContext_SNPKDSFallback drives the dispatcher's snp arm
+// with the VCEK stripped from the envelope — the shape a bare RA-TLS serving
+// cert produces. The dispatcher must refuse it offline and accept it once a
+// Getter can supply the VCEK, so callers stop reaching past this package to
+// snp.VerifyReportContext for that one case.
+func TestVerifyWithOptionsContext_SNPKDSFallback(t *testing.T) {
+	report, vcek := snpGenoaFixture(t)
+	inner, err := json.Marshal(snp.SnpEvidence{AttestationReport: base64.StdEncoding.EncodeToString(report)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, platform := range []teetypes.PlatformType{teetypes.PlatformSNP, teetypes.PlatformGcpSNP} {
+		t.Run(string(platform), func(t *testing.T) {
+			env, err := json.Marshal(teetypes.AttestationEvidence{Platform: platform, Evidence: inner})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Verify(env, teetypes.VerifyParams{}); err == nil {
+				t.Fatal("a VCEK-less envelope must not verify offline")
+			}
+
+			rp, err := abi.ReportToProto(report)
+			if err != nil {
+				t.Fatal(err)
+			}
+			url := kds.VCEKCertURL("Genoa", rp.GetChipId(), kds.TCBVersion(rp.GetReportedTcb()))
+			opts := Options{SNP: snp.Options{Getter: test.SimpleGetter(map[string][]byte{url: vcek})}}
+
+			res, err := VerifyWithOptionsContext(context.Background(), env, teetypes.VerifyParams{}, opts)
+			if err != nil {
+				t.Fatalf("VerifyWithOptionsContext with a KDS getter: %v", err)
+			}
+			if res.Platform != platform || !res.SignatureValid {
+				t.Fatalf("unexpected result: %+v", res)
+			}
+		})
+	}
+}
+
+// TestVerifyWithOptionsContext_CancelledContextBoundsTheFetch: the ctx must
+// reach the KDS fetch, or a caller's deadline buys nothing.
+func TestVerifyWithOptionsContext_CancelledContextBoundsTheFetch(t *testing.T) {
+	report, _ := snpGenoaFixture(t)
+	inner, _ := json.Marshal(snp.SnpEvidence{AttestationReport: base64.StdEncoding.EncodeToString(report)})
+	env, _ := json.Marshal(teetypes.AttestationEvidence{Platform: teetypes.PlatformSNP, Evidence: inner})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	opts := Options{SNP: snp.Options{Getter: &trust.RetryHTTPSGetter{
+		MaxRetryDelay: time.Minute,
+		Getter:        test.SimpleGetter(nil),
+	}}}
+	start := time.Now()
+	_, err := VerifyWithOptionsContext(ctx, env, teetypes.VerifyParams{}, opts)
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("cancelled ctx took %v, want prompt return", elapsed)
+	}
+	if !errors.Is(err, snp.ErrCollateralUnavailable) {
+		t.Fatalf("err = %v, want ErrCollateralUnavailable", err)
+	}
+}
+
+// snpGenoaFixture returns the raw report and paired VCEK from the bare-metal
+// SNP envelope fixture.
+func snpGenoaFixture(t *testing.T) (report, vcek []byte) {
+	t.Helper()
+	var env struct {
+		Evidence json.RawMessage `json:"evidence"`
+	}
+	if err := json.Unmarshal(snpEnvelope, &env); err != nil {
+		t.Fatal(err)
+	}
+	var ev snp.SnpEvidence
+	if err := json.Unmarshal(env.Evidence, &ev); err != nil {
+		t.Fatal(err)
+	}
+	report, err := base64.StdEncoding.DecodeString(ev.AttestationReport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vcek, err = base64.StdEncoding.DecodeString(ev.CertChain.Vcek); err != nil {
+		t.Fatal(err)
+	}
+	return report, vcek
 }
