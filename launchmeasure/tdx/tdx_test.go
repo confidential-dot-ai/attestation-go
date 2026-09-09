@@ -27,7 +27,8 @@ const (
 // large to commit, so this runs where the pinned build is on disk — a TDX host,
 // or anywhere with TDVF_PATH pointing at it — and skips otherwise. A TDVF that
 // is present but not the validated build also skips: the expected MRTD below
-// describes that one build only.
+// describes that one build only. CI fetches that build and fails on a skip, so
+// the skip is a local convenience, not a way for the check to pass unrun.
 func loadTDVF(t *testing.T) []byte {
 	t.Helper()
 	p := tdvfPath

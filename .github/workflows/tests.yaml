@@ -27,3 +27,45 @@ jobs:
         run: go build ./...
       - name: Unit tests
         run: go test -race -v ./...
+
+  # launchmeasure/tdx's hardware-captured MRTD test skips when the validated
+  # TDVF is not on disk. This job puts it there, so the test cannot read green
+  # by skipping: a change in the predictor, or in the upstream library's
+  # default launch options, fails here.
+  tdx-mrtd:
+    name: TDX MRTD against hardware
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # The build launchmeasure/tdx's wantTDVFSHA/wantMRTD were captured with.
+      # Bump the three together, never one.
+      TDVF_URL: https://github.com/kata-containers/kata-containers/releases/download/3.30.0/kata-static-3.30.0-amd64.tar.zst
+      TDVF_SHA256: 2af9e5e974c0dc201163d1fd419f234cc4b6e64e99425ce6619e9a077fb0c0b6
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Install Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+      - name: Install zstd
+        run: sudo apt-get update && sudo apt-get install -y zstd
+      # tar stops after the one member, early in the stream; curl's SIGPIPE is
+      # expected and the sha256 check is the gate on the untrusted fetch.
+      - name: Fetch the validated TDVF
+        run: |
+          curl -fsSL "$TDVF_URL" | zstd -d | tar -xO --occurrence=1 ./opt/kata/share/ovmf/OVMF.inteltdx.fd > tdvf.fd || true
+          echo "$TDVF_SHA256  tdvf.fd" | sha256sum -c -
+      - name: Test launchmeasure/tdx, failing on any skip
+        env:
+          TDVF_PATH: ${{ github.workspace }}/tdvf.fd
+        run: |
+          go test -count=1 -json ./launchmeasure/tdx | tee tdx.json
+          if grep '"Action":"skip"' tdx.json; then
+            echo "::error::launchmeasure/tdx skipped — the TDVF is missing or not the validated build" >&2
+            exit 1
+          fi
+          if ! grep -q '"Action":"pass".*"Test":"TestMRTDMatchesHardware"' tdx.json; then
+            echo "::error::TestMRTDMatchesHardware did not pass" >&2
+            exit 1
+          fi
