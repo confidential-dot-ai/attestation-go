@@ -10,19 +10,19 @@ import (
 	"strings"
 )
 
-// ImagePins is the complete TDX measurement identity of one guest image:
+// tdxImagePins is the complete TDX measurement identity of one guest image:
 // MRTD (the TDVF firmware's measured regions) plus RTMR[1] (guest kernel /
 // UKI image identity) and RTMR[2] (guest rootfs / UKI section chain). MRTD
 // alone does not identify an image — two different guest images built against
 // the same firmware share it — so the three registers are only meaningful as
 // one tuple from one build.
-type ImagePins struct {
+type tdxImagePins struct {
 	MRTD  [Size]byte
 	RTMR1 [Size]byte
 	RTMR2 [Size]byte
 }
 
-// imageManifest is the JSON subset LoadImageManifest reads. Extra fields are
+// imageManifest is the JSON subset loadTDXImageManifest reads. Extra fields are
 // allowed (build manifests carry other data); the three registers are not
 // optional. A confos build manifest nests them under "tdx"; the flat form is
 // also accepted so a hand-written pin stays valid.
@@ -39,7 +39,7 @@ type tdxMeasurements struct {
 	RTMR2 string `json:"rtmr2"`
 }
 
-// LoadImageManifest loads a TDX image pin — the MRTD + RTMR[1] + RTMR[2]
+// loadTDXImageManifest loads a TDX image pin — the MRTD + RTMR[1] + RTMR[2]
 // tuple — atomically from one provenanced build-artifact manifest. The file
 // must be a JSON object carrying all three fields ("mrtd", "rtmr1", "rtmr2")
 // exactly once each, every one exactly 96 lowercase hex chars; a missing,
@@ -47,8 +47,8 @@ type tdxMeasurements struct {
 // up pinning part of an image, or a value other than the one it reads as. A
 // generic artifact-hash manifest.json (file digests of build outputs) is not
 // an image pin and is rejected by the same rule.
-func LoadImageManifest(path string) (ImagePins, error) {
-	var pins ImagePins
+func loadTDXImageManifest(path string) (tdxImagePins, error) {
+	var pins tdxImagePins
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return pins, fmt.Errorf("read image manifest: %w", err)
@@ -59,7 +59,7 @@ func LoadImageManifest(path string) (ImagePins, error) {
 	}
 	keys, err := rejectDuplicateKeys(data)
 	if err != nil {
-		return ImagePins{}, fmt.Errorf("image manifest %s: %w", path, err)
+		return tdxImagePins{}, fmt.Errorf("image manifest %s: %w", path, err)
 	}
 	if m.TDX != nil {
 		// The nested object would win over a flat tuple, so a flat register
@@ -68,7 +68,7 @@ func LoadImageManifest(path string) (ImagePins, error) {
 		for _, k := range keys {
 			for _, reg := range []string{"mrtd", "rtmr1", "rtmr2"} {
 				if strings.EqualFold(k, reg) {
-					return ImagePins{}, fmt.Errorf("image manifest %s: %q is named both at the top level and under \"tdx\"; use one form", path, k)
+					return tdxImagePins{}, fmt.Errorf("image manifest %s: %q is named both at the top level and under \"tdx\"; use one form", path, k)
 				}
 			}
 		}
@@ -84,12 +84,12 @@ func LoadImageManifest(path string) (ImagePins, error) {
 		{"rtmr2", m.RTMR2, &pins.RTMR2},
 	} {
 		if f.hex == "" {
-			return ImagePins{}, fmt.Errorf(
+			return tdxImagePins{}, fmt.Errorf(
 				"image manifest %s: missing %q — a TDX image pin is the mrtd+rtmr1+rtmr2 tuple from one provenanced build-artifact manifest; a generic artifact-hash manifest.json is not it",
 				path, f.name)
 		}
 		if err := decodeRegister(f.hex, f.dst); err != nil {
-			return ImagePins{}, fmt.Errorf("image manifest %s: %q %w", path, f.name, err)
+			return tdxImagePins{}, fmt.Errorf("image manifest %s: %q %w", path, f.name, err)
 		}
 	}
 	return pins, nil

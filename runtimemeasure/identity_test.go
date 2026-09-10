@@ -9,8 +9,8 @@ import (
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
 )
 
-func testImagePins() ImagePins {
-	var p ImagePins
+func testTDXPins() tdxImagePins {
+	var p tdxImagePins
 	for _, f := range []struct {
 		hex string
 		dst *[Size]byte
@@ -23,7 +23,7 @@ func testImagePins() ImagePins {
 }
 
 // tdxImageResult builds a signature-verified result carrying the launch
-// measurement and register claims ImagePins.Verify reads.
+// measurement and register claims tdxImagePins.Verify reads.
 func tdxImageResult(p teetypes.PlatformType, mrtd, rtmr1, rtmr2 string) *teetypes.VerificationResult {
 	return &teetypes.VerificationResult{
 		SignatureValid: true,
@@ -43,8 +43,8 @@ func snpImageResult(p teetypes.PlatformType, launch string) *teetypes.Verificati
 	}
 }
 
-func TestImagePinsVerify(t *testing.T) {
-	pins := testImagePins()
+func TestTDXImagePinsVerify(t *testing.T) {
+	pins := testTDXPins()
 	if err := pins.Verify(tdxImageResult(teetypes.PlatformTDX, mrtdHex, rtmr1Hex, rtmr2Hex)); err != nil {
 		t.Fatalf("Verify(matching) = %v", err)
 	}
@@ -85,8 +85,8 @@ func TestImagePinsVerify(t *testing.T) {
 
 // RTMR[3] carries the anchor and the workload chain, which move between
 // launches of one image: Verify must ignore it, leaving it to VerifyBinding.
-func TestImagePinsVerifyIgnoresRTMR3(t *testing.T) {
-	pins := testImagePins()
+func TestTDXImagePinsVerifyIgnoresRTMR3(t *testing.T) {
+	pins := testTDXPins()
 	res := tdxImageResult(teetypes.PlatformTDX, mrtdHex, rtmr1Hex, rtmr2Hex)
 	res.Claims.PlatformData["rtmr_3"] = strings.Repeat("7d", Size)
 	if err := pins.Verify(res); err != nil {
@@ -94,8 +94,8 @@ func TestImagePinsVerifyIgnoresRTMR3(t *testing.T) {
 	}
 }
 
-func testSNPPins() SNPImagePins {
-	pins := SNPImagePins{BySMP: map[int][Size]byte{}}
+func testSNPPins() snpImagePins {
+	pins := snpImagePins{BySMP: map[int][Size]byte{}}
 	for smp, h := range map[int]string{2: mrtdHex, 4: rtmr1Hex} {
 		var d [Size]byte
 		if err := decodeRegister(h, &d); err != nil {
@@ -160,7 +160,7 @@ func TestImageIdentityFamilies(t *testing.T) {
 		identity ImageIdentity
 		want     teetypes.Family
 	}{
-		{testImagePins(), teetypes.FamilyTDX},
+		{testTDXPins(), teetypes.FamilyTDX},
 		{testSNPPins(), teetypes.FamilySNP},
 	} {
 		if got := tc.identity.Family(); got != tc.want {
@@ -172,7 +172,7 @@ func TestImageIdentityFamilies(t *testing.T) {
 // A pin and a matching binding are the two halves of a node check: neither
 // alone says both which image booted and what it was launched for.
 func TestVerifyThenVerifyBinding(t *testing.T) {
-	pins := testImagePins()
+	pins := testTDXPins()
 	anchorBytes := []byte("anchor-bytes-v1\n")
 	seed := Seed(anchorBytes)
 	res := tdxImageResult(teetypes.PlatformTDX, mrtdHex, rtmr1Hex, rtmr2Hex)

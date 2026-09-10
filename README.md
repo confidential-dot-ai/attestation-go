@@ -93,13 +93,18 @@ extended, err := j.MeasureOnce("sha256:...") // false when already journaled
 ```
 
 A verifier checking a whole node pins the image with the manifest its build
-published and the anchor with `VerifyBinding`; the manifest's shape names the
-family, so the caller loads it without knowing which:
+published and the anchor with `VerifyBinding`. The manifest's shape names the
+family, so the caller loads it without knowing which, and reads the pinned
+values back through one interface. A "multi" build carries both shapes; name
+the family with `LoadImageManifestFor` to pick a half:
 
 ```go
-identity, err := runtimemeasure.LoadAnyImageManifest("manifest.json") // ImagePins or SNPImagePins
-err = identity.Verify(res)                                             // MRTD+RTMR[1,2], or launch digest in the per-SMP set
-err = runtimemeasure.VerifyBinding(res, anchor, workloadDigests)       // RTMR[3] or HOSTDATA
+identity, err := runtimemeasure.LoadImageManifest("manifest.json") // an ImageIdentity, family detected
+err = identity.Verify(res)                                        // MRTD+RTMR[1,2], or launch digest in the per-SMP set
+err = runtimemeasure.VerifyBinding(res, anchor, workloadDigests)  // RTMR[3] or HOSTDATA
+
+for _, v := range identity.LaunchDigests() { ... } // v.Label is "" on TDX, "smp4" on SNP
+registers := identity.RTMRs()                      // RTMR[1] and RTMR[2] on TDX, none on SNP
 ```
 
 `InitDataAnchor` reads the 32-byte init-data digest back out of a verified
@@ -263,6 +268,9 @@ rv, err := refvalues.Load("measurements.json") // {"schema_version":"1","tee":"t
 policy := rv.Policy()                            // Images pinned whole
 pins, err := refvalues.FromImageManifest("build/manifest.json", "worker", teetypes.FamilyTDX)
 ```
+
+`FromImageManifest` names the family because a build manifest may carry both;
+it reads the pin through `runtimemeasure.LoadImageManifestFor`.
 
 An image is one atomic tuple: SEV-SNP its launch digest, one pin per vCPU
 count; TDX its MRTD with RTMR[1] and RTMR[2], never RTMR[0] or RTMR[3]. The

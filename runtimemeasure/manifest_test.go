@@ -23,7 +23,7 @@ func writeManifest(t *testing.T, content string) string {
 	return p
 }
 
-func TestLoadImageManifestValid(t *testing.T) {
+func TestTDXManifestValid(t *testing.T) {
 	// Extra unknown fields are allowed: build manifests carry other data. A
 	// nested object naming "mrtd" under some other key is not the pin and is
 	// none of this loader's business.
@@ -34,9 +34,9 @@ func TestLoadImageManifestValid(t *testing.T) {
 		"rtmr1": "`+rtmr1Hex+`",
 		"rtmr2": "`+rtmr2Hex+`"
 	}`)
-	pins, err := LoadImageManifest(p)
+	pins, err := loadTDXImageManifest(p)
 	if err != nil {
-		t.Fatalf("LoadImageManifest: %v", err)
+		t.Fatalf("loadTDXImageManifest: %v", err)
 	}
 	for _, reg := range []struct {
 		name string
@@ -53,7 +53,7 @@ func TestLoadImageManifestValid(t *testing.T) {
 	}
 }
 
-func TestLoadImageManifestRejects(t *testing.T) {
+func TestTDXManifestRejects(t *testing.T) {
 	for _, tc := range []struct{ name, content, wantErr string }{
 		{"not json", "not json at all", "not a JSON object"},
 		{"json array", `[1,2,3]`, "not a JSON object"},
@@ -113,7 +113,7 @@ func TestLoadImageManifestRejects(t *testing.T) {
 			`both at the top level and under "tdx"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := LoadImageManifest(writeManifest(t, tc.content))
+			_, err := loadTDXImageManifest(writeManifest(t, tc.content))
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Errorf("error = %v, want it to contain %q", err, tc.wantErr)
 			}
@@ -123,19 +123,19 @@ func TestLoadImageManifestRejects(t *testing.T) {
 
 // One malformed field must fail the whole load: a partial pin (say MRTD
 // without RTMR[2]) would silently verify only part of the image.
-func TestLoadImageManifestIsAtomic(t *testing.T) {
+func TestTDXManifestIsAtomic(t *testing.T) {
 	p := writeManifest(t, `{"mrtd":"`+mrtdHex+`","rtmr1":"`+rtmr1Hex+`","rtmr2":"bad"}`)
-	pins, err := LoadImageManifest(p)
+	pins, err := loadTDXImageManifest(p)
 	if err == nil {
 		t.Fatal("want error")
 	}
-	if pins != (ImagePins{}) {
+	if pins != (tdxImagePins{}) {
 		t.Error("a failed load must not return partial pins")
 	}
 }
 
-func TestLoadImageManifestMissingFile(t *testing.T) {
-	_, err := LoadImageManifest(filepath.Join(t.TempDir(), "absent.json"))
+func TestTDXManifestMissingFile(t *testing.T) {
+	_, err := loadTDXImageManifest(filepath.Join(t.TempDir(), "absent.json"))
 	if err == nil || !strings.Contains(err.Error(), "read image manifest") {
 		t.Errorf("error = %v, want a read error", err)
 	}
@@ -149,13 +149,13 @@ const (
 	snpSMP4Digest = "a0185a3b93d8a10438fc2c2445edf9908c6de694350a3eaf2f55277d5287fd3532a02994c1e2932809da4147d8b58c97"
 )
 
-func TestLoadSNPImageManifestValid(t *testing.T) {
+func TestSNPManifestValid(t *testing.T) {
 	p := writeManifest(t, `{"version":3,"snp_variants":[
 	  {"smp":2,"measurement":{"snp_launch_digest":"`+snpSMP2Digest+`","algorithm":"sha384"}},
 	  {"smp":4,"measurement":{"snp_launch_digest":"`+snpSMP4Digest+`","algorithm":"sha384"}}]}`)
-	pins, err := LoadSNPImageManifest(p)
+	pins, err := loadSNPImageManifest(p)
 	if err != nil {
-		t.Fatalf("LoadSNPImageManifest: %v", err)
+		t.Fatalf("loadSNPImageManifest: %v", err)
 	}
 	if len(pins.BySMP) != 2 {
 		t.Fatalf("got %d variants, want 2", len(pins.BySMP))
@@ -169,13 +169,13 @@ func TestLoadSNPImageManifestValid(t *testing.T) {
 			t.Errorf("smp%d digest = %x, want %s", v.smp, got, v.want)
 		}
 		// Both variants are accepted: one image, two legitimate vCPU shapes.
-		if !pins.Has(got) {
-			t.Errorf("Has must accept the smp%d variant", v.smp)
+		if !pins.has(got) {
+			t.Errorf("has must accept the smp%d variant", v.smp)
 		}
 	}
 	var other [Size]byte
-	if pins.Has(other) {
-		t.Error("Has must reject a digest outside the set")
+	if pins.has(other) {
+		t.Error("has must reject a digest outside the set")
 	}
 	// Rendered in ascending SMP order so operator-facing output is stable.
 	if got, want := pins.String(), snpSMP2Digest+", "+snpSMP4Digest; got != want {
@@ -183,7 +183,7 @@ func TestLoadSNPImageManifestValid(t *testing.T) {
 	}
 }
 
-func TestLoadSNPImageManifestRejects(t *testing.T) {
+func TestSNPManifestRejects(t *testing.T) {
 	cases := map[string]string{
 		"no snp_variants (TDX tuple)": `{"mrtd":"` + strings.Repeat("a", 96) + `"}`,
 		"empty variant list":          `{"snp_variants":[]}`,
@@ -202,7 +202,7 @@ func TestLoadSNPImageManifestRejects(t *testing.T) {
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
-			if _, err := LoadSNPImageManifest(writeManifest(t, body)); err == nil {
+			if _, err := loadSNPImageManifest(writeManifest(t, body)); err == nil {
 				t.Fatal("expected error, got nil")
 			}
 		})
@@ -213,10 +213,10 @@ func TestLoadSNPImageManifestRejects(t *testing.T) {
 // pin. These fixtures are verbatim gate artifacts (confos manifest schema
 // version 3): the TDX tuple nests under "tdx", the SNP set under
 // "snp_variants", and both carry build/inputs/outputs the loaders ignore.
-func TestLoadImageManifestReadsConfosBuild(t *testing.T) {
-	pins, err := LoadImageManifest("testdata/confos-tdx-manifest.json")
+func TestTDXManifestReadsConfosBuild(t *testing.T) {
+	pins, err := loadTDXImageManifest("testdata/confos-tdx-manifest.json")
 	if err != nil {
-		t.Fatalf("LoadImageManifest on a real confos manifest: %v", err)
+		t.Fatalf("loadTDXImageManifest on a real confos manifest: %v", err)
 	}
 	const wantMRTD = "9309eaae9c151e766de0f97b1d1aaeb76b8c8c366080803943fb566521c8f0cf00a142d8b7b0683ed1d42c5a27198ba1"
 	if got := hex.EncodeToString(pins.MRTD[:]); got != wantMRTD {
@@ -228,10 +228,10 @@ func TestLoadImageManifestReadsConfosBuild(t *testing.T) {
 	}
 }
 
-func TestLoadSNPImageManifestReadsConfosBuild(t *testing.T) {
-	pins, err := LoadSNPImageManifest("testdata/confos-snp-manifest.json")
+func TestSNPManifestReadsConfosBuild(t *testing.T) {
+	pins, err := loadSNPImageManifest("testdata/confos-snp-manifest.json")
 	if err != nil {
-		t.Fatalf("LoadSNPImageManifest on a real confos manifest: %v", err)
+		t.Fatalf("loadSNPImageManifest on a real confos manifest: %v", err)
 	}
 	// The build ships one IGVM per supported vCPU count.
 	for _, smp := range []int{2, 4, 8, 16} {
@@ -249,19 +249,19 @@ func TestLoadSNPImageManifestReadsConfosBuild(t *testing.T) {
 // each loader must reject the other platform's real manifest. This is what
 // get-kubeconfig's platform inference rests on.
 func TestLoadersRejectTheOtherPlatformsConfosBuild(t *testing.T) {
-	if _, err := LoadSNPImageManifest("testdata/confos-tdx-manifest.json"); err == nil {
+	if _, err := loadSNPImageManifest("testdata/confos-tdx-manifest.json"); err == nil {
 		t.Error("SNP loader accepted a real TDX manifest")
 	}
-	if _, err := LoadImageManifest("testdata/confos-snp-manifest.json"); err == nil {
+	if _, err := loadTDXImageManifest("testdata/confos-snp-manifest.json"); err == nil {
 		t.Error("TDX loader accepted a real SNP manifest")
 	}
 }
 
 // The duplicate-key guard must follow the tuple into the nested object, or a
 // nested manifest could name a register twice and load the last value.
-func TestLoadImageManifestRejectsDuplicateNestedRegister(t *testing.T) {
+func TestTDXManifestRejectsDuplicateNestedRegister(t *testing.T) {
 	p := writeManifest(t, `{"tdx":{"mrtd":"`+mrtdHex+`","mrtd":"`+strings.Repeat("9f", Size)+`","rtmr1":"`+rtmr1Hex+`","rtmr2":"`+rtmr2Hex+`"}}`)
-	if _, err := LoadImageManifest(p); err == nil || !strings.Contains(err.Error(), "duplicate") {
+	if _, err := loadTDXImageManifest(p); err == nil || !strings.Contains(err.Error(), "duplicate") {
 		t.Fatalf("error = %v, want a duplicate-key rejection", err)
 	}
 }
@@ -269,7 +269,7 @@ func TestLoadImageManifestRejectsDuplicateNestedRegister(t *testing.T) {
 // A repeated "tdx" object must fail the load. encoding/json keeps the last
 // occurrence, so a check that stopped at the first would validate registers
 // the pin never loads.
-func TestLoadImageManifestRejectsDuplicateTDXObject(t *testing.T) {
+func TestTDXManifestRejectsDuplicateTDXObject(t *testing.T) {
 	published := strings.Repeat("a", 96)
 	attacker := strings.Repeat("b", 96)
 	doc := `{"tdx":{"mrtd":"` + published + `","rtmr1":"` + published + `","rtmr2":"` + published + `"},` +
@@ -279,7 +279,7 @@ func TestLoadImageManifestRejectsDuplicateTDXObject(t *testing.T) {
 	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	pins, err := LoadImageManifest(path)
+	pins, err := loadTDXImageManifest(path)
 	if err == nil {
 		t.Fatalf("loaded a manifest with two tdx objects: %x", pins.MRTD)
 	}
@@ -288,12 +288,12 @@ func TestLoadImageManifestRejectsDuplicateTDXObject(t *testing.T) {
 	}
 }
 
-func TestLoadImageManifestRejectsMalformedJSON(t *testing.T) {
+func TestTDXManifestRejectsMalformedJSON(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "manifest.json")
 	if err := os.WriteFile(path, []byte(`[]`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadImageManifest(path); err == nil {
+	if _, err := loadTDXImageManifest(path); err == nil {
 		t.Fatal("loaded a JSON array as an image manifest")
 	}
 }
