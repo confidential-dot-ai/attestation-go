@@ -7,8 +7,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/confidential-dot-ai/attestation-go/apiclient"
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
+	"github.com/confidential-dot-ai/attestation-go/client"
 )
 
 // Serve renders the set as a document describing what a component enforces.
@@ -57,9 +57,9 @@ func ParseServed(data []byte) (ReferenceValues, error) {
 // what decides admission: the digest and its registers. Names are diagnostic
 // only, so two entries that name one image differently are still the same
 // pin.
-func Diff(want, got ReferenceValues) (missing, extra []apiclient.ImagePin) {
-	index := func(rv ReferenceValues) map[string]apiclient.ImagePin {
-		m := make(map[string]apiclient.ImagePin, len(rv.Images))
+func Diff(want, got ReferenceValues) (missing, extra []client.ImagePin) {
+	index := func(rv ReferenceValues) map[string]client.ImagePin {
+		m := make(map[string]client.ImagePin, len(rv.Images))
 		for _, img := range rv.Images {
 			m[tupleKey(img)] = img
 		}
@@ -76,7 +76,7 @@ func Diff(want, got ReferenceValues) (missing, extra []apiclient.ImagePin) {
 			extra = append(extra, img)
 		}
 	}
-	byTuple := func(a, b apiclient.ImagePin) int { return strings.Compare(tupleKey(a), tupleKey(b)) }
+	byTuple := func(a, b client.ImagePin) int { return strings.Compare(tupleKey(a), tupleKey(b)) }
 	slices.SortFunc(missing, byTuple)
 	slices.SortFunc(extra, byTuple)
 	return missing, extra

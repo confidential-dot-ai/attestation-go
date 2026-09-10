@@ -1,4 +1,4 @@
-// Package apiclient is the Go client for attestation-api, the HTTP service that
+// Package client is the Go client for attestation-api, the HTTP service that
 // produces and verifies TEE evidence on a confidential host (the attestation-rs
 // binary).
 //
@@ -14,7 +14,7 @@
 // The /verify verdict is not signed, so the client trusts whatever answers.
 // Prefer a Unix-domain socket inside the trust boundary:
 //
-//	c := apiclient.NewClient("unix:///run/attestation/attest.sock")
+//	c := client.NewClient("unix:///run/attestation/attest.sock")
 //
 // A routable HTTP address lets anything that can influence name resolution or
 // routing answer in the service's place. The socket's owner and mode are
@@ -31,9 +31,9 @@
 //
 // # Testing
 //
-// The apiclienttest subpackage serves a stub attestation-api, so a test drives
+// The mockapi subpackage serves a stub attestation-api, so a test drives
 // a real Client without a confidential host.
-package apiclient
+package client
 
 import (
 	"bytes"

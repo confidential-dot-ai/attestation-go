@@ -1,12 +1,12 @@
-// Package apiclienttest serves a stub attestation-api, so tests of code that
-// talks to the service through [apiclient] need neither a confidential host nor
+// Package mockapi serves a stub attestation-api, so tests of code that
+// talks to the service through [client] need neither a confidential host nor
 // a hand-rolled fake server.
 //
 // [Stub] speaks the wire protocol, not the client's Go API: a test drives a
-// real [apiclient.Client] against the stub's address, so the client's own
+// real [client.Client] against the stub's address, so the client's own
 // encoding, error mapping and enforcement all run. The stub answers over plain
 // HTTP ([New]) or a Unix socket ([NewUnix]), and [Stub.URL] returns an address
-// [apiclient.NewClient] accepts either way. The socket form also exercises the
+// [client.NewClient] accepts either way. The socket form also exercises the
 // ownership and mode checks that transport makes.
 //
 // What the stub models, and what it does not:
@@ -25,4 +25,4 @@
 // the 422 of [VerificationFailed], never as a false verdict field. A false in
 // [Verdict] therefore models a service contradicting itself. Test it, because a
 // caller must fail closed on it, but do not expect that shape in production.
-package apiclienttest
+package mockapi

@@ -10,9 +10,9 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/confidential-dot-ai/attestation-go/apiclient"
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
 	"github.com/confidential-dot-ai/attestation-go/attestation/teeverify"
+	"github.com/confidential-dot-ai/attestation-go/client"
 )
 
 // VerifyOffline verifies the attestation in-process and requires it to bind
@@ -83,38 +83,38 @@ func VerifyCertOffline(cert *x509.Certificate, oid asn1.ObjectIdentifier, nonce 
 // report data comes from [ReportDataForKey], and a policy.ExpectedReportData
 // that disagrees is refused.
 //
-// It goes through [apiclient.Client.VerifyEvidence], which fails closed on the
+// It goes through [client.Client.VerifyEvidence], which fails closed on the
 // verdict and then on the policy's pins, and refuses a platform tag it has no
-// rules for. Its sentinels (apiclient.ErrSignatureInvalid,
-// apiclient.ErrReportDataMismatch, apiclient.ErrMeasurementNotAllowed, …) reach
+// rules for. Its sentinels (client.ErrSignatureInvalid,
+// client.ErrReportDataMismatch, client.ErrMeasurementNotAllowed, …) reach
 // the caller unchanged, so errors.Is reaches them.
 //
 // The response is only as trustworthy as the service: it is not signed, so the
 // service must sit inside the same trust boundary as the caller — a node-local
 // socket or an in-guest loopback endpoint, not a remote URL.
-func VerifyWithService(ctx context.Context, client apiclient.Client, att *Attestation, pub crypto.PublicKey, nonce []byte, policy apiclient.Policy) (apiclient.VerifyResponse, error) {
+func VerifyWithService(ctx context.Context, svc client.Client, att *Attestation, pub crypto.PublicKey, nonce []byte, policy client.Policy) (client.VerifyResponse, error) {
 	env, err := att.Envelope()
 	if err != nil {
-		return apiclient.VerifyResponse{}, err
+		return client.VerifyResponse{}, err
 	}
 	anchor, err := bindingAnchor(pub, nonce, policy.ExpectedReportData)
 	if err != nil {
-		return apiclient.VerifyResponse{}, err
+		return client.VerifyResponse{}, err
 	}
 	policy.ExpectedReportData = anchor
-	return client.VerifyEvidence(ctx, env, policy)
+	return svc.VerifyEvidence(ctx, env, policy)
 }
 
 // VerifyCertWithService verifies the RA-TLS extension cert carries under oid
 // against cert's own public key through an attestation service. Like [VerifyCertOffline] it
 // checks the evidence alone; the certificate's validity and chain remain the
 // caller's to verify.
-func VerifyCertWithService(ctx context.Context, client apiclient.Client, cert *x509.Certificate, oid asn1.ObjectIdentifier, nonce []byte, policy apiclient.Policy) (apiclient.VerifyResponse, error) {
+func VerifyCertWithService(ctx context.Context, svc client.Client, cert *x509.Certificate, oid asn1.ObjectIdentifier, nonce []byte, policy client.Policy) (client.VerifyResponse, error) {
 	att, pub, err := attestationAndKey(cert, oid)
 	if err != nil {
-		return apiclient.VerifyResponse{}, err
+		return client.VerifyResponse{}, err
 	}
-	return VerifyWithService(ctx, client, att, pub, nonce, policy)
+	return VerifyWithService(ctx, svc, att, pub, nonce, policy)
 }
 
 // bindingAnchor returns the report data that pub and nonce must be bound to,

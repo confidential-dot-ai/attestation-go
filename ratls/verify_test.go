@@ -13,9 +13,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/confidential-dot-ai/attestation-go/apiclient"
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
 	"github.com/confidential-dot-ai/attestation-go/attestation/teeverify"
+	"github.com/confidential-dot-ai/attestation-go/client"
 )
 
 // A real Azure SEV-SNP evidence envelope, the shape the extension embeds for a
@@ -108,11 +108,11 @@ func TestVerifyCertOfflineWithoutExtension(t *testing.T) {
 // verifySpy is an attestation service that records the request and answers with
 // a caller-supplied verdict.
 type verifySpy struct {
-	request apiclient.VerifyRequest
+	request client.VerifyRequest
 	result  teetypes.VerificationResult
 }
 
-func (s *verifySpy) client(t *testing.T) apiclient.Client {
+func (s *verifySpy) service(t *testing.T) client.Client {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/verify" {
@@ -124,12 +124,12 @@ func (s *verifySpy) client(t *testing.T) apiclient.Client {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if err := json.NewEncoder(w).Encode(apiclient.VerifyResponse{Result: s.result}); err != nil {
+		if err := json.NewEncoder(w).Encode(client.VerifyResponse{Result: s.result}); err != nil {
 			t.Errorf("encode verify response: %v", err)
 		}
 	}))
 	t.Cleanup(srv.Close)
-	return apiclient.NewClient(srv.URL)
+	return client.NewClient(srv.URL)
 }
 
 // passingVerdict is what a service returns for evidence it accepted, bound to
@@ -152,8 +152,8 @@ func TestVerifyWithServiceSendsKeyAnchor(t *testing.T) {
 	spy := &verifySpy{result: passingVerdict(measurement)}
 	att := &Attestation{TEEType: TEETypeSEVSNP, Report: fakeSNPReport([64]byte{})}
 
-	resp, err := VerifyWithService(context.Background(), spy.client(t), att, &key.PublicKey, nil,
-		apiclient.Policy{Measurements: [][]byte{measurement}})
+	resp, err := VerifyWithService(context.Background(), spy.service(t), att, &key.PublicKey, nil,
+		client.Policy{Measurements: [][]byte{measurement}})
 	if err != nil {
 		t.Fatalf("VerifyWithService: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestVerifyWithServiceNonceChangesAnchor(t *testing.T) {
 	spy := &verifySpy{result: passingVerdict(nil)}
 	att := &Attestation{TEEType: TEETypeSEVSNP, Report: fakeSNPReport([64]byte{})}
 
-	if _, err := VerifyWithService(context.Background(), spy.client(t), att, &key.PublicKey, []byte("nonce"), apiclient.Policy{}); err != nil {
+	if _, err := VerifyWithService(context.Background(), spy.service(t), att, &key.PublicKey, []byte("nonce"), client.Policy{}); err != nil {
 		t.Fatalf("VerifyWithService: %v", err)
 	}
 	bare, err := ReportDataForKey(&key.PublicKey, nil)
@@ -192,7 +192,7 @@ func TestVerifyWithServiceNonceChangesAnchor(t *testing.T) {
 	}
 }
 
-// The verdict and the policy pins both fail closed, and the apiclient sentinels
+// The verdict and the policy pins both fail closed, and the client sentinels
 // reach the caller.
 func TestVerifyWithServiceFailsClosed(t *testing.T) {
 	key := testKey(t)
@@ -202,36 +202,36 @@ func TestVerifyWithServiceFailsClosed(t *testing.T) {
 	cases := []struct {
 		name    string
 		result  teetypes.VerificationResult
-		policy  apiclient.Policy
+		policy  client.Policy
 		wantErr error
 	}{
 		{
 			name:    "invalid signature",
 			result:  teetypes.VerificationResult{SignatureValid: false},
-			wantErr: apiclient.ErrSignatureInvalid,
+			wantErr: client.ErrSignatureInvalid,
 		},
 		{
 			name:    "no report-data verdict",
 			result:  teetypes.VerificationResult{SignatureValid: true},
-			wantErr: apiclient.ErrReportDataMismatch,
+			wantErr: client.ErrReportDataMismatch,
 		},
 		{
 			name:    "measurement outside the pin",
 			result:  passingVerdict(bytes.Repeat([]byte{0x43}, sha512.Size384)),
-			policy:  apiclient.Policy{Measurements: [][]byte{measurement}},
-			wantErr: apiclient.ErrMeasurementNotAllowed,
+			policy:  client.Policy{Measurements: [][]byte{measurement}},
+			wantErr: client.ErrMeasurementNotAllowed,
 		},
 		{
 			name:    "register pinned on a platform without registers",
 			result:  passingVerdict(measurement),
-			policy:  apiclient.Policy{RTMRs: map[int][]byte{1: measurement}},
-			wantErr: apiclient.ErrRTMRNotAllowed,
+			policy:  client.Policy{RTMRs: map[int][]byte{1: measurement}},
+			wantErr: client.ErrRTMRNotAllowed,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			spy := &verifySpy{result: tc.result}
-			_, err := VerifyWithService(context.Background(), spy.client(t), att, &key.PublicKey, nil, tc.policy)
+			_, err := VerifyWithService(context.Background(), spy.service(t), att, &key.PublicKey, nil, tc.policy)
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("err = %v, want %v", err, tc.wantErr)
 			}
@@ -244,8 +244,8 @@ func TestVerifyWithServiceRefusesConflictingReportData(t *testing.T) {
 	spy := &verifySpy{result: passingVerdict(nil)}
 	att := &Attestation{TEEType: TEETypeSEVSNP, Report: fakeSNPReport([64]byte{})}
 
-	_, err := VerifyWithService(context.Background(), spy.client(t), att, &key.PublicKey, nil,
-		apiclient.Policy{ExpectedReportData: bytes.Repeat([]byte{0xAA}, sha512.Size384)})
+	_, err := VerifyWithService(context.Background(), spy.service(t), att, &key.PublicKey, nil,
+		client.Policy{ExpectedReportData: bytes.Repeat([]byte{0xAA}, sha512.Size384)})
 	if err == nil || !strings.Contains(err.Error(), "does not bind the key") {
 		t.Fatalf("err = %v, want a refusal of the caller-set report data", err)
 	}
@@ -261,7 +261,7 @@ func TestVerifyCertWithServiceBindsCertKey(t *testing.T) {
 	cert, key := certWithExtension(t, att)
 	spy := &verifySpy{result: passingVerdict(nil)}
 
-	if _, err := VerifyCertWithService(context.Background(), spy.client(t), cert, testOID, nil, apiclient.Policy{}); err != nil {
+	if _, err := VerifyCertWithService(context.Background(), spy.service(t), cert, testOID, nil, client.Policy{}); err != nil {
 		t.Fatalf("VerifyCertWithService: %v", err)
 	}
 	anchor, err := ReportDataForKey(&key.PublicKey, nil)
@@ -277,7 +277,7 @@ func TestVerifyCertWithServiceBindsCertKey(t *testing.T) {
 func TestVerifyCertWithServiceWithoutExtension(t *testing.T) {
 	cert, _ := certWithExtension(t, nil)
 	spy := &verifySpy{result: passingVerdict(nil)}
-	_, err := VerifyCertWithService(context.Background(), spy.client(t), cert, testOID, nil, apiclient.Policy{})
+	_, err := VerifyCertWithService(context.Background(), spy.service(t), cert, testOID, nil, client.Policy{})
 	if !errors.Is(err, ErrNoAttestation) {
 		t.Fatalf("err = %v, want ErrNoAttestation", err)
 	}

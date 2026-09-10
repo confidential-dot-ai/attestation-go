@@ -6,9 +6,9 @@ import "errors"
 // [errors.Is].
 //
 // Verification failures are not among them: [VerifyOffline] surfaces the
-// verifier's own error, and [VerifyWithService] wraps the apiclient sentinels
-// (apiclient.ErrSignatureInvalid, apiclient.ErrReportDataMismatch,
-// apiclient.ErrMeasurementNotAllowed, …) so errors.Is reaches them unchanged.
+// verifier's own error, and [VerifyWithService] wraps the client sentinels
+// (client.ErrSignatureInvalid, client.ErrReportDataMismatch,
+// client.ErrMeasurementNotAllowed, …) so errors.Is reaches them unchanged.
 var (
 	// ErrUnsupportedTEE reports a TEE this package has no rules for: an
 	// unknown wire value in the extension, or a platform tag that maps to

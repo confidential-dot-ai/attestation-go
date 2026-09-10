@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/confidential-dot-ai/attestation-go/apiclient"
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
+	"github.com/confidential-dot-ai/attestation-go/client"
 )
 
 const (
@@ -180,7 +180,7 @@ func TestFormatParseRoundTrip(t *testing.T) {
 func TestFormatFieldNames(t *testing.T) {
 	snp, err := Format(ReferenceValues{
 		Family: teetypes.FamilySNP,
-		Images: []apiclient.ImagePin{{Name: "a", Digest: mustHex(t, d1)}},
+		Images: []client.ImagePin{{Name: "a", Digest: mustHex(t, d1)}},
 	})
 	if err != nil {
 		t.Fatalf("Format: %v", err)
@@ -192,7 +192,7 @@ func TestFormatFieldNames(t *testing.T) {
 	}
 	tdx, err := Format(ReferenceValues{
 		Family: teetypes.FamilyTDX,
-		Images: []apiclient.ImagePin{{Name: "a", Digest: mustHex(t, d1), RTMRs: map[int][]byte{1: mustHex(t, r1)}}},
+		Images: []client.ImagePin{{Name: "a", Digest: mustHex(t, d1), RTMRs: map[int][]byte{1: mustHex(t, r1)}}},
 	})
 	if err != nil {
 		t.Fatalf("Format: %v", err)
@@ -212,14 +212,14 @@ func TestFormatRejects(t *testing.T) {
 		rv   ReferenceValues
 		want string
 	}{
-		{"unknown tee", ReferenceValues{Family: "sev", Images: []apiclient.ImagePin{{Name: "a", Digest: make([]byte, DigestSize)}}}, "tee"},
-		{"rtmr on an snp image", ReferenceValues{Family: teetypes.FamilySNP, Images: []apiclient.ImagePin{
+		{"unknown tee", ReferenceValues{Family: "sev", Images: []client.ImagePin{{Name: "a", Digest: make([]byte, DigestSize)}}}, "tee"},
+		{"rtmr on an snp image", ReferenceValues{Family: teetypes.FamilySNP, Images: []client.ImagePin{
 			{Name: "a", Digest: make([]byte, DigestSize), RTMRs: map[int][]byte{1: make([]byte, DigestSize)}},
 		}}, "rtmr"},
-		{"rtmr index out of range", ReferenceValues{Family: teetypes.FamilyTDX, Images: []apiclient.ImagePin{
+		{"rtmr index out of range", ReferenceValues{Family: teetypes.FamilyTDX, Images: []client.ImagePin{
 			{Name: "a", Digest: make([]byte, DigestSize), RTMRs: map[int][]byte{7: make([]byte, DigestSize)}},
 		}}, "rtmr[7]"},
-		{"rtmr zero pinned", ReferenceValues{Family: teetypes.FamilyTDX, Images: []apiclient.ImagePin{
+		{"rtmr zero pinned", ReferenceValues{Family: teetypes.FamilyTDX, Images: []client.ImagePin{
 			{Name: "a", Digest: make([]byte, DigestSize), RTMRs: map[int][]byte{0: make([]byte, DigestSize)}},
 		}}, "rtmr[0]"},
 	}

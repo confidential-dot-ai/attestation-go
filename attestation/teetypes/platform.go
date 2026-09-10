@@ -35,7 +35,7 @@ func (f Family) String() string {
 
 // DefaultPlatform returns the bare-metal platform tag for the family. A config
 // that names only a family needs it wherever an API demands a tag: opening a
-// runtimemeasure.Register, or filling an apiclient.AttestRequest.
+// runtimemeasure.Register, or filling an client.AttestRequest.
 //
 // A cloud overlay is never the default, since it names the same silicon and
 // verifies identically; a guest that must announce az-snp or gcp-tdx says so

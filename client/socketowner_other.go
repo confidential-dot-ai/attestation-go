@@ -1,6 +1,6 @@
 //go:build !unix
 
-package apiclient
+package client
 
 import (
 	"fmt"

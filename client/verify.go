@@ -1,4 +1,4 @@
-package apiclient
+package client
 
 import (
 	"bytes"
@@ -20,40 +20,40 @@ import (
 var (
 	// ErrSignatureInvalid: the service reported the hardware signature chain
 	// does not verify.
-	ErrSignatureInvalid = errors.New("apiclient: attestation signature invalid")
+	ErrSignatureInvalid = errors.New("client: attestation signature invalid")
 
 	// ErrReportDataMismatch: the evidence does not bind the expected
 	// report data (absent or false verdict).
-	ErrReportDataMismatch = errors.New("apiclient: report data mismatch in attestation evidence")
+	ErrReportDataMismatch = errors.New("client: report data mismatch in attestation evidence")
 
 	// ErrMeasurementNotAllowed: the verified launch measurement is absent or
 	// matches none of the caller's reference values while some are pinned.
-	ErrMeasurementNotAllowed = errors.New("apiclient: launch measurement not allowed")
+	ErrMeasurementNotAllowed = errors.New("client: launch measurement not allowed")
 
 	// ErrInvalidLaunchDigest: the response carried a launch digest that is not
 	// hex or not measurement-sized — malformed, distinct from a policy miss.
-	ErrInvalidLaunchDigest = errors.New("apiclient: launch digest malformed")
+	ErrInvalidLaunchDigest = errors.New("client: launch digest malformed")
 
 	// ErrRTMRNotAllowed: a pinned runtime measurement register is absent,
 	// malformed, or does not match what the policy pins.
-	ErrRTMRNotAllowed = errors.New("apiclient: RTMR not allowed")
+	ErrRTMRNotAllowed = errors.New("client: RTMR not allowed")
 
 	// ErrMinTcbNotAllowed: the policy floors the SEV-SNP TCB but the evidence
 	// is from another family, where the floor pins nothing.
-	ErrMinTcbNotAllowed = errors.New("apiclient: TCB floor not allowed")
+	ErrMinTcbNotAllowed = errors.New("client: TCB floor not allowed")
 
 	// ErrPCRNotAllowed: a pinned vTPM platform configuration register is
 	// absent, malformed, not covered by the quote's signed selection, or does
 	// not match what the policy pins.
-	ErrPCRNotAllowed = errors.New("apiclient: vTPM PCR not allowed")
+	ErrPCRNotAllowed = errors.New("client: vTPM PCR not allowed")
 
 	// ErrInitDataMismatch: the request pinned an init-data hash and the
 	// verdict is absent or false.
-	ErrInitDataMismatch = errors.New("apiclient: init data mismatch in attestation evidence")
+	ErrInitDataMismatch = errors.New("client: init data mismatch in attestation evidence")
 
 	// ErrUnsupportedPlatform: the envelope names a platform with no
 	// verification rules here, so verification fails closed.
-	ErrUnsupportedPlatform = errors.New("apiclient: unsupported platform for evidence verification")
+	ErrUnsupportedPlatform = errors.New("client: unsupported platform for evidence verification")
 )
 
 // Policy is what [Client.VerifyEvidence] enforces on top of the service's
