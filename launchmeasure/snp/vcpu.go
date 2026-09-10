@@ -19,9 +19,9 @@ func VCPUSignature(family, model, stepping uint32) uint32 {
 	return familyHigh<<20 | (model>>4&0xF)<<16 | familyLow<<8 | (model&0xF)<<4 | stepping&0xF
 }
 
-// vcpuTypes maps a QEMU -cpu model name to the signature that lands in RDX of
-// every VMSA, so picking the wrong one silently changes the digest. Upstream's
-// table, plus EPYC-Turin, which it lacks.
+// vcpuTypes maps a QEMU -cpu model name to the signature written into RDX of
+// every VMSA, so the wrong entry silently changes the digest. It is upstream's
+// table plus EPYC-Turin, which that table lacks.
 var vcpuTypes = knownVCPUTypes()
 
 func knownVCPUTypes() map[string]uint32 {
@@ -32,8 +32,8 @@ func knownVCPUTypes() map[string]uint32 {
 	return m
 }
 
-// VCPUSignatureByName resolves a QEMU -cpu model name to its signature.
-// Unknown names are an error: guessing one would silently move the digest.
+// VCPUSignatureByName resolves a QEMU -cpu model name to its signature. An
+// unknown name is an error: a guessed signature moves the digest silently.
 func VCPUSignatureByName(name string) (uint32, error) {
 	sig, ok := vcpuTypes[name]
 	if !ok {

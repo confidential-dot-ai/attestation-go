@@ -84,7 +84,7 @@ digest differs and verification fails silently.
 An in-guest daemon that must extend exactly once per workload, across its own
 restarts, keeps a `Journal`: a log of digests already extended, written before
 each extend and reconciled against the register on open. A crash between the
-two can only under-extend, which the open repairs; a register that matches
+two can only under-extend, which the open repairs. A register that matches
 neither fold reports `ErrRegisterDiverged` and refuses further extends.
 
 ```go
@@ -104,7 +104,8 @@ err = runtimemeasure.VerifyBinding(res, anchor, workloadDigests)       // RTMR[3
 
 `InitDataAnchor` reads the 32-byte init-data digest back out of a verified
 result — SEV-SNP HOST_DATA verbatim, TDX MRCONFIGID with its zero padding
-checked — for a guest asking what document it was launched with.
+checked — for a guest asking which document it was launched with.
+
 ## attestation-api client (`apiclient`)
 
 `teeverify` verifies evidence in this process. `apiclient` is the alternative:
@@ -243,16 +244,17 @@ platform without registers. A mixed fleet keeps one `Policy` per family.
 | `gcp-snp`, `gcp-tdx` | ✅ verify | identical to bare-metal; platform tag is an attester claim, not proof of GCP origin |
 | `dstack` | ⬜ not yet | — |
 
-Limitations: collateral (CRL / Intel TCB status / QE identity) requires a network
-`Getter` and is skipped offline (`CollateralVerified=false`); guest-side
-generation (`attest`) for the envelope platforms is not implemented (verify
-only — launch-measurement *prediction* is, see `launchmeasure`); Turin FMC TCB and Genoa-family model `0xA0` (Bergamo/Siena) offline root
-selection are gated by go-sev-guest support.
+Limitations: collateral (CRL / Intel TCB status / QE identity) requires a
+network `Getter` and is skipped offline (`CollateralVerified=false`);
+guest-side generation (`attest`) for the envelope platforms is not implemented,
+so these platforms verify only — launch-measurement *prediction* is
+implemented, see `launchmeasure`; Turin FMC TCB and Genoa-family model `0xA0`
+(Bergamo/Siena) offline root selection are gated by go-sev-guest support.
 
 ## Reference values (`refvalues`)
 
 A verifier compares evidence against the images a deployment accepts. This
-package owns that set in its three shapes — the measurements config file, the
+package holds that set in its three shapes — the measurements config file, the
 flat digest and register lists older flags carry, and a build manifest — and
 converts any of them into the `apiclient.Policy` the service enforces:
 
@@ -270,7 +272,7 @@ platform tag parses through `teetypes.ParseFamily`).
 ## RA-TLS (`ratls`)
 
 An X.509 extension, under an OID the caller assigns, that binds a TLS key to a
-TEE: REPORTDATA is SHA-384 over the public key, and the evidence rides in the
+TEE: REPORTDATA is SHA-384 over the public key, and the evidence travels in the
 certificate. Bare-metal and GCP SEV-SNP embed the raw AMD report; every other
 platform embeds the JSON envelope, with the TDX event log stripped so the
 certificate fits a TLS record.
@@ -289,8 +291,8 @@ Certificate lifecycle — issuance, rotation, TLS configs — is the caller's.
 
 ## Launch measurement prediction (`launchmeasure/snp`, `launchmeasure/tdx`)
 
-The produce side of the reference values above: what a guest image *will*
-measure, computed offline from the firmware and boot artifacts.
+The producing side of the preceding reference values: what a guest image
+*will* measure, computed offline from the firmware and boot artifacts.
 
 ```go
 digest, err := snp.LaunchDigest(snp.Config{FirmwarePath: "OVMF.fd", VCPUs: 4, VCPUSig: sig, KernelHashes: &kh})
@@ -298,9 +300,9 @@ mrtd, err := tdx.MRTD(tdvfBytes)
 ```
 
 An SNP launch digest is per guest shape (vCPU count, kernel hashes); a TDX
-MRTD is per TDVF build, with the guest reaching RTMR[0..2]. These two packages
-pull `sev-snp-measure-go` and `gce-tcb-verifier`; nothing else in the module
-depends on them.
+MRTD is per TDVF build, with the guest measuring into RTMR[0..2] instead. These
+two packages pull `sev-snp-measure-go` and `gce-tcb-verifier`; nothing else in
+the module depends on them.
 
 ## Test stub (`apiclient/apiclienttest`)
 

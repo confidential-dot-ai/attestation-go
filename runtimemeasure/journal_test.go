@@ -203,8 +203,8 @@ func TestJournalDivergenceRefusesToExtend(t *testing.T) {
 }
 
 // Lines that are not canonical digests are skipped and reported: a partial
-// last line is what a crash mid-append leaves, and refusing to open would
-// leave the guest unable to measure anything for the rest of its life.
+// last line is what a crash mid-append leaves, and refusing to open would stop
+// the guest measuring anything for the rest of the boot.
 func TestJournalSkipsMalformedLines(t *testing.T) {
 	nodePath, journalPath := journalPaths(t)
 	node := newNode(t, nodePath, FromDigests([]string{digestA}))

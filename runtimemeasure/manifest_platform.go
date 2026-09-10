@@ -27,8 +27,8 @@ type manifestHeader struct {
 // "build.platform" field: one family, or both for a "multi" image built for
 // SNP and TDX from one source tree. A multi manifest lists TDX first.
 //
-// This reads the declaration, not the measurements: a manifest can name a
-// platform whose pins fail to load. Callers that only need the pins use
+// It reads the declaration, not the measurements: a manifest can name a
+// platform whose pins fail to load. A caller that only needs the pins uses
 // [LoadAnyImageManifest], which detects the family from the pins themselves and
 // works on hand-written manifests with no header at all.
 func ManifestFamilies(path string) ([]teetypes.Family, error) {
@@ -60,10 +60,9 @@ func ManifestFamilies(path string) ([]teetypes.Family, error) {
 // platform. The manifest's shape decides: a TDX build publishes the
 // mrtd/rtmr1/rtmr2 tuple, an SNP build publishes the per-SMP launch digests.
 //
-// A "multi" manifest carries both, and TDX wins. That is also why TDX is tried
-// first for the error text: a file that is neither reports why it is not a TDX
-// pin, which is the more informative half. Load the SNP half of a multi image
-// explicitly with [LoadSNPImageManifest].
+// A "multi" manifest carries both, and TDX is tried first, so a multi manifest
+// loads as TDX and a file that is neither reports why it is not a TDX pin. Load
+// the SNP half of a multi image explicitly with [LoadSNPImageManifest].
 func LoadAnyImageManifest(path string) (ImageIdentity, error) {
 	pins, tdxErr := LoadImageManifest(path)
 	if tdxErr == nil {

@@ -72,9 +72,9 @@ func LaunchDigest(cfg Config) ([]byte, error) {
 	return ld.LD(), nil
 }
 
-// FirmwareDigest returns the launch digest after only the OVMF image has been
-// measured. It is the expensive, guest-independent prefix of LaunchDigest:
-// callers measuring many pod shapes against one firmware can compute it once.
+// FirmwareDigest returns the launch digest with only the OVMF image measured.
+// It is the expensive, guest-independent prefix of LaunchDigest: a caller
+// measuring many pod shapes against one firmware computes it once.
 func FirmwareDigest(firmwarePath string) ([]byte, error) {
 	fw, err := openFirmware(firmwarePath)
 	if err != nil {
@@ -118,9 +118,9 @@ func openFirmware(path string) (fw *ovmf.OVMF, err error) {
 	return &img, nil
 }
 
-// measureMetadata walks OVMF's SEV metadata sections in file order, which is the
-// order the VMM populates them in. It is upstream's guest.snpUpdateMetadataPages
-// plus the SNP_KERNEL_HASHES case, which upstream rejects.
+// measureMetadata walks OVMF's SEV metadata sections in file order, the order
+// the VMM populates them in. It is upstream's guest.snpUpdateMetadataPages plus
+// the SNP_KERNEL_HASHES case, which upstream rejects.
 func measureMetadata(ld *gctx.GCTX, fw *ovmf.OVMF, kh *KernelHashes) error {
 	sawKernelHashes := false
 	for _, s := range fw.MetadataItems() {
@@ -170,9 +170,9 @@ func measureMetadata(ld *gctx.GCTX, fw *ovmf.OVMF, kh *KernelHashes) error {
 	return nil
 }
 
-// hashTableOffset is where inside its page OVMF expects QEMU's hash table. Only
-// the offset reaches the measurement; the page comes from the metadata section.
-// Without SEV_HASH_TABLE_RV the offset is unknown, and 0 would be a
+// hashTableOffset returns where inside its page OVMF expects QEMU's hash table.
+// Only the offset reaches the measurement; the page comes from the metadata
+// section. Without SEV_HASH_TABLE_RV the offset is unknown, and 0 would be a
 // plausible-looking wrong answer.
 func hashTableOffset(fw *ovmf.OVMF) (uint64, error) {
 	errNoRV := errors.New("OVMF has no SEV_HASH_TABLE_RV entry to place the kernel hashes table")
@@ -222,8 +222,9 @@ func NewKernelHashes(kernel, initrd []byte, cmdline string) KernelHashes {
 	}
 }
 
-// KernelHashesFromFiles is NewKernelHashes over files, streaming rather than
-// loading multi-MiB artifacts. An empty initrdPath means "no initrd".
+// KernelHashesFromFiles is NewKernelHashes over files, streaming them rather
+// than loading multi-MiB artifacts into memory. An empty initrdPath means "no
+// initrd".
 func KernelHashesFromFiles(kernelPath, initrdPath, cmdline string) (*KernelHashes, error) {
 	kh := KernelHashes{Cmdline: sha256.Sum256(append([]byte(cmdline), 0))}
 	var err error

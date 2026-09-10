@@ -3,10 +3,10 @@
 // atomic tuple of launch digest and runtime registers.
 //
 // A launch digest and its registers only mean anything together — two images
-// built against the same TDVF firmware share an MRTD — so an image is matched
-// whole or not at all. The pinned image is [apiclient.ImagePin], the same type
-// [apiclient.Policy] enforces, so a reference set is never re-spelled on the
-// way to the verifier.
+// built against the same TDVF firmware share an MRTD — so an image matches
+// whole or not at all. A pinned image is an [apiclient.ImagePin], the type
+// [apiclient.Policy] enforces, so a reference set is never restated on its way
+// to the verifier.
 //
 // The package owns three shapes of the same thing:
 //

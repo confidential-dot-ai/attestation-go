@@ -19,8 +19,8 @@ var ErrNoAnchor = errors.New("init-data claim is not an anchor digest")
 // in its init-data claim: the digest of the init-data document the guest was
 // launched with.
 //
-// The two families carry the same 32 bytes in fields of different widths, and
-// this resolves the difference:
+// The two families carry the same 32 bytes in fields of different widths,
+// which InitDataAnchor resolves:
 //
 //   - AMD SEV-SNP puts it in HOST_DATA, which is 32 bytes wide: verbatim.
 //   - Intel TDX puts it in MRCONFIGID, which is 48 bytes wide: the anchor
@@ -32,9 +32,8 @@ var ErrNoAnchor = errors.New("init-data claim is not an anchor digest")
 // what the field should hold.
 //
 // Like [Binding] it takes a whole result, because an unverified init-data claim
-// is host-chosen on both platforms, and it refuses az-snp for the same reason:
-// there the paravisor owns HOST_DATA, so the field says nothing about the
-// guest's init data.
+// is host-chosen on both platforms. It refuses az-snp, where the paravisor owns
+// HOST_DATA and the field says nothing about the guest's init data.
 func InitDataAnchor(r *teetypes.VerificationResult) ([]byte, error) {
 	if err := checkVerified(r); err != nil {
 		return nil, err

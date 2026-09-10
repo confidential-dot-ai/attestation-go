@@ -76,12 +76,12 @@ func VerifyEvidence(ev SnpEvidence, params teetypes.VerifyParams, opts Options) 
 // VerifyEvidenceContext verifies a bare-metal SNP evidence envelope and returns
 // normalized claims.
 //
-// An inline cert_chain.vcek is the offline path: the endorsement key travels
+// An inline cert_chain.vcek is the offline path: the endorsement key arrives
 // with the report and nothing is fetched. Evidence that omits it — a bare
 // RA-TLS serving cert carries the report alone — needs opts.Getter, and the
-// VCEK is then fetched from AMD KDS bounded by ctx. Without a Getter a missing
-// VCEK is an error: offline stays offline rather than silently reaching the
-// network.
+// VCEK is then fetched from AMD KDS within ctx. Without a Getter, a missing
+// VCEK is an error: offline verification never reaches the network on its
+// own.
 func VerifyEvidenceContext(ctx context.Context, ev SnpEvidence, params teetypes.VerifyParams, opts Options) (*teetypes.VerificationResult, error) {
 	inlineVCEK := ev.CertChain != nil && ev.CertChain.Vcek != ""
 	if !inlineVCEK && opts.Getter == nil {
@@ -101,8 +101,8 @@ func VerifyEvidenceContext(ctx context.Context, ev SnpEvidence, params teetypes.
 }
 
 // KDS fetch defaults, applied by DefaultKDSGetter to a non-positive argument.
-// AMD KDS rate-limits (HTTP 429), so a getter that gives up at the first
-// failure turns a routine throttle into an unverifiable guest.
+// AMD KDS rate-limits (HTTP 429), so a getter that stops at the first failure
+// turns a routine throttle into an unverifiable guest.
 const (
 	DefaultKDSMaxFetch      = 2 * time.Minute
 	DefaultKDSMaxRetryDelay = 8 * time.Second
@@ -111,11 +111,11 @@ const (
 // DefaultKDSGetter returns the collateral getter to put in Options.Getter: an
 // HTTPS client wrapped in go-sev-guest's retry policy.
 //
-// maxFetch bounds the whole fetch including retries and maxRetryDelay caps the
-// backoff between attempts; a non-positive value takes the corresponding
-// Default constant, since a zero MaxRetryDelay makes go-sev-guest retry in a
-// tight loop. The context passed to VerifyReportContext bounds the fetch too —
-// whichever deadline comes first wins.
+// maxFetch bounds the whole fetch including retries, and maxRetryDelay caps the
+// backoff between attempts. A non-positive value takes the corresponding
+// Default constant, because a zero MaxRetryDelay makes go-sev-guest retry in a
+// tight loop. The context passed to VerifyReportContext also bounds the fetch;
+// the earlier deadline wins.
 func DefaultKDSGetter(maxFetch, maxRetryDelay time.Duration) trust.HTTPSGetter {
 	if maxFetch <= 0 {
 		maxFetch = DefaultKDSMaxFetch

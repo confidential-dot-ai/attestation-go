@@ -100,7 +100,7 @@ func TestStubAttestRecordsAndReturnsSNPEvidence(t *testing.T) {
 	}
 }
 
-// Report data wider than the hardware field is clamped, not an error: the
+// Report data wider than the hardware field is truncated, not an error: the
 // stub answers what the hardware would.
 func TestFakeSNPEvidenceClampsReportDataToTheField(t *testing.T) {
 	oversize := bytes.Repeat([]byte{0xAB}, 100)

@@ -14,8 +14,8 @@ import (
 // self-contained, so a verifier needs no evidence schema and no service. Every
 // other platform keeps its envelope, because the binding it proves lives
 // outside the hardware report — in the vTPM quote on Azure, in Intel
-// collateral for TDX. The two shapes are told apart on parse, so both ride
-// under one OID.
+// collateral for TDX. The two shapes are told apart on parse, so one OID
+// carries both.
 //
 // Native TDX evidence loses its cc_eventlog (see [stripTDXEventlog]). The
 // Azure overlays keep theirs: their evidence is a different object, and
@@ -65,14 +65,14 @@ func NewAttestation(env teetypes.AttestationEvidence) (*Attestation, error) {
 // stripTDXEventlog drops cc_eventlog from native TDX evidence, keeping the
 // quote.
 //
-// A bare-metal TDX event log runs to ~85 KB. That pushes the certificate past
-// the 16 KB ceiling on a TLS 1.3 handshake record, and crypto/tls answers with
+// A bare-metal TDX event log runs to ~85 KB, which pushes the certificate past
+// the 16 KB ceiling on a TLS 1.3 handshake record; crypto/tls then answers with
 // an internal_error alert rather than a diagnosable failure. The quote carries
-// the RTMR values a policy pins; replaying the log against them is a separate
-// job for a verifier that fetches it out of band.
+// the RTMR values a policy pins, so a verifier that wants the log fetches it
+// out of band and replays it there.
 //
-// It re-marshals from a declared struct rather than deleting a JSON key, so a
-// field added to the evidence schema cannot slip into a certificate unnoticed.
+// Re-marshaling from a declared struct, rather than deleting a JSON key, keeps
+// a field added to the evidence schema from reaching a certificate unnoticed.
 func stripTDXEventlog(raw json.RawMessage) (json.RawMessage, error) {
 	var body struct {
 		Quote string `json:"quote"`

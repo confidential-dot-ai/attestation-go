@@ -25,7 +25,7 @@
 // Callers that only need "was this guest launched with my anchor" use
 // [VerifyBinding], which resolves the difference and never asks the caller
 // which platform it is on. Callers driving the register directly (an in-guest
-// measurer) use [Register], and [Journal] on top of it to keep those extends
+// measurer) use [Register], with [Journal] on top of it to keep those extends
 // exactly-once across restarts. Callers pinning which image booted, rather than
 // what it did afterwards, use [ImageIdentity].
 //

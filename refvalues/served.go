@@ -11,9 +11,9 @@ import (
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
 )
 
-// Serve renders the set as a document describing what a component is
-// enforcing. It accepts an empty set, which [Format] does not: "pinning
-// nothing" is exactly the state a verifier most needs reported.
+// Serve renders the set as a document describing what a component enforces.
+// Unlike [Format] it accepts an empty set: a component that pins nothing is
+// the state an operator most needs reported.
 func Serve(rv ReferenceValues) ([]byte, error) {
 	if len(rv.Images) == 0 {
 		f := wire{SchemaVersion: SchemaVersion1, TEE: string(rv.Family), Measurements: []wireImage{}}
@@ -27,10 +27,9 @@ func Serve(rv ReferenceValues) ([]byte, error) {
 }
 
 // ParseServed decodes a document a component serves to describe the reference
-// values it is enforcing. Unlike [Parse] it tolerates an empty set — a
-// component enforcing nothing is a report a verifier must be able to read and
-// act on, not a document to reject — and it is not the path an operator's own
-// file takes.
+// values it enforces. Unlike [Parse] it accepts an empty set, because a
+// component that enforces nothing must still be readable. An operator's own
+// config file takes [Parse] instead.
 func ParseServed(data []byte) (ReferenceValues, error) {
 	var f wire
 	if err := json.NewDecoder(bytes.NewReader(data)).Decode(&f); err != nil {
@@ -55,8 +54,9 @@ func ParseServed(data []byte) (ReferenceValues, error) {
 }
 
 // Diff reports the images each side pins and the other does not, matched on
-// what decides admission — the digest and its registers. Names are diagnostic
-// only, so two entries naming one image differently are still the same pin.
+// what decides admission: the digest and its registers. Names are diagnostic
+// only, so two entries that name one image differently are still the same
+// pin.
 func Diff(want, got ReferenceValues) (missing, extra []apiclient.ImagePin) {
 	index := func(rv ReferenceValues) map[string]apiclient.ImagePin {
 		m := make(map[string]apiclient.ImagePin, len(rv.Images))

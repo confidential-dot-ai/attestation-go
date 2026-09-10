@@ -19,9 +19,9 @@ const DigestSize = runtimemeasure.Size
 const MaxRTMRs = 4
 
 // ReferenceValues is what a verifier compares evidence against: the guest
-// images one deployment accepts, on one TEE family. Verifiers that cannot
-// express a whole tuple flatten these back with [ReferenceValues.Flatten], so
-// none is left reading a form the operator did not set.
+// images one deployment accepts, on one TEE family. A verifier that cannot
+// express a whole tuple flattens the set with [ReferenceValues.Flatten], which
+// reports whether the flat form lost any pin.
 type ReferenceValues struct {
 	// Family is the hardware TEE the images were built for. One reference set
 	// covers one family: a deployment mixing SNP and TDX images needs one set
@@ -38,8 +38,8 @@ type ReferenceValues struct {
 func (rv ReferenceValues) Empty() bool { return len(rv.Images) == 0 }
 
 // Policy returns the verification policy these reference values express.
-// Every caller goes through here: a hand-copied conversion that forgets a
-// field drops those pins while still compiling.
+// Convert through it: a hand-written conversion that misses a field drops
+// those pins and still compiles.
 //
 // Registers pinned without any digest have no image form (see [FromFlags]);
 // a caller holding those sets Policy.RTMRs itself.
@@ -78,8 +78,9 @@ func (rv ReferenceValues) DigestSet() map[string]bool {
 }
 
 // CommonRTMRs returns the register pins shared by every image, and whether the
-// images agree. A verifier that cannot express per-image tuples takes this;
-// when uniform is false it must say so rather than silently dropping the pins.
+// images agree. A verifier that cannot express per-image tuples takes these
+// pins; when uniform is false it must report that rather than drop them
+// silently.
 func (rv ReferenceValues) CommonRTMRs() (common map[int][]byte, uniform bool) {
 	if len(rv.Images) == 0 {
 		return nil, true
@@ -93,9 +94,9 @@ func (rv ReferenceValues) CommonRTMRs() (common map[int][]byte, uniform bool) {
 	return first, true
 }
 
-// Flatten renders the set in the flat shape an interface that carries a digest
-// list and one register map understands: every pinned digest as lowercase hex,
-// plus the registers all images agree on.
+// Flatten renders the set for an interface that carries a digest list and one
+// register map: every pinned digest as lowercase hex, plus the registers all
+// images agree on.
 //
 // uniform is false when the images pin different registers, in which case
 // rtmrs is nil and the flat form is digest-only. The caller warns; this
@@ -107,8 +108,8 @@ func (rv ReferenceValues) Flatten() (digests []string, rtmrs map[int][]byte, uni
 
 // FromFlags converts the legacy flat pins into images: every digest carries
 // the same registers, which is what the flat form enforced. Registers pinned
-// without any digest have no image form and stay on the flat path, so the
-// result of FromFlags(nil, rtmrs) pins nothing.
+// without any digest have no image form and stay on the flat path, so
+// FromFlags(nil, rtmrs) pins nothing.
 func FromFlags(digests [][]byte, rtmrs map[int][]byte) ReferenceValues {
 	images := make([]apiclient.ImagePin, 0, len(digests))
 	for _, d := range digests {

@@ -19,7 +19,7 @@ import (
 // RTMR[3] is extended at runtime, so neither is ever pinned from a manifest.
 //
 // A family this package has no manifest shape for is an error, so a caller
-// cannot end up with an empty pin set that reads as "nothing to enforce".
+// never ends up with an empty pin set that reads as "nothing to enforce".
 func FromImageManifest(path, name string, fam teetypes.Family) ([]apiclient.ImagePin, error) {
 	switch fam {
 	case teetypes.FamilySNP:

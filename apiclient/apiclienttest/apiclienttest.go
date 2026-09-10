@@ -111,8 +111,8 @@ func NewUnix(t testing.TB) *Stub {
 	}
 	s := newStub()
 	s.server = httptest.NewUnstartedServer(s.handler())
-	// Swap in the socket listener before Start, and close the TCP one
-	// httptest opened for us so nothing is left listening on a port.
+	// Swap in the socket listener before Start, and close the TCP listener
+	// httptest opened, so nothing is left listening on a port.
 	_ = s.server.Listener.Close()
 	s.server.Listener = ln
 	s.server.Start()
@@ -141,7 +141,7 @@ func (s *Stub) URL() string { return s.url }
 // the service unreachable mid-test. Closing twice is harmless.
 func (s *Stub) Close() { s.server.Close() }
 
-// SetVerdict swaps the verdict /verify answers with.
+// SetVerdict replaces the verdict /verify answers.
 func (s *Stub) SetVerdict(v Verdict) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -209,13 +209,14 @@ func (s *Stub) handleAttest(w http.ResponseWriter, r *http.Request) {
 }
 
 // FakeSNPEvidence builds the evidence /attest answers: a minimal SEV-SNP report
-// — version 2, SMT-allowed policy, reportData clamped into the 64-byte
-// REPORTDATA field at 0x50 — wrapped as {"attestation_report": <base64>}, the
-// shape evidence extraction reads. Exported because tests of RA-TLS certificate
-// minting want the same fixture without running a server.
+// — version 2, SMT-allowed policy, reportData copied into the 64-byte
+// REPORTDATA field at 0x50 and truncated if longer — wrapped as
+// {"attestation_report": <base64>}, the shape evidence extraction reads. It is
+// exported so tests of RA-TLS certificate minting get the same fixture without
+// running a server.
 //
-// The report is unsigned and carries no VCEK: it is for exercising extraction
-// and report-data binding, never verification, which it must fail.
+// The report is unsigned and carries no VCEK. It exercises extraction and
+// report-data binding; verification must fail on it.
 func FakeSNPEvidence(reportData []byte) json.RawMessage {
 	report := make([]byte, SNPReportSize)
 	report[0] = 0x02    // report version

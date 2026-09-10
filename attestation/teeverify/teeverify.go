@@ -49,10 +49,9 @@ func VerifyWithOptions(evidenceJSON []byte, params teetypes.VerifyParams, opts O
 //
 // ctx bounds the AMD KDS fetch the snp and gcp-snp arms make when the evidence
 // carries no inline VCEK and opts.SNP.Getter is set (see
-// snp.VerifyEvidenceContext) — a bare RA-TLS serving cert is the case that
-// needs it. Nothing else here reaches the network: az-snp always ships its VCEK
-// inside the HCL envelope, and the TDX arms verify against collateral already
-// in hand.
+// snp.VerifyEvidenceContext); a bare RA-TLS serving cert is the case that needs
+// it. Nothing else here reaches the network: az-snp carries its VCEK inside the
+// HCL envelope, and the TDX arms verify against collateral already supplied.
 func VerifyWithOptionsContext(ctx context.Context, evidenceJSON []byte, params teetypes.VerifyParams, opts Options) (*teetypes.VerificationResult, error) {
 	if len(evidenceJSON) > MaxEvidenceSize {
 		return nil, fmt.Errorf("evidence too large: %d bytes (max %d)", len(evidenceJSON), MaxEvidenceSize)

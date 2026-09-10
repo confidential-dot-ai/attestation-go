@@ -29,8 +29,8 @@ import (
 // fetch it from AMD KDS instead.
 //
 // The result is returned only when the hardware signature verified and the
-// binding matched affirmatively. A verdict that merely fails to say no is
-// treated as a failure.
+// binding matched. A verdict that reports neither a match nor a mismatch
+// counts as a failure.
 func VerifyOffline(att *Attestation, pub crypto.PublicKey, nonce []byte, params teetypes.VerifyParams, opts teeverify.Options) (*teetypes.VerificationResult, error) {
 	env, err := att.Envelope()
 	if err != nil {
@@ -50,9 +50,9 @@ func VerifyOffline(att *Attestation, pub crypto.PublicKey, nonce []byte, params 
 	if err != nil {
 		return nil, fmt.Errorf("ratls: verify %s evidence: %w", env.Platform, err)
 	}
-	// The verifier reports a mismatch as an error, so these hold on this path.
-	// Re-checking them means a verifier that ever returns a bare result cannot
-	// be read here as a pass.
+	// The verifier reports a mismatch as an error, so both hold on this path.
+	// Re-check them anyway: a verifier that ever returns a result without an
+	// error must not read here as a pass.
 	if !result.SignatureValid {
 		return nil, fmt.Errorf("ratls: %s verifier returned signature_valid=false", env.Platform)
 	}
@@ -120,10 +120,9 @@ func VerifyCertWithService(ctx context.Context, client apiclient.Client, cert *x
 // bindingAnchor returns the report data that pub and nonce must be bound to,
 // and refuses a caller-supplied value that differs from it.
 //
-// The anchor is the unpadded SHA-384 prefix: a native platform zero-pads it
-// back to the 64-byte hardware field, while a vTPM platform compares it byte
-// for byte with the quote nonce, which is the value the attester asked to have
-// bound.
+// The anchor is the unpadded SHA-384 prefix. A native platform zero-pads it
+// back to the 64-byte hardware field; a vTPM platform compares it byte for byte
+// with the quote nonce, the value the attester asked to have bound.
 func bindingAnchor(pub crypto.PublicKey, nonce, supplied []byte) ([]byte, error) {
 	reportData, err := ReportDataForKey(pub, nonce)
 	if err != nil {
@@ -136,8 +135,8 @@ func bindingAnchor(pub crypto.PublicKey, nonce, supplied []byte) ([]byte, error)
 	return anchor, nil
 }
 
-// attestationAndKey pulls the pieces a certificate contributes to verification:
-// its RA-TLS extension and the key that extension must bind.
+// attestationAndKey returns the two things a certificate contributes to
+// verification: its RA-TLS extension and the key that extension must bind.
 func attestationAndKey(cert *x509.Certificate, oid asn1.ObjectIdentifier) (*Attestation, crypto.PublicKey, error) {
 	att, err := ExtractAttestation(cert, oid)
 	if err != nil {

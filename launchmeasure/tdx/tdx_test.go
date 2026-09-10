@@ -14,20 +14,20 @@ import (
 const tdvfPath = "/opt/kata/share/ovmf/OVMF.inteltdx.fd"
 
 const (
-	// wantMRTD was captured on 2026-08-03 from two live TDX guests of
-	// different vCPU shapes (1 and 2 vCPU) booting the TDVF below, read from
-	// each guest's own attestation report. Both reported this same value.
+	// wantMRTD was captured on 2026-08-03 from two live TDX guests with
+	// different vCPU counts (1 and 2), each booting the TDVF pinned by
+	// wantTDVFSHA and reporting the value from its own attestation report.
 	wantMRTD = "c78e2b8b2f66207f3807d8d999f51e04f5eab8f7aa02614a86ddd81b61f4e79c" +
 		"5d7616664fcb190b8eaae2e26d60b12a"
-	// wantTDVFSHA is the TDVF build that produced wantMRTD.
+	// wantTDVFSHA is the SHA-256 of the TDVF build that produced wantMRTD.
 	wantTDVFSHA = "2af9e5e974c0dc201163d1fd419f234cc4b6e64e99425ce6619e9a077fb0c0b6"
 )
 
 // loadTDVF returns the validated TDVF build, or skips. The 4 MiB image is too
-// large to commit, so this runs where the pinned build is on disk — a TDX host,
-// or anywhere with TDVF_PATH pointing at it — and skips otherwise. A TDVF that
-// is present but not the validated build also skips: the expected MRTD below
-// describes that one build only. CI fetches that build and fails on a skip, so
+// large to commit, so the test runs where the pinned build is on disk — a TDX
+// host, or anywhere with TDVF_PATH pointing at it — and skips otherwise. A TDVF
+// that is present but is not the validated build also skips, since wantMRTD
+// describes that one build only. CI fetches the build and fails on a skip, so
 // the skip is a local convenience, not a way for the check to pass unrun.
 func loadTDVF(t *testing.T) []byte {
 	t.Helper()
@@ -45,10 +45,10 @@ func loadTDVF(t *testing.T) []byte {
 	return fw
 }
 
-// TestMRTDMatchesHardware is the load-bearing test: the value a caller would
-// pin must equal the one real TDX silicon reported. It is also the tripwire for
-// a change in the upstream library's default LaunchOptions, which would
-// silently move the pinned measurement.
+// TestMRTDMatchesHardware checks the one claim the package makes: the value a
+// caller would pin equals the one real TDX silicon reported. It also catches a
+// change in the upstream library's default LaunchOptions, which would move the
+// predicted measurement silently.
 func TestMRTDMatchesHardware(t *testing.T) {
 	got, err := MRTD(loadTDVF(t))
 	if err != nil {
@@ -62,11 +62,11 @@ func TestMRTDMatchesHardware(t *testing.T) {
 	}
 }
 
-// TestOtherLaunchOptionsAreWrong pins WHY launchOptions picks the plain
+// TestOtherLaunchOptionsAreWrong pins why launchOptions picks the plain
 // default. Both other presets model a Google hypervisor and produce a digest no
-// QEMU guest ever reports; pinning one would refuse every guest. If upstream
-// ever makes them equivalent this test fails and the comment in launchOptions
-// needs revisiting.
+// QEMU guest reports, so pinning one would refuse every guest. If upstream
+// makes them equivalent, this test fails and the comment on launchOptions needs
+// revisiting.
 func TestOtherLaunchOptionsAreWrong(t *testing.T) {
 	fw := loadTDVF(t)
 

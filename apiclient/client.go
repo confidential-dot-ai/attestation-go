@@ -31,8 +31,8 @@
 //
 // # Testing
 //
-// The apiclienttest subpackage serves a stub attestation-api, so a test can
-// drive a real Client without a confidential host.
+// The apiclienttest subpackage serves a stub attestation-api, so a test drives
+// a real Client without a confidential host.
 package apiclient
 
 import (

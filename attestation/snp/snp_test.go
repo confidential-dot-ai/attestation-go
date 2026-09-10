@@ -273,7 +273,7 @@ func TestVCEKProductRoots_GenoaVCEK(t *testing.T) {
 	}
 }
 
-// TestVCEKProductRoots_BadVCEK ensures an unclassifiable report carrying
+// TestVCEKProductRoots_BadVCEK checks that an unclassifiable report carrying
 // non-certificate VCEK bytes surfaces a parse error instead of silently
 // skipping the back-fill.
 func TestVCEKProductRoots_BadVCEK(t *testing.T) {

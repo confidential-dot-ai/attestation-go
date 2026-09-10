@@ -8,8 +8,8 @@ import (
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
 )
 
-// initDataResult builds a signature-verified result whose init-data claim is
-// claim, the field InitDataAnchor reads on both families.
+// initDataResult builds a signature-verified result carrying claim as its
+// init-data claim, the field InitDataAnchor reads on both families.
 func initDataResult(p teetypes.PlatformType, claim []byte) *teetypes.VerificationResult {
 	return &teetypes.VerificationResult{
 		SignatureValid: true,

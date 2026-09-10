@@ -5,11 +5,11 @@ import (
 	"strings"
 )
 
-// Family is the hardware TEE behind a platform tag: the cloud-overlay tags
-// (az-*, gcp-*) name the same silicon as their bare-metal counterpart and are
-// verified by the same code path, so policy that is inherently
-// hardware-specific — pinning TDX RTMRs, flooring the four-component SEV-SNP
-// TCB — must key off the family, never off the tag string.
+// Family is the hardware TEE behind a platform tag. The cloud-overlay tags
+// (az-*, gcp-*) name the same silicon as their bare-metal counterpart and take
+// the same verification path, so hardware-specific policy — pinning TDX RTMRs,
+// flooring the four-component SEV-SNP TCB — keys off the family, never off the
+// tag string.
 type Family string
 
 const (
@@ -33,12 +33,12 @@ func (f Family) String() string {
 	return string(f)
 }
 
-// DefaultPlatform returns the bare-metal platform tag for the family, which is
-// what a config that names only a family needs when an API demands a tag —
-// opening a runtimemeasure.Register, or filling an apiclient.AttestRequest.
+// DefaultPlatform returns the bare-metal platform tag for the family. A config
+// that names only a family needs it wherever an API demands a tag: opening a
+// runtimemeasure.Register, or filling an apiclient.AttestRequest.
 //
-// The cloud overlays are never the default: they name the same silicon and
-// verify identically, so a guest that must announce az-snp or gcp-tdx says so
+// A cloud overlay is never the default, since it names the same silicon and
+// verifies identically; a guest that must announce az-snp or gcp-tdx says so
 // explicitly. FamilyUnknown maps to the empty tag, which routes to no verifier
 // and so fails closed.
 func (f Family) DefaultPlatform() PlatformType {
@@ -65,9 +65,9 @@ var familySpellings = []string{
 // trimmed and ASCII case folded.
 //
 // Configuration names the family while evidence carries a tag, so a caller
-// holding a config string cannot reach for Family(): PlatformType("sev-snp")
-// has no verifier and answers FamilyUnknown by design. This is the one place
-// that bridges the two vocabularies.
+// holding a config string cannot call Family() on it: PlatformType("sev-snp")
+// has no verifier and answers FamilyUnknown by design. ParseFamily is the one
+// place the two vocabularies meet.
 //
 // It never returns FamilyUnknown with a nil error — an unrecognized input is
 // an error quoting what was supplied, so a typo fails closed at config load
@@ -85,8 +85,8 @@ func ParseFamily(s string) (Family, error) {
 }
 
 // Family reports the hardware TEE family this module routes the tag to, and is
-// the single place that mapping is defined — teeverify's dispatcher is kept in
-// lockstep with it by test.
+// the single definition of that mapping; a test keeps teeverify's dispatcher in
+// step with it.
 //
 // A tag is an attester claim carried outside any report or transcript (see
 // PlatformType), so comparing it raw lets an attester pick "gcp-tdx" to slip

@@ -47,8 +47,8 @@ func Load(path string) (ReferenceValues, error) {
 	return rv, nil
 }
 
-// Parse validates a measurements config document. Parsing and linting are the
-// same strictness, so a file that lints clean is the file every component
+// Parse validates a measurements config document. Parsing and linting apply
+// the same rules, so a file that lints clean is the file every component
 // loads. Errors name the JSON path they were found at.
 func Parse(data []byte) (ReferenceValues, error) {
 	if err := rejectDuplicateKeys(data); err != nil {
@@ -194,9 +194,9 @@ func decodeRegister(s string) ([]byte, error) {
 	return d, nil
 }
 
-// Format renders a set as a measurements config document. The result is
-// re-parsed by the caller, so a set that formats is a set that loads: a pin
-// this function cannot render is an error, never dropped.
+// Format renders a set as a measurements config document. A pin it cannot
+// render is an error, never dropped, so a set that formats is a set that
+// [Parse] loads back.
 func Format(rv ReferenceValues) ([]byte, error) {
 	f := wire{SchemaVersion: SchemaVersion1, TEE: string(rv.Family)}
 	for i, img := range rv.Images {
@@ -244,9 +244,9 @@ func tupleKey(img apiclient.ImagePin) string {
 }
 
 // rejectDuplicateKeys fails a document that names any key twice. encoding/json
-// keeps the last occurrence silently, so without this the value a reviewer
-// reads and the value a verifier loads could differ. The schema is two levels,
-// so the document and each image are scanned directly.
+// keeps the last occurrence silently, so without this check the value a
+// reviewer reads and the value a verifier loads can differ. The schema is two
+// levels deep, so the document and each image are scanned directly.
 func rejectDuplicateKeys(data []byte) error {
 	key, err := duplicateKey(data)
 	if err != nil {

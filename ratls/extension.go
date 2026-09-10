@@ -31,8 +31,8 @@ const snpReportDataOffset = 0x50
 // deployed verifiers, so they can be extended but never renumbered.
 //
 // It names the family only. Which variant produced the evidence (bare-metal,
-// Azure, GCP) rides in the evidence itself and is auto-detected on parse, so
-// adding a variant does not need a new wire value.
+// Azure, GCP) is carried in the evidence itself and detected on parse, so
+// adding a variant needs no new wire value.
 type TEEType int
 
 const (
@@ -71,8 +71,8 @@ func (t TEEType) Family() teetypes.Family {
 }
 
 // TEETypeFor returns the wire value for a platform tag, routing through
-// [teetypes.PlatformType.Family] so the cloud overlays land on the same value
-// as their bare-metal counterpart. A tag with no family fails with
+// [teetypes.PlatformType.Family] so a cloud overlay maps to the same value as
+// its bare-metal counterpart. A tag with no family fails with
 // [ErrUnsupportedTEE] rather than defaulting to one.
 func TEETypeFor(p teetypes.PlatformType) (TEEType, error) {
 	switch p.Family() {
@@ -97,10 +97,10 @@ type Attestation struct {
 	Report []byte
 
 	// CertChain is DER-encoded platform collateral — for SEV-SNP the VCEK,
-	// optionally followed by ASK and ARK. It is a convenience only: verifying
-	// without it means fetching the VCEK from AMD KDS, so an offline verifier
-	// wants it inline. It is not trusted material; the verifier chains it to
-	// the AMD roots like any other VCEK.
+	// optionally followed by ASK and ARK. Verifying without it means fetching
+	// the VCEK from AMD KDS, so an offline verifier needs it inline. It is not
+	// trusted material: the verifier chains it to the AMD roots like any other
+	// VCEK.
 	CertChain []byte
 
 	// embedded is the parsed envelope when Report carries one; nil when Report
@@ -158,9 +158,9 @@ func UnmarshalExtension(der []byte) (*Attestation, error) {
 	return newAttestation(TEEType(raw.TEEType), raw.Report, raw.CertChain)
 }
 
-// newAttestation is the one place the evidence shape is decided, so a producer
-// ([NewAttestation]) and a verifier ([UnmarshalExtension]) cannot disagree
-// about what a payload means.
+// newAttestation decides the evidence shape for both directions, so the
+// producer ([NewAttestation]) and the verifier ([UnmarshalExtension]) cannot
+// disagree about what a payload means.
 func newAttestation(teeType TEEType, report, certChain []byte) (*Attestation, error) {
 	if teeType != TEETypeSEVSNP && teeType != TEETypeTDX {
 		return nil, fmt.Errorf("%w: TEE type %d", ErrUnsupportedTEE, int(teeType))
@@ -226,9 +226,9 @@ func (a *Attestation) EmbeddedEvidence() (teetypes.AttestationEvidence, bool) {
 // for a raw SEV-SNP report. It returns false for envelope evidence, whose
 // binding lives in a quote this package does not parse.
 //
-// It lets a caller reject a mismatched key before paying for verification. It
-// is not itself a check: the bytes are unverified until the report's signature
-// is, so a match here proves nothing on its own.
+// It lets a caller reject a mismatched key before verifying. It is not itself
+// a check: the bytes stay unverified until the report's signature is, so a
+// match here proves nothing on its own.
 func (a *Attestation) ReportData() ([]byte, bool) {
 	if a.embedded != nil || a.TEEType != TEETypeSEVSNP || len(a.Report) < snpReportDataOffset+64 {
 		return nil, false
@@ -239,7 +239,7 @@ func (a *Attestation) ReportData() ([]byte, bool) {
 // Envelope returns the evidence as a self-describing envelope, ready for
 // [VerifyOffline] or an attestation service: the embedded
 // envelope when there is one, otherwise the raw SEV-SNP report wrapped under
-// [teetypes.PlatformSNP]. Inline collateral rides along as cert_chain.vcek so
+// [teetypes.PlatformSNP]. Inline collateral is carried as cert_chain.vcek, so
 // an offline verifier need not reach AMD KDS.
 //
 // The wrapped tag is the bare-metal one even when the report came from a GCP
@@ -292,16 +292,16 @@ func ExtractAttestation(cert *x509.Certificate, oid asn1.ObjectIdentifier) (*Att
 // ReportDataForKey computes the REPORTDATA that binds pub to a TEE:
 // SHA-384(marshal(pub) || nonce), zero-padded to the 64-byte hardware field.
 //
-// A nil nonce is the certificate-lifetime binding, which is what a serving
-// certificate carries — it has no per-connection value to commit to, and TLS
+// A nil nonce is the certificate-lifetime binding a serving certificate
+// carries: it has no per-connection value to commit to, and TLS
 // proof-of-possession of the key supplies connection liveness. Pass a nonce
-// when both sides agreed one, and a report from an earlier session no longer
-// satisfies the binding.
+// when both sides agreed on one; a report from an earlier session then no
+// longer satisfies the binding.
 //
 // The first [sha512.Size384] bytes are the anchor to send to an attestation
-// service: native platforms zero-pad it back to 64 before comparing, while a
-// vTPM platform compares it byte for byte with the quote nonce, which is what
-// the service was asked to bind.
+// service. A native platform zero-pads it back to 64 before comparing; a vTPM
+// platform compares it byte for byte with the quote nonce, which is what the
+// service was asked to bind.
 func ReportDataForKey(pub crypto.PublicKey, nonce []byte) ([64]byte, error) {
 	var reportData [64]byte
 	keyBytes, err := marshalPublicKey(pub)
@@ -331,8 +331,8 @@ func marshalPublicKey(pub crypto.PublicKey) ([]byte, error) {
 }
 
 // publicKeyFromCert returns the certificate's public key, restricted to the
-// types RA-TLS binds: ECDSA on P-256 or P-384, and ed25519. Anything else is
-// refused rather than bound under an encoding this package has not fixed.
+// types RA-TLS binds: ECDSA on P-256 or P-384, and ed25519. Any other type is
+// refused, because this package has fixed no hashing encoding for it.
 func publicKeyFromCert(cert *x509.Certificate) (crypto.PublicKey, error) {
 	switch pub := cert.PublicKey.(type) {
 	case *ecdsa.PublicKey:

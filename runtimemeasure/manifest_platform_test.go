@@ -20,8 +20,8 @@ const multiManifest = `{
 	]
 }`
 
-// The register hex the loaders accept, spelled as constants so they can build
-// the manifest above at compile time.
+// The register hex the loaders accept, held as constants so multiManifest is
+// built at compile time.
 const (
 	mrtdRepeat  = "1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a"
 	rtmr1Repeat = "2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b"

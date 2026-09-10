@@ -1,8 +1,7 @@
 // Package snp predicts the AMD SEV-SNP launch measurement (launch digest) a
-// QEMU guest will report, computed offline from the firmware and boot
-// artifacts before the guest is ever started. It is the produce side of
-// attestation: verifying a report tells you what a guest measured, this tells
-// you what to expect it to measure.
+// QEMU guest reports, computed offline from the firmware and boot artifacts
+// before the guest starts. Verifying a report tells you what a guest measured;
+// this package tells you what to expect it to measure.
 //
 // The digest is an iterative SHA-384 over the PAGE_INFO structure of every page
 // the AMD-SP measures at launch, in the order the VMM presents them: the OVMF
@@ -20,7 +19,7 @@
 // measured into a plausible-looking wrong digest.
 //
 // OVMF parsing, the digest accumulator and the VMSA pages come from
-// github.com/virtee/sev-snp-measure-go. What this package adds is the sev_hashes
-// page kernel-hashes=on contributes, which that library has no entry point for,
-// and bounds checks upstream's parser skips.
+// github.com/virtee/sev-snp-measure-go. This package adds the sev_hashes page
+// that kernel-hashes=on contributes, which that library has no entry point
+// for, and the bounds checks its parser skips.
 package snp

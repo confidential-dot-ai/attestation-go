@@ -13,34 +13,34 @@ import (
 
 // ErrRegisterDiverged reports that the register folds to neither the journal
 // nor the journal without its last entry, so something outside the journal
-// extended it. The extend is irreversible, so the register can no longer be
-// predicted from the journal and no further extend can repair it: a diverged
-// [Journal] refuses to extend rather than piling more events onto a value no
-// verifier will accept.
+// extended it. An extend cannot be undone, so no later extend repairs the
+// register and the journal can no longer predict it. A diverged [Journal]
+// refuses to extend rather than adding events to a value no verifier
+// accepts.
 var ErrRegisterDiverged = errors.New("runtime measurement register does not match the journal")
 
 // ErrMalformedEntry reports that the journal file held a line that is not a
-// canonical digest. Such lines are skipped, not fatal: a crash during the
+// canonical digest. Such a line is skipped, not fatal: a crash during the
 // append can leave a partial last line, which was by construction never
-// extended, and refusing to open would leave the guest unable to measure
-// anything for the rest of its life.
+// extended, and refusing to open would stop the guest measuring anything for
+// the rest of the boot.
 var ErrMalformedEntry = errors.New("journal line is not a canonical digest")
 
 // Journal makes register extends exactly-once across process restarts.
 //
 // A runtime measurement register is append-only: extending the same image
 // twice yields a register no verifier expecting one extend can match, and
-// nothing can undo it. An in-guest measurer therefore cannot keep its
-// already-extended set in memory, where a restart would lose it. Journal
-// persists that set as one canonical digest per line, in extend order.
+// nothing undoes it. An in-guest measurer therefore cannot hold its
+// already-extended set in memory, where a restart loses it. Journal keeps that
+// set on disk as one canonical digest per line, in extend order.
 //
-// The write order is record-then-extend, so a crash between the two can only
-// leave the register one extend BEHIND the journal — a state [OpenJournal]
-// repairs by replaying that single extend. The opposite order would leave an
-// extend no record explains, which is unrepairable.
+// The write order is record-then-extend, so a crash between the two leaves the
+// register at most one extend behind the journal, which [OpenJournal] repairs
+// by replaying that extend. The opposite order would leave an extend no record
+// explains, and nothing can repair that.
 //
 // A Journal is not safe for concurrent use, and two journals over one register
-// defeat the whole scheme: run exactly one measurer per register.
+// break exactly-once: run one measurer per register.
 type Journal struct {
 	path     string
 	reg      Register
@@ -60,7 +60,7 @@ func OpenJournal(path string, reg Register) (*Journal, error) {
 }
 
 // OpenJournalSeeded is [OpenJournal] for a register that already held seed
-// before any journaled extend: on TDX a guest launched with an anchor reads
+// before any journaled extend. On TDX a guest launched with an anchor reads
 // back Seed(anchor) with nothing measured, so folding the journal from [Zero]
 // there would report every restart as divergence.
 //
@@ -69,18 +69,18 @@ func OpenJournal(path string, reg Register) (*Journal, error) {
 //
 //   - The fold matches: a clean restart, nothing to do.
 //   - The fold without the last entry matches: a crash between recording a
-//     digest and extending it. The interrupted extend is finished here, so the
-//     digest is measured exactly once overall. A failure to finish it is fatal
-//     and returns a nil journal — the register is one extend short of what the
-//     journal claims, and only this repair can close the gap.
+//     digest and extending it. The interrupted extend finishes here, so the
+//     digest is measured exactly once overall. A failure to finish it returns
+//     a nil journal — the register stays one extend short of what the journal
+//     claims, and only this repair closes that gap.
 //   - Neither matches: the journal is marked diverged. The journal is still
 //     returned, wrapping [ErrRegisterDiverged], so a caller can log it and keep
 //     running, but [Journal.MeasureOnce] will refuse to extend.
 //
 // Any other non-nil error (a skipped malformed line, an unreadable register)
-// also comes back alongside a usable journal. A caller that wants to fail
-// closed on all of them treats any non-nil error as fatal; one that prefers
-// to keep measuring logs everything but [ErrRegisterDiverged].
+// also comes back alongside a usable journal. To fail closed, treat any
+// non-nil error as fatal; to keep measuring, log everything except
+// [ErrRegisterDiverged], which already blocks further extends.
 func OpenJournalSeeded(path string, reg Register, seed [Size]byte) (*Journal, error) {
 	if reg == nil {
 		return nil, errors.New("open journal: no register to measure into")
@@ -132,9 +132,9 @@ func OpenJournalSeeded(path string, reg Register, seed [Size]byte) (*Journal, er
 func (j *Journal) reconcile(problems *[]error) error {
 	cur, err := j.reg.Extension()
 	if err != nil {
-		// The journal stays the dedup truth: it names digests that were
-		// recorded, and re-extending them on a hunch is the one unrecoverable
-		// mistake here.
+		// The journal remains the record of what was extended. Re-extending
+		// its digests because the register is unreadable is the one mistake
+		// nothing here can undo.
 		*problems = append(*problems, fmt.Errorf("cannot read the register to cross-check the journal: %w", err))
 		return nil
 	}
@@ -158,15 +158,15 @@ func (j *Journal) reconcile(problems *[]error) error {
 
 // MeasureOnce extends the register with Event(ref) unless this journal already
 // records it, and reports whether it extended. ref is a canonical digest or a
-// digest-pinned reference; it is canonicalized ([CanonicalDigest]) before
-// anything else, so two spellings of one image measure once between them.
+// digest-pinned reference, canonicalized ([CanonicalDigest]) first, so two
+// spellings of one image measure once between them.
 //
 // The digest is recorded before the extend: a crash in between under-extends
 // the register, which the next [OpenJournal] repairs. A failed extend rolls the
 // record back, so a later call for the same image tries again.
 //
-// It refuses with [ErrRegisterDiverged] once the register has been found to
-// carry extends this journal cannot account for.
+// It refuses with [ErrRegisterDiverged] once the register is known to carry
+// extends this journal cannot account for.
 func (j *Journal) MeasureOnce(ref string) (bool, error) {
 	d, err := CanonicalDigest(ref)
 	if err != nil {

@@ -11,9 +11,9 @@ import (
 )
 
 // ErrWrongFamily reports an image pin checked against a result from another
-// TEE family. The pinned values are not comparable across families — a 48-byte
-// SNP launch digest is not an MRTD — so this is a mismatched pin, not a
-// mismatched image.
+// TEE family. Pinned values do not compare across families — a 48-byte SNP
+// launch digest is not an MRTD — so this error means the wrong pin was loaded,
+// not that the wrong image booted.
 var ErrWrongFamily = errors.New("image pin is for another TEE family")
 
 // ImageIdentity is a pinned guest image, whichever family built it: the TDX
@@ -46,8 +46,8 @@ func (p ImagePins) Family() teetypes.Family { return teetypes.FamilyTDX }
 // firmware's measured regions), RTMR[1] (guest kernel) and RTMR[2] (guest
 // rootfs). All three come from one build and only mean anything together.
 //
-// RTMR[3] is deliberately not checked here: it carries the launch anchor and
-// the workload chain, which are [VerifyBinding]'s business.
+// RTMR[3] is not checked here: it carries the launch anchor and the workload
+// chain, which [VerifyBinding] checks.
 func (p ImagePins) Verify(r *teetypes.VerificationResult) error {
 	if err := checkVerified(r); err != nil {
 		return err
@@ -87,11 +87,10 @@ func (p SNPImagePins) Family() teetypes.Family { return teetypes.FamilySNP }
 // Verify checks the verified launch measurement against the pinned per-SMP
 // set. SNP folds firmware, kernel and initial vCPU state into that one digest,
 // so matching any pinned variant identifies the image as tightly as the TDX
-// tuple does; which variant matched is the guest's vCPU count, not an identity
-// difference.
+// tuple does; which variant matched says only how many vCPUs the guest has.
 //
-// HOST_DATA is deliberately not checked here: it carries the launch anchor,
-// which is [VerifyBinding]'s business.
+// HOST_DATA is not checked here: it carries the launch anchor, which
+// [VerifyBinding] checks.
 func (p SNPImagePins) Verify(r *teetypes.VerificationResult) error {
 	if err := checkVerified(r); err != nil {
 		return err
@@ -127,8 +126,8 @@ func checkVerified(r *teetypes.VerificationResult) error {
 	return nil
 }
 
-// checkFamily refuses a result from the wrong family, naming what the pin is
-// so the error reads as a mismatched pin rather than a broken node.
+// checkFamily refuses a result from the wrong family, naming what the pin
+// holds so the error points at the pin rather than at the node.
 func checkFamily(p teetypes.PlatformType, want teetypes.Family, pin string) error {
 	if got := p.Family(); got != want {
 		return fmt.Errorf("%w: verification result is from platform %q, but the pin is %s (family %q)", ErrWrongFamily, p, pin, want)
