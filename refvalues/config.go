@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
-	"github.com/confidential-dot-ai/attestation-go/client"
+	"github.com/confidential-dot-ai/attestation-go/remote"
 )
 
 // SchemaVersion1 is the only measurements config schema version this package
@@ -80,7 +80,7 @@ func (f wire) validate() (ReferenceValues, error) {
 		return ReferenceValues{}, fmt.Errorf("measurements is empty: a config file must pin at least one image")
 	}
 
-	rv := ReferenceValues{Family: fam, Images: make([]client.ImagePin, 0, len(f.Measurements))}
+	rv := ReferenceValues{Family: fam, Images: make([]remote.ImagePin, 0, len(f.Measurements))}
 	names := make(map[string]bool, len(f.Measurements))
 	tuples := make(map[string]int, len(f.Measurements))
 	for i, we := range f.Measurements {
@@ -102,45 +102,45 @@ func (f wire) validate() (ReferenceValues, error) {
 	return rv, nil
 }
 
-func (we wireImage) validate(fam teetypes.Family, i int) (client.ImagePin, error) {
+func (we wireImage) validate(fam teetypes.Family, i int) (remote.ImagePin, error) {
 	at := fmt.Sprintf("measurements[%d]", i)
 	if strings.TrimSpace(we.Name) == "" {
-		return client.ImagePin{}, fmt.Errorf("%s: name is required", at)
+		return remote.ImagePin{}, fmt.Errorf("%s: name is required", at)
 	}
-	img := client.ImagePin{Name: we.Name}
+	img := remote.ImagePin{Name: we.Name}
 
 	switch fam {
 	case teetypes.FamilySNP:
 		if we.MRTD != nil || we.RTMR != nil {
-			return client.ImagePin{}, fmt.Errorf("%s: mrtd and rtmr are tdx fields, but tee is %q", at, teetypes.FamilySNP)
+			return remote.ImagePin{}, fmt.Errorf("%s: mrtd and rtmr are tdx fields, but tee is %q", at, teetypes.FamilySNP)
 		}
 		if we.Measurement == nil {
-			return client.ImagePin{}, fmt.Errorf("%s: measurement is required", at)
+			return remote.ImagePin{}, fmt.Errorf("%s: measurement is required", at)
 		}
 		d, err := decodeRegister(*we.Measurement)
 		if err != nil {
-			return client.ImagePin{}, fmt.Errorf("%s.measurement: %w", at, err)
+			return remote.ImagePin{}, fmt.Errorf("%s.measurement: %w", at, err)
 		}
 		img.Digest = d
 	case teetypes.FamilyTDX:
 		if we.Measurement != nil {
-			return client.ImagePin{}, fmt.Errorf("%s: measurement is a sev-snp field, but tee is %q", at, teetypes.FamilyTDX)
+			return remote.ImagePin{}, fmt.Errorf("%s: measurement is a sev-snp field, but tee is %q", at, teetypes.FamilyTDX)
 		}
 		if we.MRTD == nil {
-			return client.ImagePin{}, fmt.Errorf("%s: mrtd is required", at)
+			return remote.ImagePin{}, fmt.Errorf("%s: mrtd is required", at)
 		}
 		d, err := decodeRegister(*we.MRTD)
 		if err != nil {
-			return client.ImagePin{}, fmt.Errorf("%s.mrtd: %w", at, err)
+			return remote.ImagePin{}, fmt.Errorf("%s.mrtd: %w", at, err)
 		}
 		img.Digest = d
 		rtmrs, err := decodeRTMRs(we.RTMR, at)
 		if err != nil {
-			return client.ImagePin{}, err
+			return remote.ImagePin{}, err
 		}
 		img.RTMRs = rtmrs
 	default:
-		return client.ImagePin{}, fmt.Errorf("%s: tee %q has no known pin shape", at, fam)
+		return remote.ImagePin{}, fmt.Errorf("%s: tee %q has no known pin shape", at, fam)
 	}
 	return img, nil
 }
@@ -234,7 +234,7 @@ func Format(rv ReferenceValues) ([]byte, error) {
 
 // tupleKey is the identity a pin is matched on: the digest and its registers.
 // The name is diagnostic only, so it is not part of the key.
-func tupleKey(img client.ImagePin) string {
+func tupleKey(img remote.ImagePin) string {
 	var b strings.Builder
 	b.WriteString(hex.EncodeToString(img.Digest))
 	for _, i := range slices.Sorted(maps.Keys(img.RTMRs)) {

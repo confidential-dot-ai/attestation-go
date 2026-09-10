@@ -14,7 +14,7 @@
 // The /verify verdict is not signed, so the client trusts whatever answers.
 // Prefer a Unix-domain socket inside the trust boundary:
 //
-//	c := client.NewClient("unix:///run/attestation/attest.sock")
+//	c := remote.NewClient("unix:///run/attestation/attest.sock")
 //
 // A routable HTTP address lets anything that can influence name resolution or
 // routing answer in the service's place. The socket's owner and mode are
@@ -33,7 +33,7 @@
 //
 // The mockapi subpackage serves a stub attestation-api, so a test drives
 // a real Client without a confidential host.
-package client
+package remote
 
 import (
 	"bytes"

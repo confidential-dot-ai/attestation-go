@@ -12,8 +12,8 @@ import (
 	"testing"
 
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
-	"github.com/confidential-dot-ai/attestation-go/client"
-	"github.com/confidential-dot-ai/attestation-go/client/mockapi"
+	"github.com/confidential-dot-ai/attestation-go/remote"
+	"github.com/confidential-dot-ai/attestation-go/remote/mockapi"
 )
 
 // snpReport pulls the raw report back out of the stub's evidence, the way a
@@ -49,15 +49,15 @@ func TestStubServesBothTransports(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stub := tc.new(t)
-			c := client.NewClient(stub.URL())
+			c := remote.NewClient(stub.URL())
 
 			health, err := c.Health(context.Background())
 			if err != nil || health.Status != "ok" {
 				t.Fatalf("Health = %+v, %v; want status ok", health, err)
 			}
-			resp, err := c.Attest(context.Background(), client.AttestRequest{
+			resp, err := c.Attest(context.Background(), remote.AttestRequest{
 				ReportData: []byte("nonce"),
-				Platform:   client.PlatformAuto,
+				Platform:   remote.PlatformAuto,
 			})
 			if err != nil {
 				t.Fatalf("Attest: %v", err)
@@ -76,9 +76,9 @@ func TestStubAttestRecordsAndReturnsSNPEvidence(t *testing.T) {
 	stub := mockapi.New(t)
 	reportData := []byte("0123456789abcdef0123456789abcdef0123456789abcdef")
 
-	resp, err := client.NewClient(stub.URL()).Attest(context.Background(), client.AttestRequest{
+	resp, err := remote.NewClient(stub.URL()).Attest(context.Background(), remote.AttestRequest{
 		ReportData: reportData,
-		Platform:   client.PlatformAuto,
+		Platform:   remote.PlatformAuto,
 	})
 	if err != nil {
 		t.Fatalf("Attest: %v", err)
@@ -116,7 +116,7 @@ func TestFakeSNPEvidenceClampsReportDataToTheField(t *testing.T) {
 func TestStubAttestPlatformResolution(t *testing.T) {
 	attest := func(t *testing.T, s *mockapi.Stub, platform teetypes.PlatformType) teetypes.PlatformType {
 		t.Helper()
-		resp, err := client.NewClient(s.URL()).Attest(context.Background(), client.AttestRequest{
+		resp, err := remote.NewClient(s.URL()).Attest(context.Background(), remote.AttestRequest{
 			ReportData: []byte("x"),
 			Platform:   platform,
 		})
@@ -128,11 +128,11 @@ func TestStubAttestPlatformResolution(t *testing.T) {
 
 	t.Run("auto resolves to the detected platform", func(t *testing.T) {
 		stub := mockapi.New(t)
-		if got := attest(t, stub, client.PlatformAuto); got != teetypes.PlatformSNP {
+		if got := attest(t, stub, remote.PlatformAuto); got != teetypes.PlatformSNP {
 			t.Fatalf("platform = %q, want snp", got)
 		}
 		stub.SetPlatform(teetypes.PlatformTDX)
-		if got := attest(t, stub, client.PlatformAuto); got != teetypes.PlatformTDX {
+		if got := attest(t, stub, remote.PlatformAuto); got != teetypes.PlatformTDX {
 			t.Fatalf("platform = %q after SetPlatform(tdx), want tdx", got)
 		}
 	})
@@ -149,12 +149,12 @@ func TestStubVerifyRecordsAndAnswersVerdict(t *testing.T) {
 	stub.SetVerdict(mockapi.PassingVerdict("deadbeef"))
 
 	expected := []byte("expected-report-data")
-	req := client.NewVerifyRequest(teetypes.AttestationEvidence{
+	req := remote.NewVerifyRequest(teetypes.AttestationEvidence{
 		Platform: teetypes.PlatformGcpSNP,
 		Evidence: json.RawMessage(`{"quote":"x"}`),
-	}, &client.VerifyParams{ExpectedReportData: expected}, false)
+	}, &remote.VerifyParams{ExpectedReportData: expected}, false)
 
-	resp, err := client.NewClient(stub.URL()).VerifyEnforced(context.Background(), req)
+	resp, err := remote.NewClient(stub.URL()).VerifyEnforced(context.Background(), req)
 	if err != nil {
 		t.Fatalf("VerifyEnforced against a passing verdict: %v", err)
 	}
@@ -185,31 +185,31 @@ func TestStubVerifyMismatchFailsEnforcement(t *testing.T) {
 	verdict.ReportDataMatch = teetypes.Ptr(false)
 	stub.SetVerdict(verdict)
 
-	req := client.NewVerifyRequest(
+	req := remote.NewVerifyRequest(
 		teetypes.AttestationEvidence{Platform: teetypes.PlatformSNP, Evidence: json.RawMessage(`{}`)},
-		&client.VerifyParams{ExpectedReportData: []byte("expected-report-data")}, false)
-	_, err := client.NewClient(stub.URL()).VerifyEnforced(context.Background(), req)
-	if !errors.Is(err, client.ErrReportDataMismatch) {
+		&remote.VerifyParams{ExpectedReportData: []byte("expected-report-data")}, false)
+	_, err := remote.NewClient(stub.URL()).VerifyEnforced(context.Background(), req)
+	if !errors.Is(err, remote.ErrReportDataMismatch) {
 		t.Fatalf("err = %v, want ErrReportDataMismatch", err)
 	}
 }
 
 // The shape a refused report actually arrives in: HTTP 422 carrying the
-// verification_failed envelope, which reaches callers as *client.APIError —
+// verification_failed envelope, which reaches callers as *remote.APIError —
 // a different branch from every verdict sentinel.
 func TestStubVerifyErrorAnswersTheRefusalShape(t *testing.T) {
 	stub := mockapi.New(t)
 	stub.SetVerifyError(mockapi.VerificationFailed("report signature does not verify"))
-	c := client.NewClient(stub.URL())
+	c := remote.NewClient(stub.URL())
 
-	req := client.NewVerifyRequest(
+	req := remote.NewVerifyRequest(
 		teetypes.AttestationEvidence{Platform: teetypes.PlatformSNP, Evidence: json.RawMessage(`{}`)},
-		&client.VerifyParams{ExpectedReportData: []byte("expected-report-data")}, false)
+		&remote.VerifyParams{ExpectedReportData: []byte("expected-report-data")}, false)
 	_, err := c.VerifyEnforced(context.Background(), req)
 
-	var apiErr *client.APIError
+	var apiErr *remote.APIError
 	if !errors.As(err, &apiErr) {
-		t.Fatalf("err = %#v, want *client.APIError", err)
+		t.Fatalf("err = %#v, want *remote.APIError", err)
 	}
 	if apiErr.Status != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want 422", apiErr.Status)
@@ -217,7 +217,7 @@ func TestStubVerifyErrorAnswersTheRefusalShape(t *testing.T) {
 	if apiErr.Response.Error != mockapi.ErrorCodeVerificationFailed {
 		t.Fatalf("error code = %q, want %q", apiErr.Response.Error, mockapi.ErrorCodeVerificationFailed)
 	}
-	if errors.Is(err, client.ErrSignatureInvalid) || errors.Is(err, client.ErrReportDataMismatch) {
+	if errors.Is(err, remote.ErrSignatureInvalid) || errors.Is(err, remote.ErrReportDataMismatch) {
 		t.Fatalf("a 422 refusal matched a verdict sentinel: %v", err)
 	}
 
@@ -242,14 +242,14 @@ func TestStubVerifyErrorPlainTextBody(t *testing.T) {
 		Message: "Failed to deserialize the JSON body into the target type",
 	})
 
-	req := client.NewVerifyRequest(
+	req := remote.NewVerifyRequest(
 		teetypes.AttestationEvidence{Platform: teetypes.PlatformSNP, Evidence: json.RawMessage(`{}`)},
-		&client.VerifyParams{ExpectedReportData: []byte("expected-report-data")}, false)
-	_, err := client.NewClient(stub.URL()).VerifyEnforced(context.Background(), req)
+		&remote.VerifyParams{ExpectedReportData: []byte("expected-report-data")}, false)
+	_, err := remote.NewClient(stub.URL()).VerifyEnforced(context.Background(), req)
 
-	var unexpected *client.UnexpectedError
+	var unexpected *remote.UnexpectedError
 	if !errors.As(err, &unexpected) {
-		t.Fatalf("err = %#v, want *client.UnexpectedError", err)
+		t.Fatalf("err = %#v, want *remote.UnexpectedError", err)
 	}
 	if unexpected.Status != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want 422", unexpected.Status)
@@ -312,9 +312,9 @@ func TestStubRejectsUndecodableBody(t *testing.T) {
 func TestStubCloseMakesTheServiceUnreachable(t *testing.T) {
 	stub := mockapi.New(t)
 	stub.Close()
-	_, err := client.NewClient(stub.URL()).Health(context.Background())
-	var reqErr *client.RequestError
+	_, err := remote.NewClient(stub.URL()).Health(context.Background())
+	var reqErr *remote.RequestError
 	if !errors.As(err, &reqErr) {
-		t.Fatalf("err = %#v, want *client.RequestError", err)
+		t.Fatalf("err = %#v, want *remote.RequestError", err)
 	}
 }

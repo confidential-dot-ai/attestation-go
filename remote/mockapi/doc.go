@@ -1,12 +1,12 @@
 // Package mockapi serves a stub attestation-api, so tests of code that
-// talks to the service through [client] need neither a confidential host nor
+// talks to the service through [remote] need neither a confidential host nor
 // a hand-rolled fake server.
 //
 // [Stub] speaks the wire protocol, not the client's Go API: a test drives a
-// real [client.Client] against the stub's address, so the client's own
+// real [remote.Client] against the stub's address, so the client's own
 // encoding, error mapping and enforcement all run. The stub answers over plain
 // HTTP ([New]) or a Unix socket ([NewUnix]), and [Stub.URL] returns an address
-// [client.NewClient] accepts either way. The socket form also exercises the
+// [remote.NewClient] accepts either way. The socket form also exercises the
 // ownership and mode checks that transport makes.
 //
 // What the stub models, and what it does not:

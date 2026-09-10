@@ -4,8 +4,8 @@
 //
 // A launch digest and its registers only mean anything together — two images
 // built against the same TDVF firmware share an MRTD — so an image matches
-// whole or not at all. A pinned image is an [client.ImagePin], the type
-// [client.Policy] enforces, so a reference set is never restated on its way
+// whole or not at all. A pinned image is an [remote.ImagePin], the type
+// [remote.Policy] enforces, so a reference set is never restated on its way
 // to the verifier.
 //
 // The package owns three shapes of the same thing:

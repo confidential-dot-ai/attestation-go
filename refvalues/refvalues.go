@@ -6,7 +6,7 @@ import (
 	"maps"
 
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
-	"github.com/confidential-dot-ai/attestation-go/client"
+	"github.com/confidential-dot-ai/attestation-go/remote"
 	"github.com/confidential-dot-ai/attestation-go/runtimemeasure"
 )
 
@@ -30,7 +30,7 @@ type ReferenceValues struct {
 
 	// Images are the accepted guest images. Empty pins nothing, which accepts
 	// any attested guest.
-	Images []client.ImagePin
+	Images []remote.ImagePin
 }
 
 // Empty reports whether the set pins nothing, so callers can warn rather than
@@ -43,8 +43,8 @@ func (rv ReferenceValues) Empty() bool { return len(rv.Images) == 0 }
 //
 // Registers pinned without any digest have no image form (see [FromFlags]);
 // a caller holding those sets Policy.RTMRs itself.
-func (rv ReferenceValues) Policy() client.Policy {
-	return client.Policy{Images: rv.Images}
+func (rv ReferenceValues) Policy() remote.Policy {
+	return remote.Policy{Images: rv.Images}
 }
 
 // Digests returns every reference launch digest, for verifiers that match on
@@ -111,14 +111,14 @@ func (rv ReferenceValues) Flatten() (digests []string, rtmrs map[int][]byte, uni
 // without any digest have no image form and stay on the flat path, so
 // FromFlags(nil, rtmrs) pins nothing.
 func FromFlags(digests [][]byte, rtmrs map[int][]byte) ReferenceValues {
-	images := make([]client.ImagePin, 0, len(digests))
+	images := make([]remote.ImagePin, 0, len(digests))
 	for _, d := range digests {
 		// Each image owns its map: callers mutate policy pins in place.
 		own := maps.Clone(rtmrs)
 		if len(own) == 0 {
 			own = nil
 		}
-		images = append(images, client.ImagePin{Digest: d, RTMRs: own})
+		images = append(images, remote.ImagePin{Digest: d, RTMRs: own})
 	}
 	return ReferenceValues{Images: images}
 }

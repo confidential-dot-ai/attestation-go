@@ -111,9 +111,9 @@ registers := identity.RTMRs()                      // RTMR[1] and RTMR[2] on TDX
 result — SEV-SNP HOST_DATA verbatim, TDX MRCONFIGID with its zero padding
 checked — for a guest asking which document it was launched with.
 
-## attestation-api client (`client`)
+## attestation-api client (`remote`)
 
-`teeverify` verifies evidence in this process. `client` is the alternative:
+`teeverify` verifies evidence in this process. `remote` is the alternative:
 it talks to **attestation-api**, the `attestation-rs` HTTP service that both
 produces evidence on a confidential host and verifies it. Use it when the
 evidence has to be generated locally, or when verification should follow the
@@ -134,11 +134,11 @@ platform's report-data field. `PlatformAuto` asks the service which TEE it is
 on, so the caller need not know:
 
 ```go
-c := client.NewClient("unix:///run/attestation/attest.sock")
+c := remote.NewClient("unix:///run/attestation/attest.sock")
 
-resp, err := c.Attest(ctx, client.AttestRequest{
+resp, err := c.Attest(ctx, remote.AttestRequest{
     ReportData: digest[:], // travels as base64, per encoding/json
-    Platform:   client.PlatformAuto,
+    Platform:   remote.PlatformAuto,
 })
 evidence := resp.Envelope() // teetypes.AttestationEvidence
 ```
@@ -151,7 +151,7 @@ the report without gating on it accepts anything the service could parse. Use
 `VerifyEvidence`, which enforces the verdict and then your reference values:
 
 ```go
-resp, err := c.VerifyEvidence(ctx, evidence, client.Policy{
+resp, err := c.VerifyEvidence(ctx, evidence, remote.Policy{
     ExpectedReportData: digest[:],         // the bytes sent to /attest, verbatim
     AllowDebug:         false,             // a debug guest's memory is host-readable
     Images:             pins,              // whole-image pins: digest + registers
@@ -174,7 +174,7 @@ The service names one concept twice, `expected_mrtd` on TDX and
 so callers do not:
 
 ```go
-var params client.VerifyParams
+var params remote.VerifyParams
 err := params.SetExpectedMeasurements(platform, launchMeasurement, map[int][]byte{
     1: rtmr1, // guest kernel image
     2: rtmr2, // kernel command line and rootfs chain
@@ -193,7 +193,7 @@ PCRs**. Pinning only the launch measurement there proves the paravisor booted,
 not which guest ran. `Policy.PCRs` closes that:
 
 ```go
-resp, err := c.VerifyEvidence(ctx, evidence, client.Policy{
+resp, err := c.VerifyEvidence(ctx, evidence, remote.Policy{
     ExpectedReportData:   expected,
     Measurements:         launchDigests, // the paravisor
     PCRs:                 pcrPins,       // the guest OS, SHA-256
@@ -261,7 +261,7 @@ implemented, see `launchmeasure`; Turin FMC TCB and Genoa-family model `0xA0`
 A verifier compares evidence against the images a deployment accepts. This
 package holds that set in its three shapes — the measurements config file, the
 flat digest and register lists older flags carry, and a build manifest — and
-converts any of them into the `client.Policy` the service enforces:
+converts any of them into the `remote.Policy` the service enforces:
 
 ```go
 rv, err := refvalues.Load("measurements.json") // {"schema_version":"1","tee":"tdx","measurements":[...]}
@@ -312,10 +312,10 @@ MRTD is per TDVF build, with the guest measuring into RTMR[0..2] instead. These
 two packages pull `sev-snp-measure-go` and `gce-tcb-verifier`; nothing else in
 the module depends on them.
 
-## Test stub (`client/mockapi`)
+## Test stub (`remote/mockapi`)
 
 A stub attestation-api over HTTP or a Unix socket, driven through a real
-`client.Client`, for tests of anything that consumes the service.
+`remote.Client`, for tests of anything that consumes the service.
 
 ## Installation
 

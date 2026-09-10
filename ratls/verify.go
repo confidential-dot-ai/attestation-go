@@ -12,7 +12,7 @@ import (
 
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
 	"github.com/confidential-dot-ai/attestation-go/attestation/teeverify"
-	"github.com/confidential-dot-ai/attestation-go/client"
+	"github.com/confidential-dot-ai/attestation-go/remote"
 )
 
 // VerifyOffline verifies the attestation in-process and requires it to bind
@@ -83,23 +83,23 @@ func VerifyCertOffline(cert *x509.Certificate, oid asn1.ObjectIdentifier, nonce 
 // report data comes from [ReportDataForKey], and a policy.ExpectedReportData
 // that disagrees is refused.
 //
-// It goes through [client.Client.VerifyEvidence], which fails closed on the
+// It goes through [remote.Client.VerifyEvidence], which fails closed on the
 // verdict and then on the policy's pins, and refuses a platform tag it has no
-// rules for. Its sentinels (client.ErrSignatureInvalid,
-// client.ErrReportDataMismatch, client.ErrMeasurementNotAllowed, …) reach
+// rules for. Its sentinels (remote.ErrSignatureInvalid,
+// remote.ErrReportDataMismatch, remote.ErrMeasurementNotAllowed, …) reach
 // the caller unchanged, so errors.Is reaches them.
 //
 // The response is only as trustworthy as the service: it is not signed, so the
 // service must sit inside the same trust boundary as the caller — a node-local
 // socket or an in-guest loopback endpoint, not a remote URL.
-func VerifyWithService(ctx context.Context, svc client.Client, att *Attestation, pub crypto.PublicKey, nonce []byte, policy client.Policy) (client.VerifyResponse, error) {
+func VerifyWithService(ctx context.Context, svc remote.Client, att *Attestation, pub crypto.PublicKey, nonce []byte, policy remote.Policy) (remote.VerifyResponse, error) {
 	env, err := att.Envelope()
 	if err != nil {
-		return client.VerifyResponse{}, err
+		return remote.VerifyResponse{}, err
 	}
 	anchor, err := bindingAnchor(pub, nonce, policy.ExpectedReportData)
 	if err != nil {
-		return client.VerifyResponse{}, err
+		return remote.VerifyResponse{}, err
 	}
 	policy.ExpectedReportData = anchor
 	return svc.VerifyEvidence(ctx, env, policy)
@@ -109,10 +109,10 @@ func VerifyWithService(ctx context.Context, svc client.Client, att *Attestation,
 // against cert's own public key through an attestation service. Like [VerifyCertOffline] it
 // checks the evidence alone; the certificate's validity and chain remain the
 // caller's to verify.
-func VerifyCertWithService(ctx context.Context, svc client.Client, cert *x509.Certificate, oid asn1.ObjectIdentifier, nonce []byte, policy client.Policy) (client.VerifyResponse, error) {
+func VerifyCertWithService(ctx context.Context, svc remote.Client, cert *x509.Certificate, oid asn1.ObjectIdentifier, nonce []byte, policy remote.Policy) (remote.VerifyResponse, error) {
 	att, pub, err := attestationAndKey(cert, oid)
 	if err != nil {
-		return client.VerifyResponse{}, err
+		return remote.VerifyResponse{}, err
 	}
 	return VerifyWithService(ctx, svc, att, pub, nonce, policy)
 }

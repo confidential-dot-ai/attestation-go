@@ -13,11 +13,11 @@ import (
 	"testing"
 
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
-	"github.com/confidential-dot-ai/attestation-go/client"
+	"github.com/confidential-dot-ai/attestation-go/remote"
 )
 
 // ErrorCodeVerificationFailed is the service's error code for evidence that did
-// not verify, carried in [client.ErrorResponse].Error.
+// not verify, carried in [remote.ErrorResponse].Error.
 const ErrorCodeVerificationFailed = "verification_failed"
 
 // SNPReportSize is the byte length of an AMD SEV-SNP attestation report, the
@@ -52,10 +52,10 @@ func PassingVerdict(launchDigest string) Verdict {
 }
 
 // ErrorReply is an error response from the service. A non-empty Code sends the
-// [client.ErrorResponse] envelope, which callers see as an
-// [client.APIError]; an empty Code sends Message as text/plain — the
+// [remote.ErrorResponse] envelope, which callers see as an
+// [remote.APIError]; an empty Code sends Message as text/plain — the
 // framework's own rejection shape — which callers see as an
-// [client.UnexpectedError].
+// [remote.UnexpectedError].
 type ErrorReply struct {
 	Status  int
 	Code    string
@@ -84,8 +84,8 @@ type Stub struct {
 	verdict   Verdict
 	verifyErr ErrorReply
 	platform  teetypes.PlatformType
-	attest    []client.AttestRequest
-	verify    []client.VerifyRequest
+	attest    []remote.AttestRequest
+	verify    []remote.VerifyRequest
 }
 
 // New starts a stub serving plain HTTP, closed at test cleanup.
@@ -99,7 +99,7 @@ func New(t testing.TB) *Stub {
 }
 
 // NewUnix starts a stub serving on a Unix socket in t.TempDir(), closed at test
-// cleanup. Use it to exercise the transport [client.NewClient] selects for a
+// cleanup. Use it to exercise the transport [remote.NewClient] selects for a
 // "unix://" address, which re-validates the socket's owner and mode on every
 // request; [New] is otherwise equivalent and cheaper.
 func NewUnix(t testing.TB) *Stub {
@@ -133,7 +133,7 @@ func (s *Stub) handler() http.Handler {
 	return mux
 }
 
-// URL is the stub's address, in the form [client.NewClient] takes: an
+// URL is the stub's address, in the form [remote.NewClient] takes: an
 // http:// address from [New], a unix:// one from [NewUnix].
 func (s *Stub) URL() string { return s.url }
 
@@ -157,7 +157,7 @@ func (s *Stub) SetVerifyError(reply ErrorReply) {
 }
 
 // SetPlatform sets the platform the stub reports detecting: what /attest
-// resolves an [client.PlatformAuto] or empty request platform to, and what
+// resolves an [remote.PlatformAuto] or empty request platform to, and what
 // /health reports. The evidence bytes stay an SNP report whatever the tag.
 func (s *Stub) SetPlatform(p teetypes.PlatformType) {
 	s.mu.Lock()
@@ -166,30 +166,30 @@ func (s *Stub) SetPlatform(p teetypes.PlatformType) {
 }
 
 // AttestRequests returns the /attest requests received so far, in order.
-func (s *Stub) AttestRequests() []client.AttestRequest {
+func (s *Stub) AttestRequests() []remote.AttestRequest {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]client.AttestRequest(nil), s.attest...)
+	return append([]remote.AttestRequest(nil), s.attest...)
 }
 
 // VerifyRequests returns the /verify requests received so far, in order. An
 // undecodable body is refused before it is recorded, so every entry is a
 // request the service accepted.
-func (s *Stub) VerifyRequests() []client.VerifyRequest {
+func (s *Stub) VerifyRequests() []remote.VerifyRequest {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]client.VerifyRequest(nil), s.verify...)
+	return append([]remote.VerifyRequest(nil), s.verify...)
 }
 
 func (s *Stub) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	s.mu.Lock()
 	platform := s.platform
 	s.mu.Unlock()
-	writeJSON(w, client.HealthResponse{Status: "ok", Platform: &platform})
+	writeJSON(w, remote.HealthResponse{Status: "ok", Platform: &platform})
 }
 
 func (s *Stub) handleAttest(w http.ResponseWriter, r *http.Request) {
-	var req client.AttestRequest
+	var req remote.AttestRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, undecodableBody(err))
 		return
@@ -199,10 +199,10 @@ func (s *Stub) handleAttest(w http.ResponseWriter, r *http.Request) {
 	platform := s.platform
 	s.mu.Unlock()
 
-	if req.Platform != "" && req.Platform != client.PlatformAuto {
+	if req.Platform != "" && req.Platform != remote.PlatformAuto {
 		platform = req.Platform
 	}
-	writeJSON(w, client.AttestResponse{
+	writeJSON(w, remote.AttestResponse{
 		Platform: platform,
 		Evidence: FakeSNPEvidence(req.ReportData),
 	})
@@ -232,7 +232,7 @@ func FakeSNPEvidence(reportData []byte) json.RawMessage {
 }
 
 func (s *Stub) handleVerify(w http.ResponseWriter, r *http.Request) {
-	var req client.VerifyRequest
+	var req remote.VerifyRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, undecodableBody(err))
 		return
@@ -246,7 +246,7 @@ func (s *Stub) handleVerify(w http.ResponseWriter, r *http.Request) {
 		writeError(w, verifyErr)
 		return
 	}
-	writeJSON(w, client.VerifyResponse{
+	writeJSON(w, remote.VerifyResponse{
 		Result: teetypes.VerificationResult{
 			Platform:        req.Platform,
 			SignatureValid:  verdict.SignatureValid,
@@ -259,7 +259,7 @@ func (s *Stub) handleVerify(w http.ResponseWriter, r *http.Request) {
 
 // undecodableBody mirrors the service's JSON rejection: 400 for a body that is
 // not valid JSON, 422 for one that does not fit the handler's type; both
-// text/plain, so a caller sees an [client.UnexpectedError] rather than the
+// text/plain, so a caller sees an [remote.UnexpectedError] rather than the
 // error envelope.
 func undecodableBody(err error) ErrorReply {
 	var typeErr *json.UnmarshalTypeError
@@ -289,5 +289,5 @@ func writeError(w http.ResponseWriter, reply ErrorReply) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(reply.Status)
-	_ = json.NewEncoder(w).Encode(client.ErrorResponse{Error: reply.Code, Message: reply.Message})
+	_ = json.NewEncoder(w).Encode(remote.ErrorResponse{Error: reply.Code, Message: reply.Message})
 }
