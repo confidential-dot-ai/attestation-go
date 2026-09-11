@@ -236,22 +236,22 @@ func TestFormatRejects(t *testing.T) {
 	}
 }
 
-// Serve accepts what Format refuses — a component enforcing nothing — and
-// ParseServed reads it back without demanding a pin.
-func TestServeEmptySet(t *testing.T) {
-	doc, err := Serve(ReferenceValues{Family: teetypes.FamilyTDX})
+// Render accepts what Format refuses — a component enforcing nothing — and
+// ParseRendered reads it back without demanding a pin.
+func TestRenderEmptySet(t *testing.T) {
+	doc, err := Render(ReferenceValues{Family: teetypes.FamilyTDX})
 	if err != nil {
-		t.Fatalf("Serve: %v", err)
+		t.Fatalf("Render: %v", err)
 	}
 	if _, err := Parse(doc); err == nil {
-		t.Error("Parse accepted an empty served document")
+		t.Error("Parse accepted an empty rendered document")
 	}
-	rv, err := ParseServed(doc)
+	rv, err := ParseRendered(doc)
 	if err != nil {
-		t.Fatalf("ParseServed: %v", err)
+		t.Fatalf("ParseRendered: %v", err)
 	}
 	if rv.Family != teetypes.FamilyTDX || !rv.Empty() {
-		t.Errorf("ParseServed = %+v, want an empty tdx set", rv)
+		t.Errorf("ParseRendered = %+v, want an empty tdx set", rv)
 	}
 }
 

@@ -193,14 +193,21 @@ func (j *Journal) MeasureOnce(ref string) (bool, error) {
 func (j *Journal) Digests() []string { return slices.Clone(j.order) }
 
 // record appends one digest to the file, then to the in-memory order, so the
-// order never claims a digest the file does not hold.
+// order never claims a digest the file does not hold. The append is synced
+// before the caller extends: a record that only reached the page cache could
+// vanish in a power loss after the extend landed, which is the one ordering
+// [OpenJournal] cannot repair.
 func (j *Journal) record(digest string) error {
 	f, err := os.OpenFile(j.path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {
 		return err
 	}
 	_, werr := f.WriteString(digest + "\n")
-	if err := errors.Join(werr, f.Close()); err != nil {
+	var serr error
+	if werr == nil {
+		serr = f.Sync()
+	}
+	if err := errors.Join(werr, serr, f.Close()); err != nil {
 		return err
 	}
 	j.order = append(j.order, digest)
@@ -227,7 +234,12 @@ func (j *Journal) unrecordLast(digest string) error {
 
 // writeAtomic replaces path via a same-directory temp file and a rename, so a
 // reader never sees a half-written journal. The temp file must share the
-// directory: a rename across filesystems is not atomic.
+// directory: a rename across filesystems is not atomic. The data is synced
+// before the rename and the directory after it, so the replacement survives a
+// power loss rather than reverting to the file it replaced.
+//
+// Atomic here means a reader sees the old file or the new one, never a mix.
+// It is not mutual exclusion between writers; a Journal has one writer.
 func writeAtomic(path string, data []byte, perm os.FileMode) error {
 	dir, base := filepath.Dir(path), filepath.Base(path)
 	tmp, err := os.CreateTemp(dir, base+".*.tmp")
@@ -247,6 +259,9 @@ func writeAtomic(path string, data []byte, perm os.FileMode) error {
 	if err := tmp.Chmod(perm); err != nil {
 		return err
 	}
+	if err := tmp.Sync(); err != nil {
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
@@ -254,5 +269,14 @@ func writeAtomic(path string, data []byte, perm os.FileMode) error {
 		return err
 	}
 	name = "" // renamed away: nothing left to clean up
-	return nil
+	return syncDir(dir)
+}
+
+// syncDir flushes a directory's entries, so a rename into it is durable.
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	return errors.Join(d.Sync(), d.Close())
 }

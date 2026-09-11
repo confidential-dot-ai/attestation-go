@@ -11,36 +11,36 @@ import (
 	"github.com/confidential-dot-ai/attestation-go/remote"
 )
 
-// Serve renders the set as a document describing what a component enforces.
-// Unlike [Format] it accepts an empty set: a component that pins nothing is
-// the state an operator most needs reported.
-func Serve(rv ReferenceValues) ([]byte, error) {
+// Render encodes the set as the document a component publishes to describe
+// what it enforces. Unlike [Format] it accepts an empty set: a component that
+// pins nothing is the state an operator most needs reported.
+func Render(rv ReferenceValues) ([]byte, error) {
 	if len(rv.Images) == 0 {
 		f := wire{SchemaVersion: SchemaVersion1, TEE: string(rv.Family), Measurements: []wireImage{}}
 		out, err := json.MarshalIndent(f, "", "  ")
 		if err != nil {
-			return nil, fmt.Errorf("encode served measurements: %w", err)
+			return nil, fmt.Errorf("encode rendered measurements: %w", err)
 		}
 		return append(out, '\n'), nil
 	}
 	return Format(rv)
 }
 
-// ParseServed decodes a document a component serves to describe the reference
-// values it enforces. Unlike [Parse] it accepts an empty set, because a
-// component that enforces nothing must still be readable. An operator's own
-// config file takes [Parse] instead.
-func ParseServed(data []byte) (ReferenceValues, error) {
+// ParseRendered decodes a document a component published with [Render].
+// Unlike [Parse] it accepts an empty set, because a component that enforces
+// nothing must still be readable. An operator's own config file takes [Parse]
+// instead.
+func ParseRendered(data []byte) (ReferenceValues, error) {
 	var f wire
 	if err := json.NewDecoder(bytes.NewReader(data)).Decode(&f); err != nil {
-		return ReferenceValues{}, fmt.Errorf("decode served measurements: %w", err)
+		return ReferenceValues{}, fmt.Errorf("decode rendered measurements: %w", err)
 	}
 	if f.SchemaVersion != SchemaVersion1 {
-		return ReferenceValues{}, fmt.Errorf("served schema_version %q, want %q", f.SchemaVersion, SchemaVersion1)
+		return ReferenceValues{}, fmt.Errorf("rendered schema_version %q, want %q", f.SchemaVersion, SchemaVersion1)
 	}
 	fam, err := teetypes.ParseFamily(f.TEE)
 	if err != nil {
-		return ReferenceValues{}, fmt.Errorf("served tee %w", err)
+		return ReferenceValues{}, fmt.Errorf("rendered tee %w", err)
 	}
 	rv := ReferenceValues{Family: fam}
 	for i, we := range f.Measurements {
