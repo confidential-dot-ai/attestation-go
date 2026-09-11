@@ -14,20 +14,6 @@ import (
 	"github.com/confidential-dot-ai/attestation-go/attestation/tpmcommon"
 )
 
-// fakeSNPReport builds a structurally valid but unsigned 1184-byte SEV-SNP
-// report with reportData at REPORTDATA's offset. Field offsets are from the AMD
-// SEV-SNP ABI Specification, table 21.
-func fakeSNPReport(reportData [64]byte) []byte {
-	report := make([]byte, SNPReportSize)
-	report[0] = 0x02                                  // VERSION, >= 2 for SNP
-	report[0x0A] = 0x03                               // POLICY: SMT allowed + reserved bit
-	copy(report[snpReportDataOffset:], reportData[:]) // REPORTDATA, 64 bytes at 0x50
-	for i := range 48 {
-		report[0x90+i] = byte(i) // MEASUREMENT, deterministic
-	}
-	return report
-}
-
 // fakeHCLEnvelope wraps report in the Hyper-V HCL envelope an Azure vTPM
 // returns: header(32) + report + var-data header(20) + var data, with trailing
 // padding after the var data.

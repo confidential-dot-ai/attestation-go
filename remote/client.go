@@ -1,6 +1,7 @@
-// Package client is the Go client for attestation-api, the HTTP service that
+// Package remote is the Go client for attestation-api, the HTTP service that
 // produces and verifies TEE evidence on a confidential host (the attestation-rs
-// binary).
+// binary). It is remote in the sense that the evidence is produced and checked
+// by another process, reached over a socket or an HTTP address.
 //
 // The service exposes three endpoints, wrapped here as [Client.Attest],
 // [Client.Verify] and [Client.Health]. Most callers want neither raw endpoint

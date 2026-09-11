@@ -7,7 +7,6 @@ import (
 	"crypto/sha512"
 	"crypto/x509"
 	"encoding/asn1"
-	"encoding/json"
 	"fmt"
 
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
@@ -42,19 +41,15 @@ func VerifyOffline(att *Attestation, pub crypto.PublicKey, nonce []byte, params 
 	}
 	params.ExpectedReportData = anchor
 
-	evidenceJSON, err := json.Marshal(env)
-	if err != nil {
-		return nil, fmt.Errorf("ratls: marshal evidence envelope: %w", err)
-	}
-	result, err := teeverify.VerifyWithOptions(evidenceJSON, params, opts)
+	result, err := teeverify.VerifyEnvelope(context.Background(), env, params, opts)
 	if err != nil {
 		return nil, fmt.Errorf("ratls: verify %s evidence: %w", env.Platform, err)
 	}
 	// The verifier reports a mismatch as an error, so both hold on this path.
 	// Re-check them anyway: a verifier that ever returns a result without an
 	// error must not read here as a pass.
-	if !result.SignatureValid {
-		return nil, fmt.Errorf("ratls: %s verifier returned signature_valid=false", env.Platform)
+	if err := result.Check(); err != nil {
+		return nil, fmt.Errorf("ratls: %s evidence: %w", env.Platform, err)
 	}
 	if result.ReportDataMatch == nil || !*result.ReportDataMatch {
 		return nil, fmt.Errorf("ratls: %s evidence does not bind the certificate key", env.Platform)

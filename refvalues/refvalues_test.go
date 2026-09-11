@@ -2,6 +2,7 @@ package refvalues
 
 import (
 	"bytes"
+	"slices"
 	"testing"
 )
 
@@ -37,8 +38,8 @@ func TestFromFlagsRTMRsWithoutDigests(t *testing.T) {
 	if !rv.Empty() {
 		t.Error("Empty() = false for a set with no images")
 	}
-	if len(rv.DigestSet()) != 0 {
-		t.Error("DigestSet() is non-empty for a set with no images")
+	if len(rv.Digests()) != 0 {
+		t.Error("Digests() is non-empty for a set with no images")
 	}
 	if len(rv.Policy().Images) != 0 {
 		t.Error("Policy() pins images for a set with none")
@@ -127,8 +128,7 @@ func TestDigestAccessors(t *testing.T) {
 	if got := len(rv.Digests()); got != 2 {
 		t.Errorf("Digests() len = %d, want 2", got)
 	}
-	ds := rv.DigestSet()
-	if !ds[d1] || !ds[d2] {
-		t.Errorf("DigestSet() = %v, want both digests", ds)
+	if got := rv.hexDigests(); !slices.Equal(got, []string{d1, d2}) {
+		t.Errorf("hexDigests() = %v, want both digests", got)
 	}
 }

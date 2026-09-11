@@ -16,6 +16,7 @@ import (
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
 	"github.com/confidential-dot-ai/attestation-go/attestation/teeverify"
 	"github.com/confidential-dot-ai/attestation-go/remote"
+	"github.com/confidential-dot-ai/attestation-go/remote/mockapi"
 )
 
 // A real Azure SEV-SNP evidence envelope, the shape the extension embeds for a
@@ -29,7 +30,7 @@ var azSnpEnvelope []byte
 func azSnpAttestation(t *testing.T) *Attestation {
 	t.Helper()
 	att, err := UnmarshalExtension(marshalASN1(t, attestationASN1{
-		TEEType: int(TEETypeSEVSNP),
+		TEEType: wireSNP,
 		Report:  azSnpEnvelope,
 	}))
 	if err != nil {
@@ -90,7 +91,7 @@ func TestVerifyOfflineRejectsUnsignedRawReport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReportDataForKey: %v", err)
 	}
-	att := &Attestation{TEEType: TEETypeSEVSNP, Report: fakeSNPReport(anchor)}
+	att := &Attestation{Family: teetypes.FamilySNP, Report: mockapi.FakeSNPReport(anchor[:])}
 
 	if _, err := VerifyOffline(att, &key.PublicKey, nil, teetypes.VerifyParams{}, teeverify.Options{}); err == nil {
 		t.Fatal("VerifyOffline accepted an unsigned report")
@@ -150,7 +151,7 @@ func TestVerifyWithServiceSendsKeyAnchor(t *testing.T) {
 	key := testKey(t)
 	measurement := bytes.Repeat([]byte{0x42}, sha512.Size384)
 	spy := &verifySpy{result: passingVerdict(measurement)}
-	att := &Attestation{TEEType: TEETypeSEVSNP, Report: fakeSNPReport([64]byte{})}
+	att := &Attestation{Family: teetypes.FamilySNP, Report: mockapi.FakeSNPReport([]byte{})}
 
 	resp, err := VerifyWithService(context.Background(), spy.service(t), att, &key.PublicKey, nil,
 		remote.Policy{Measurements: [][]byte{measurement}})
@@ -178,7 +179,7 @@ func TestVerifyWithServiceSendsKeyAnchor(t *testing.T) {
 func TestVerifyWithServiceNonceChangesAnchor(t *testing.T) {
 	key := testKey(t)
 	spy := &verifySpy{result: passingVerdict(nil)}
-	att := &Attestation{TEEType: TEETypeSEVSNP, Report: fakeSNPReport([64]byte{})}
+	att := &Attestation{Family: teetypes.FamilySNP, Report: mockapi.FakeSNPReport([]byte{})}
 
 	if _, err := VerifyWithService(context.Background(), spy.service(t), att, &key.PublicKey, []byte("nonce"), remote.Policy{}); err != nil {
 		t.Fatalf("VerifyWithService: %v", err)
@@ -197,7 +198,7 @@ func TestVerifyWithServiceNonceChangesAnchor(t *testing.T) {
 func TestVerifyWithServiceFailsClosed(t *testing.T) {
 	key := testKey(t)
 	measurement := bytes.Repeat([]byte{0x42}, sha512.Size384)
-	att := &Attestation{TEEType: TEETypeSEVSNP, Report: fakeSNPReport([64]byte{})}
+	att := &Attestation{Family: teetypes.FamilySNP, Report: mockapi.FakeSNPReport([]byte{})}
 
 	cases := []struct {
 		name    string
@@ -242,7 +243,7 @@ func TestVerifyWithServiceFailsClosed(t *testing.T) {
 func TestVerifyWithServiceRefusesConflictingReportData(t *testing.T) {
 	key := testKey(t)
 	spy := &verifySpy{result: passingVerdict(nil)}
-	att := &Attestation{TEEType: TEETypeSEVSNP, Report: fakeSNPReport([64]byte{})}
+	att := &Attestation{Family: teetypes.FamilySNP, Report: mockapi.FakeSNPReport([]byte{})}
 
 	_, err := VerifyWithService(context.Background(), spy.service(t), att, &key.PublicKey, nil,
 		remote.Policy{ExpectedReportData: bytes.Repeat([]byte{0xAA}, sha512.Size384)})
@@ -257,7 +258,7 @@ func TestVerifyWithServiceRefusesConflictingReportData(t *testing.T) {
 // The certificate path binds the certificate's own key, which is what makes the
 // certificate self-attesting.
 func TestVerifyCertWithServiceBindsCertKey(t *testing.T) {
-	att := &Attestation{TEEType: TEETypeSEVSNP, Report: fakeSNPReport([64]byte{})}
+	att := &Attestation{Family: teetypes.FamilySNP, Report: mockapi.FakeSNPReport([]byte{})}
 	cert, key := certWithExtension(t, att)
 	spy := &verifySpy{result: passingVerdict(nil)}
 

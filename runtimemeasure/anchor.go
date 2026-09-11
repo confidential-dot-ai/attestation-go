@@ -35,7 +35,7 @@ var ErrNoAnchor = errors.New("init-data claim is not an anchor digest")
 // is host-chosen on both platforms. It refuses az-snp, where the paravisor owns
 // HOST_DATA and the field says nothing about the guest's init data.
 func InitDataAnchor(r *teetypes.VerificationResult) ([]byte, error) {
-	if err := checkVerified(r); err != nil {
+	if err := r.Check(); err != nil {
 		return nil, err
 	}
 	if err := checkBindingPlatform(r.Platform); err != nil {

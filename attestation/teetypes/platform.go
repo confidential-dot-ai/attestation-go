@@ -140,3 +140,14 @@ func (p PlatformType) HasVTPMQuote() bool {
 		return false
 	}
 }
+
+// HasRegisters reports whether verified evidence from the platform carries
+// runtime measurement registers — the TDX RTMRs a guest extends after launch,
+// and so the values Claims.RTMR reads.
+//
+// It is a family property: every TDX tag exposes them, cloud overlays
+// included. SEV-SNP has no runtime-extend register and commits its post-launch
+// identity at launch instead, so a register pin there asks for a check no
+// evidence can answer — a policy error, not something to skip. False for an
+// unknown tag, so such a pin fails closed.
+func (p PlatformType) HasRegisters() bool { return p.Family() == FamilyTDX }

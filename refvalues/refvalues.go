@@ -14,10 +14,6 @@ import (
 // MRTD alike.
 const DigestSize = runtimemeasure.Size
 
-// MaxRTMRs is the number of TDX runtime measurement registers, and so the
-// length of the config file's rtmr array.
-const MaxRTMRs = 4
-
 // ReferenceValues is what a verifier compares evidence against: the guest
 // images one deployment accepts, on one TEE family. A verifier that cannot
 // express a whole tuple flattens the set with [ReferenceValues.Flatten], which
@@ -57,22 +53,12 @@ func (rv ReferenceValues) Digests() [][]byte {
 	return out
 }
 
-// HexDigests returns the pinned digests as lowercase hex, for the flag and
-// values shapes that carry a plain list.
-func (rv ReferenceValues) HexDigests() []string {
+// hexDigests returns the pinned digests as lowercase hex, the shape [Flatten]
+// renders.
+func (rv ReferenceValues) hexDigests() []string {
 	out := make([]string, 0, len(rv.Images))
 	for _, img := range rv.Images {
 		out = append(out, hex.EncodeToString(img.Digest))
-	}
-	return out
-}
-
-// DigestSet returns the pinned digests as lowercase hex, for verifiers that
-// hold them as a string set.
-func (rv ReferenceValues) DigestSet() map[string]bool {
-	out := make(map[string]bool, len(rv.Images))
-	for _, img := range rv.Images {
-		out[hex.EncodeToString(img.Digest)] = true
 	}
 	return out
 }
@@ -103,7 +89,7 @@ func (rv ReferenceValues) CommonRTMRs() (common map[int][]byte, uniform bool) {
 // package does not log.
 func (rv ReferenceValues) Flatten() (digests []string, rtmrs map[int][]byte, uniform bool) {
 	common, uniform := rv.CommonRTMRs()
-	return rv.HexDigests(), common, uniform
+	return rv.hexDigests(), common, uniform
 }
 
 // FromFlags converts the legacy flat pins into images: every digest carries

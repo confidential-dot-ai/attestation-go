@@ -15,80 +15,59 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/confidential-dot-ai/attestation-go/attestation/snp"
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
 )
 
-// SNPReportSize is the exact size of an AMD SEV-SNP attestation report
-// (ATTESTATION_REPORT, AMD SEV-SNP ABI Specification table 21).
-const SNPReportSize = 0x4A0 // 1184 bytes
+// SNPReportSize is the exact size of an AMD SEV-SNP attestation report. The
+// name is this package's; the value is [snp.ReportSize].
+const SNPReportSize = snp.ReportSize
 
-// snpReportDataOffset is the byte offset of the 64-byte REPORTDATA field within
-// an ATTESTATION_REPORT.
-const snpReportDataOffset = 0x50
-
-// TEEType is the hardware family recorded in the extension. The values are
-// wire format: 1 and 2 are written into issued certificates and parsed by
-// deployed verifiers, so they can be extended but never renumbered.
+// The TEE family travels in the extension as an integer. These two values are
+// written into issued certificates and parsed by deployed verifiers, so the set
+// can be extended but never renumbered.
 //
-// It names the family only. Which variant produced the evidence (bare-metal,
-// Azure, GCP) is carried in the evidence itself and detected on parse, so
-// adding a variant needs no new wire value.
-type TEEType int
-
+// Only the family is on the wire. Which variant produced the evidence
+// (bare-metal, Azure, GCP) is carried in the evidence itself and detected on
+// parse, so adding a variant needs no new value.
 const (
-	// TEETypeSEVSNP is AMD SEV-SNP: snp, az-snp, gcp-snp.
-	TEETypeSEVSNP TEEType = 1
-	// TEETypeTDX is Intel TDX: tdx, az-tdx, gcp-tdx.
-	TEETypeTDX TEEType = 2
+	wireSNP = 1 // AMD SEV-SNP: snp, az-snp, gcp-snp
+	wireTDX = 2 // Intel TDX: tdx, az-tdx, gcp-tdx
 )
 
-// String returns a human-readable platform name, or unknown(n) for a wire value
-// this package does not define.
-func (t TEEType) String() string {
-	switch t {
-	case TEETypeSEVSNP:
-		return "AMD SEV-SNP"
-	case TEETypeTDX:
-		return "Intel TDX"
-	default:
-		return fmt.Sprintf("unknown(%d)", int(t))
-	}
-}
-
-// Family returns the platform family this TEE type stands for, so callers can
-// compare an extension against an evidence envelope without matching strings.
-// An undefined wire value yields [teetypes.FamilyUnknown], which callers must
-// treat as "no rules apply".
-func (t TEEType) Family() teetypes.Family {
-	switch t {
-	case TEETypeSEVSNP:
-		return teetypes.FamilySNP
-	case TEETypeTDX:
-		return teetypes.FamilyTDX
-	default:
-		return teetypes.FamilyUnknown
-	}
-}
-
-// TEETypeFor returns the wire value for a platform tag, routing through
-// [teetypes.PlatformType.Family] so a cloud overlay maps to the same value as
-// its bare-metal counterpart. A tag with no family fails with
-// [ErrUnsupportedTEE] rather than defaulting to one.
-func TEETypeFor(p teetypes.PlatformType) (TEEType, error) {
-	switch p.Family() {
+// wireTEEType encodes a family for the extension. A family with no value fails
+// with [ErrUnsupportedTEE] rather than defaulting to one.
+func wireTEEType(f teetypes.Family) (int, error) {
+	switch f {
 	case teetypes.FamilySNP:
-		return TEETypeSEVSNP, nil
+		return wireSNP, nil
 	case teetypes.FamilyTDX:
-		return TEETypeTDX, nil
+		return wireTDX, nil
 	default:
-		return 0, fmt.Errorf("%w: no RA-TLS TEE type for platform %q", ErrUnsupportedTEE, p)
+		return 0, fmt.Errorf("%w: no RA-TLS wire value for TEE family %q", ErrUnsupportedTEE, f)
+	}
+}
+
+// familyFromWire decodes what an extension declares. An undefined value is
+// refused rather than read as a family, so a certificate from a newer producer
+// fails closed here instead of being verified under this package's rules.
+func familyFromWire(v int) (teetypes.Family, error) {
+	switch v {
+	case wireSNP:
+		return teetypes.FamilySNP, nil
+	case wireTDX:
+		return teetypes.FamilyTDX, nil
+	default:
+		return teetypes.FamilyUnknown, fmt.Errorf("%w: TEE type %d", ErrUnsupportedTEE, v)
 	}
 }
 
 // Attestation is the TEE evidence carried by an RA-TLS certificate extension.
 type Attestation struct {
-	// TEEType is the platform family that produced the evidence.
-	TEEType TEEType
+	// Family is the hardware TEE family that produced the evidence. It is the
+	// same vocabulary the evidence envelope and the verifiers use, so an
+	// extension and the evidence it carries compare directly.
+	Family teetypes.Family
 
 	// Report is the evidence payload in one of the two shapes this extension
 	// carries: raw SEV-SNP report bytes, or a JSON [teetypes.AttestationEvidence]
@@ -131,8 +110,12 @@ func (a *Attestation) MarshalExtension(oid asn1.ObjectIdentifier) (pkix.Extensio
 	if len(oid) == 0 {
 		return pkix.Extension{}, errors.New("ratls: no extension OID")
 	}
+	teeType, err := wireTEEType(a.Family)
+	if err != nil {
+		return pkix.Extension{}, err
+	}
 	value, err := asn1.Marshal(attestationASN1{
-		TEEType:   int(a.TEEType),
+		TEEType:   teeType,
 		Report:    a.Report,
 		CertChain: a.CertChain,
 	})
@@ -155,32 +138,42 @@ func UnmarshalExtension(der []byte) (*Attestation, error) {
 	if len(rest) > 0 {
 		return nil, fmt.Errorf("%w: %d trailing bytes after the attestation extension", ErrInvalidReport, len(rest))
 	}
-	return newAttestation(TEEType(raw.TEEType), raw.Report, raw.CertChain)
+	family, err := familyFromWire(raw.TEEType)
+	if err != nil {
+		return nil, err
+	}
+	return newAttestation(family, raw.Report, raw.CertChain, nil)
 }
 
 // newAttestation decides the evidence shape for both directions, so the
 // producer ([NewAttestation]) and the verifier ([UnmarshalExtension]) cannot
 // disagree about what a payload means.
-func newAttestation(teeType TEEType, report, certChain []byte) (*Attestation, error) {
-	if teeType != TEETypeSEVSNP && teeType != TEETypeTDX {
-		return nil, fmt.Errorf("%w: TEE type %d", ErrUnsupportedTEE, int(teeType))
+//
+// embedded is the envelope report encodes when the caller already has it; a nil
+// one is probed for, which is what a payload off the wire needs.
+func newAttestation(family teetypes.Family, report, certChain []byte, embedded *teetypes.AttestationEvidence) (*Attestation, error) {
+	if _, err := wireTEEType(family); err != nil {
+		return nil, err
 	}
-	att := &Attestation{TEEType: teeType, Report: report, CertChain: certChain}
+	att := &Attestation{Family: family, Report: report, CertChain: certChain}
 
 	// Probe for the envelope first: SEV-SNP has both shapes, so only a payload
 	// that is not an envelope is read as raw report bytes.
-	embedded, err := parseEmbeddedEvidence(report)
-	if err != nil {
-		return nil, err
+	if embedded == nil {
+		var err error
+		if embedded, err = parseEmbeddedEvidence(report); err != nil {
+			return nil, err
+		}
 	}
+	var err error
 	switch {
 	case embedded != nil:
-		if got := embedded.Platform.Family(); got != teeType.Family() {
+		if got := embedded.Platform.Family(); got != family {
 			return nil, fmt.Errorf("%w: extension declares %s but carries %q evidence",
-				ErrInvalidReport, teeType, embedded.Platform)
+				ErrInvalidReport, family, embedded.Platform)
 		}
 		att.embedded = embedded
-	case teeType == TEETypeSEVSNP:
+	case family == teetypes.FamilySNP:
 		if att.Report, err = NormalizeSEVSNPReport(report); err != nil {
 			return nil, err
 		}
@@ -230,10 +223,10 @@ func (a *Attestation) EmbeddedEvidence() (teetypes.AttestationEvidence, bool) {
 // a check: the bytes stay unverified until the report's signature is, so a
 // match here proves nothing on its own.
 func (a *Attestation) ReportData() ([]byte, bool) {
-	if a.embedded != nil || a.TEEType != TEETypeSEVSNP || len(a.Report) < snpReportDataOffset+64 {
+	if a.embedded != nil || a.Family != teetypes.FamilySNP || len(a.Report) < snp.ReportDataOffset+64 {
 		return nil, false
 	}
-	return a.Report[snpReportDataOffset : snpReportDataOffset+64], true
+	return a.Report[snp.ReportDataOffset : snp.ReportDataOffset+64], true
 }
 
 // Envelope returns the evidence as a self-describing envelope, ready for
@@ -249,26 +242,18 @@ func (a *Attestation) Envelope() (teetypes.AttestationEvidence, error) {
 	if a.embedded != nil {
 		return *a.embedded, nil
 	}
-	if a.TEEType != TEETypeSEVSNP {
-		return teetypes.AttestationEvidence{}, fmt.Errorf("%w: %s evidence must be a JSON envelope", ErrInvalidReport, a.TEEType)
+	if a.Family != teetypes.FamilySNP {
+		return teetypes.AttestationEvidence{}, fmt.Errorf("%w: %s evidence must be a JSON envelope", ErrInvalidReport, a.Family)
 	}
-	inner := struct {
-		AttestationReport string     `json:"attestation_report"`
-		CertChain         *certChain `json:"cert_chain,omitempty"`
-	}{AttestationReport: base64.StdEncoding.EncodeToString(a.Report)}
+	inner := snp.SnpEvidence{AttestationReport: base64.StdEncoding.EncodeToString(a.Report)}
 	if len(a.CertChain) > 0 {
-		inner.CertChain = &certChain{Vcek: base64.StdEncoding.EncodeToString(a.CertChain)}
+		inner.CertChain = &snp.SnpCertChain{Vcek: base64.StdEncoding.EncodeToString(a.CertChain)}
 	}
 	raw, err := json.Marshal(inner)
 	if err != nil {
 		return teetypes.AttestationEvidence{}, fmt.Errorf("ratls: build snp evidence: %w", err)
 	}
 	return teetypes.AttestationEvidence{Platform: teetypes.PlatformSNP, Evidence: raw}, nil
-}
-
-// certChain is the inline-collateral field of the SEV-SNP evidence object.
-type certChain struct {
-	Vcek string `json:"vcek"`
 }
 
 // ExtractAttestation parses the RA-TLS extension carried under oid out of a

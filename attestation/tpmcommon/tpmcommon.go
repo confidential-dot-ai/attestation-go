@@ -26,6 +26,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/confidential-dot-ai/attestation-go/attestation/snp"
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
 )
 
@@ -33,8 +34,8 @@ import (
 
 const (
 	hclTEEReportOffset   = 0x20
-	hclTEEReportSize     = 1184 // SNP and TDX both 1184
-	hclVarDataHeaderSize = 20   // 5 little-endian u32s: total, count, report_type, version, content_length
+	hclTEEReportSize     = snp.ReportSize // a TDX TD report is the same width
+	hclVarDataHeaderSize = 20             // 5 little-endian u32s: total, count, report_type, version, content_length
 
 	// HCLReportTypeSNP / HCLReportTypeTDX are the report_type values in the
 	// var_data header.

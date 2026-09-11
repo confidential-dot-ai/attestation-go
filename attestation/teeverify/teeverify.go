@@ -56,15 +56,26 @@ func VerifyWithOptionsContext(ctx context.Context, evidenceJSON []byte, params t
 	if len(evidenceJSON) > MaxEvidenceSize {
 		return nil, fmt.Errorf("evidence too large: %d bytes (max %d)", len(evidenceJSON), MaxEvidenceSize)
 	}
-	if len(params.ExpectedReportData) > 64 {
-		return nil, fmt.Errorf("expected_report_data is %d bytes (max 64)", len(params.ExpectedReportData))
-	}
-
 	var env teetypes.AttestationEvidence
 	if err := json.Unmarshal(evidenceJSON, &env); err != nil {
 		return nil, fmt.Errorf("parsing evidence envelope: %w", err)
 	}
+	return VerifyEnvelope(ctx, env, params, opts)
+}
 
+// VerifyEnvelope verifies an evidence envelope a caller already holds parsed,
+// and is where the dispatch happens: the byte-slice entry points unmarshal and
+// come here. A caller that built or received an envelope — RA-TLS extension
+// evidence, an attestation service's /attest response — calls this rather than
+// marshalling it only to have it parsed straight back.
+//
+// The size bound belongs to the byte-slice entry points, which is where
+// untrusted bytes arrive; an envelope in hand has already been parsed by
+// whoever produced it.
+func VerifyEnvelope(ctx context.Context, env teetypes.AttestationEvidence, params teetypes.VerifyParams, opts Options) (*teetypes.VerificationResult, error) {
+	if len(params.ExpectedReportData) > 64 {
+		return nil, fmt.Errorf("expected_report_data is %d bytes (max 64)", len(params.ExpectedReportData))
+	}
 	// Route on the canonicalized tag so the dispatcher accepts exactly what
 	// teetypes.NormalizePlatform/Family say a tag means; the result carries the
 	// canonical constant, never the attester's spelling.

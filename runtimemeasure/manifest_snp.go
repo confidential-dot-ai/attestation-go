@@ -8,6 +8,8 @@ import (
 	"os"
 	"slices"
 	"strings"
+
+	"github.com/confidential-dot-ai/attestation-go/internal/strictjson"
 )
 
 // snpImagePins is the SEV-SNP measurement identity of one guest image: the
@@ -63,7 +65,7 @@ func loadSNPImageManifest(path string) (snpImagePins, error) {
 	if err := json.Unmarshal(data, &m); err != nil {
 		return snpImagePins{}, fmt.Errorf("image manifest %s is not a JSON object: %w", path, err)
 	}
-	if _, err := rejectDuplicateKeys(data); err != nil {
+	if _, err := strictjson.RejectDuplicateKeys(data); err != nil {
 		return snpImagePins{}, fmt.Errorf("image manifest %s: %w", path, err)
 	}
 	if len(m.SNPVariants) == 0 {

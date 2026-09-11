@@ -11,12 +11,17 @@ import (
 	"strings"
 
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
+	"github.com/confidential-dot-ai/attestation-go/internal/strictjson"
 	"github.com/confidential-dot-ai/attestation-go/remote"
 )
 
-// SchemaVersion1 is the only measurements config schema version this package
+// schemaVersion1 is the only measurements config schema version this package
 // accepts. A future version is rejected, never guessed at.
-const SchemaVersion1 = "1"
+const schemaVersion1 = "1"
+
+// maxRTMRs is the number of TDX runtime measurement registers, and so the
+// length of the config file's rtmr array.
+const maxRTMRs = 4
 
 // wire mirrors the file exactly; validation happens against these fields so an
 // absent value stays distinguishable from an empty one.
@@ -51,7 +56,7 @@ func Load(path string) (ReferenceValues, error) {
 // the same rules, so a file that lints clean is the file every component
 // loads. Errors name the JSON path they were found at.
 func Parse(data []byte) (ReferenceValues, error) {
-	if err := rejectDuplicateKeys(data); err != nil {
+	if _, err := strictjson.RejectDuplicateKeys(data); err != nil {
 		return ReferenceValues{}, err
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
@@ -67,8 +72,8 @@ func Parse(data []byte) (ReferenceValues, error) {
 }
 
 func (f wire) validate() (ReferenceValues, error) {
-	if f.SchemaVersion != SchemaVersion1 {
-		return ReferenceValues{}, fmt.Errorf("schema_version %q, want %q", f.SchemaVersion, SchemaVersion1)
+	if f.SchemaVersion != schemaVersion1 {
+		return ReferenceValues{}, fmt.Errorf("schema_version %q, want %q", f.SchemaVersion, schemaVersion1)
 	}
 	fam, err := teetypes.ParseFamily(f.TEE)
 	if err != nil {
@@ -149,8 +154,8 @@ func decodeRTMRs(raw []*string, at string) (map[int][]byte, error) {
 	if len(raw) == 0 {
 		return nil, nil
 	}
-	if len(raw) > MaxRTMRs {
-		return nil, fmt.Errorf("%s.rtmr has %d entries, want at most %d", at, len(raw), MaxRTMRs)
+	if len(raw) > maxRTMRs {
+		return nil, fmt.Errorf("%s.rtmr has %d entries, want at most %d", at, len(raw), maxRTMRs)
 	}
 	out := make(map[int][]byte, len(raw))
 	for idx, v := range raw {
@@ -178,27 +183,17 @@ func decodeRTMRs(raw []*string, at string) (map[int][]byte, error) {
 	return out, nil
 }
 
-// decodeRegister requires lowercase hex of exactly one register width.
-// Uppercase is rejected rather than folded so one register has one spelling.
+// decodeRegister requires lowercase hex of exactly one register width. See
+// [teetypes.ParseDigest] for why uppercase is refused rather than folded.
 func decodeRegister(s string) ([]byte, error) {
-	if s != strings.ToLower(s) {
-		return nil, fmt.Errorf("%q is not lowercase hex", s)
-	}
-	if len(s) != hex.EncodedLen(DigestSize) {
-		return nil, fmt.Errorf("is %d hex chars, want %d", len(s), hex.EncodedLen(DigestSize))
-	}
-	d, err := hex.DecodeString(s)
-	if err != nil {
-		return nil, fmt.Errorf("is not hex: %w", err)
-	}
-	return d, nil
+	return teetypes.ParseDigest(s, DigestSize)
 }
 
 // Format renders a set as a measurements config document. A pin it cannot
 // render is an error, never dropped, so a set that formats is a set that
 // [Parse] loads back.
 func Format(rv ReferenceValues) ([]byte, error) {
-	f := wire{SchemaVersion: SchemaVersion1, TEE: string(rv.Family)}
+	f := wire{SchemaVersion: schemaVersion1, TEE: string(rv.Family)}
 	for i, img := range rv.Images {
 		we := wireImage{Name: img.Name}
 		d := hex.EncodeToString(img.Digest)
@@ -211,10 +206,10 @@ func Format(rv ReferenceValues) ([]byte, error) {
 		case teetypes.FamilyTDX:
 			we.MRTD = &d
 			if len(img.RTMRs) > 0 {
-				we.RTMR = make([]*string, MaxRTMRs)
+				we.RTMR = make([]*string, maxRTMRs)
 				for idx, v := range img.RTMRs {
-					if idx <= 0 || idx >= MaxRTMRs {
-						return nil, fmt.Errorf("measurements[%d]: rtmr[%d] is not pinnable, want 1..%d", i, idx, MaxRTMRs-1)
+					if idx <= 0 || idx >= maxRTMRs {
+						return nil, fmt.Errorf("measurements[%d]: rtmr[%d] is not pinnable, want 1..%d", i, idx, maxRTMRs-1)
 					}
 					h := hex.EncodeToString(v)
 					we.RTMR[idx] = &h
@@ -241,68 +236,4 @@ func tupleKey(img remote.ImagePin) string {
 		fmt.Fprintf(&b, "|%d=%s", i, hex.EncodeToString(img.RTMRs[i]))
 	}
 	return b.String()
-}
-
-// rejectDuplicateKeys fails a document that names any key twice. encoding/json
-// keeps the last occurrence silently, so without this check the value a
-// reviewer reads and the value a verifier loads can differ. The schema is two
-// levels deep, so the document and each image are scanned directly.
-func rejectDuplicateKeys(data []byte) error {
-	key, err := duplicateKey(data)
-	if err != nil {
-		return err
-	}
-	if key != "" {
-		return fmt.Errorf("duplicate key %q", key)
-	}
-	// Tolerant: a document whose shape is wrong is Parse's error to report.
-	var doc struct {
-		Measurements []json.RawMessage `json:"measurements"`
-	}
-	if err := json.Unmarshal(data, &doc); err != nil {
-		return nil
-	}
-	for i, image := range doc.Measurements {
-		key, err := duplicateKey(image)
-		if err != nil {
-			return err
-		}
-		if key != "" {
-			return fmt.Errorf("duplicate key %q in measurements[%d]", key, i)
-		}
-	}
-	return nil
-}
-
-// duplicateKey returns the first key obj names twice, or "" if it names none
-// twice or is not an object.
-func duplicateKey(obj []byte) (string, error) {
-	dec := json.NewDecoder(bytes.NewReader(obj))
-	tok, err := dec.Token()
-	if err != nil {
-		return "", nil
-	}
-	if delim, ok := tok.(json.Delim); !ok || delim != '{' {
-		return "", nil
-	}
-	seen := make(map[string]bool)
-	for dec.More() {
-		keyTok, err := dec.Token()
-		if err != nil {
-			return "", fmt.Errorf("not valid JSON: %w", err)
-		}
-		key, ok := keyTok.(string)
-		if !ok {
-			return "", fmt.Errorf("not valid JSON: object key is %T", keyTok)
-		}
-		if seen[key] {
-			return key, nil
-		}
-		seen[key] = true
-		var value json.RawMessage
-		if err := dec.Decode(&value); err != nil {
-			return "", fmt.Errorf("not valid JSON: %w", err)
-		}
-	}
-	return "", nil
 }

@@ -5,11 +5,15 @@
 package teetypes
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
+	"strings"
 )
 
 // PlatformType identifies which TEE platform produced a piece of evidence.
@@ -129,6 +133,25 @@ type VerificationResult struct {
 	TCBStatus *DcapVerificationStatus `json:"tcb_status,omitempty"`
 }
 
+// Check reports whether the result may be read as a verdict at all: a nil
+// result, or one whose hardware signature did not verify, is refused. Every
+// claim a policy reads is host-chosen until the signature covers it, so a
+// caller that skips this check is comparing values the host could have written.
+//
+// Verifiers return an error rather than an unsigned result, so this is the
+// second line: it catches a result that reached a caller some other way — from
+// a service response, a cache, a test fake — and a verifier that ever returns
+// one without an error.
+func (r *VerificationResult) Check() error {
+	if r == nil {
+		return fmt.Errorf("no verification result")
+	}
+	if !r.SignatureValid {
+		return fmt.Errorf("verification result does not carry a valid signature, so its claims are unverified")
+	}
+	return nil
+}
+
 // Claims are normalized claims extracted from evidence.
 type Claims struct {
 	// LaunchDigest is the hex launch measurement (MR_TD for TDX, MEASUREMENT
@@ -162,14 +185,48 @@ func (c Claims) RTMR(i int) ([]byte, error) {
 	if !ok || v == "" {
 		return nil, fmt.Errorf("claims carry no %s", key)
 	}
-	b, err := hex.DecodeString(v)
+	b, err := ParseDigest(v, sha512.Size384)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", key, err)
-	}
-	if len(b) != sha512.Size384 {
-		return nil, fmt.Errorf("%s is %d bytes, want %d", key, len(b), sha512.Size384)
+		return nil, fmt.Errorf("%s %w", key, err)
 	}
 	return b, nil
+}
+
+// LaunchMeasurement returns the 48-byte launch digest the claims report: MR_TD
+// on Intel TDX, MEASUREMENT on AMD SEV-SNP. The two are one claim here, since a
+// caller pinning "which image booted" pins whichever its platform produces.
+//
+// The claim is a string a verifier chose the spelling of, so surrounding space
+// is trimmed and ASCII case folded before parsing — unlike a reference value,
+// which [ParseDigest] holds to one spelling. Absent or malformed is an error,
+// so a caller comparing against a reference value fails closed.
+func (c Claims) LaunchMeasurement() ([]byte, error) {
+	b, err := ParseDigest(strings.ToLower(strings.TrimSpace(c.LaunchDigest)), sha512.Size384)
+	if err != nil {
+		return nil, fmt.Errorf("launch digest %w", err)
+	}
+	return b, nil
+}
+
+// CheckRTMRs requires each pinned register to byte-equal what the claims
+// report, in ascending index order so the error an operator sees is stable
+// across runs. Empty pins check nothing.
+//
+// A pinned register the claims do not carry is a refusal, not a pass: that is
+// what claims from a platform without registers look like (see
+// [PlatformType.HasRegisters]), and they do not say the guest is the expected
+// one. Callers add their own sentinel; see remote.EnforceRTMRs.
+func (c Claims) CheckRTMRs(pinned map[int][]byte) error {
+	for _, idx := range slices.Sorted(maps.Keys(pinned)) {
+		got, err := c.RTMR(idx)
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(got, pinned[idx]) {
+			return fmt.Errorf("RTMR[%d] does not match", idx)
+		}
+	}
+	return nil
 }
 
 // PCRCount is the number of vTPM platform configuration registers, so a valid
@@ -206,12 +263,9 @@ func (c Claims) PCR(i int) ([]byte, error) {
 	if !ok || v == "" {
 		return nil, fmt.Errorf("claims carry no %s", key)
 	}
-	b, err := hex.DecodeString(v)
+	b, err := ParseDigest(v, sha256.Size)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", key, err)
-	}
-	if len(b) != sha256.Size {
-		return nil, fmt.Errorf("%s is %d bytes, want %d", key, len(b), sha256.Size)
+		return nil, fmt.Errorf("%s %w", key, err)
 	}
 	return b, nil
 }

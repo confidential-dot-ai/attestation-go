@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
+	"github.com/confidential-dot-ai/attestation-go/remote/mockapi"
 )
 
 // snpEvidence is what an attestation service returns for a guest that attests
@@ -25,7 +26,7 @@ func snpEvidence(t *testing.T, platform teetypes.PlatformType, report []byte) te
 // raw tag comparison against "snp" gets wrong: its evidence is byte-identical
 // to bare-metal's, so it must take the same path.
 func TestEvidenceForExtensionNativeSNPEmbedsRawReport(t *testing.T) {
-	report := fakeSNPReport([64]byte{0x11})
+	report := mockapi.FakeSNPReport([]byte{0x11})
 	for _, platform := range []teetypes.PlatformType{teetypes.PlatformSNP, teetypes.PlatformGcpSNP} {
 		t.Run(string(platform), func(t *testing.T) {
 			got, err := EvidenceForExtension(snpEvidence(t, platform, report))
@@ -128,13 +129,13 @@ func TestEvidenceForExtensionRejects(t *testing.T) {
 // UnmarshalExtension would read it off the wire.
 func TestNewAttestation(t *testing.T) {
 	t.Run("native SNP", func(t *testing.T) {
-		report := fakeSNPReport([64]byte{0x22})
+		report := mockapi.FakeSNPReport([]byte{0x22})
 		att, err := NewAttestation(snpEvidence(t, teetypes.PlatformSNP, report))
 		if err != nil {
 			t.Fatalf("NewAttestation: %v", err)
 		}
-		if att.TEEType != TEETypeSEVSNP {
-			t.Fatalf("TEEType = %d, want SEV-SNP", att.TEEType)
+		if att.Family != teetypes.FamilySNP {
+			t.Fatalf("Family = %q, want %q", att.Family, teetypes.FamilySNP)
 		}
 		if _, ok := att.EmbeddedEvidence(); ok {
 			t.Fatal("native SNP evidence should embed the raw report, not an envelope")
@@ -152,8 +153,8 @@ func TestNewAttestation(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewAttestation: %v", err)
 		}
-		if att.TEEType != TEETypeTDX {
-			t.Fatalf("TEEType = %d, want TDX", att.TEEType)
+		if att.Family != teetypes.FamilyTDX {
+			t.Fatalf("Family = %q, want %q", att.Family, teetypes.FamilyTDX)
 		}
 		env, ok := att.EmbeddedEvidence()
 		if !ok || env.Platform != teetypes.PlatformTDX {
@@ -162,7 +163,7 @@ func TestNewAttestation(t *testing.T) {
 	})
 
 	t.Run("round trips through the extension", func(t *testing.T) {
-		att, err := NewAttestation(snpEvidence(t, teetypes.PlatformGcpSNP, fakeSNPReport([64]byte{0x33})))
+		att, err := NewAttestation(snpEvidence(t, teetypes.PlatformGcpSNP, mockapi.FakeSNPReport([]byte{0x33})))
 		if err != nil {
 			t.Fatalf("NewAttestation: %v", err)
 		}

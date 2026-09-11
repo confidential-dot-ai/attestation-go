@@ -14,8 +14,13 @@ import (
 	"github.com/virtee/sev-snp-measure-go/vmsa"
 )
 
-// PageSize is the guest page granularity the launch digest is computed over.
-const PageSize = gctx.PAGE_SIZE
+// DigestLen is the length of an SEV-SNP launch measurement, in bytes. The
+// measurement is a SHA-384, so this equals launchmeasure/tdx.DigestLen and
+// runtimemeasure.Size; the packages stay independent, sharing only the hash.
+const DigestLen = 48
+
+// pageSize is the guest page granularity the launch digest is computed over.
+const pageSize = gctx.PAGE_SIZE
 
 // Config is the complete set of inputs to a SEV-SNP launch measurement.
 type Config struct {
@@ -69,22 +74,13 @@ func LaunchDigest(cfg Config) ([]byte, error) {
 			return nil, fmt.Errorf("measure VMSA page: %w", err)
 		}
 	}
-	return ld.LD(), nil
-}
-
-// FirmwareDigest returns the launch digest with only the OVMF image measured.
-// It is the expensive, guest-independent prefix of LaunchDigest: a caller
-// measuring many pod shapes against one firmware computes it once.
-func FirmwareDigest(firmwarePath string) ([]byte, error) {
-	fw, err := openFirmware(firmwarePath)
-	if err != nil {
-		return nil, err
+	digest := ld.LD()
+	// A digest of another width is not a launch measurement, and pinning one
+	// would compare against nothing.
+	if len(digest) != DigestLen {
+		return nil, fmt.Errorf("launch digest is %d bytes, want %d", len(digest), DigestLen)
 	}
-	ld := gctx.New(nil)
-	if err := ld.UpdateNormalPages(uint64(fw.GPA()), fw.Data()); err != nil {
-		return nil, fmt.Errorf("measure firmware: %w", err)
-	}
-	return ld.LD(), nil
+	return digest, nil
 }
 
 // openFirmware parses an OVMF image, applying the bounds and metadata checks
@@ -97,8 +93,8 @@ func openFirmware(path string) (fw *ovmf.OVMF, err error) {
 	if err != nil {
 		return nil, fmt.Errorf("read firmware: %w", err)
 	}
-	if info.Size() == 0 || info.Size()%PageSize != 0 {
-		return nil, fmt.Errorf("firmware size %d is not a positive multiple of %d", info.Size(), PageSize)
+	if info.Size() == 0 || info.Size()%pageSize != 0 {
+		return nil, fmt.Errorf("firmware size %d is not a positive multiple of %d", info.Size(), pageSize)
 	}
 	defer func() {
 		if r := recover(); r != nil {
@@ -150,8 +146,8 @@ func measureMetadata(ld *gctx.GCTX, fw *ovmf.OVMF, kh *KernelHashes) error {
 				}
 				continue
 			}
-			if s.Size != PageSize {
-				return fmt.Errorf("kernel-hashes section is %d bytes, want %d", s.Size, PageSize)
+			if s.Size != pageSize {
+				return fmt.Errorf("kernel-hashes section is %d bytes, want %d", s.Size, pageSize)
 			}
 			off, err := hashTableOffset(fw)
 			if err != nil {
@@ -184,7 +180,7 @@ func hashTableOffset(fw *ovmf.OVMF) (uint64, error) {
 	if tableGPA == 0 {
 		return 0, errNoRV
 	}
-	return uint64(tableGPA) % PageSize, nil
+	return uint64(tableGPA) % pageSize, nil
 }
 
 // vmsaPages builds one VMSA page per vCPU: the BSP starts at the architectural

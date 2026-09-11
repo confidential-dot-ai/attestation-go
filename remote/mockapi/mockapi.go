@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/confidential-dot-ai/attestation-go/attestation/snp"
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
 	"github.com/confidential-dot-ai/attestation-go/remote"
 )
@@ -21,12 +22,8 @@ import (
 const ErrorCodeVerificationFailed = "verification_failed"
 
 // SNPReportSize is the byte length of an AMD SEV-SNP attestation report, the
-// size of the report [FakeSNPEvidence] builds.
-const SNPReportSize = 1184
-
-// reportDataOffset is where REPORTDATA starts in an SNP report; the field is 64
-// bytes wide.
-const reportDataOffset = 0x50
+// size of the report [FakeSNPReport] builds.
+const SNPReportSize = snp.ReportSize
 
 // Verdict is what /verify answers for every request. The fields map onto
 // [teetypes.VerificationResult]; the match fields are pointers so the
@@ -208,24 +205,28 @@ func (s *Stub) handleAttest(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// FakeSNPEvidence builds the evidence /attest answers: a minimal SEV-SNP report
-// — version 2, SMT-allowed policy, reportData copied into the 64-byte
-// REPORTDATA field at 0x50 and truncated if longer — wrapped as
-// {"attestation_report": <base64>}, the shape evidence extraction reads. It is
-// exported so tests of RA-TLS certificate minting get the same fixture without
-// running a server.
+// FakeSNPReport builds the report every fake in this module is made of: a
+// minimal SEV-SNP report — version 2, SMT-allowed policy, reportData copied
+// into the 64-byte REPORTDATA field and truncated if longer.
 //
-// The report is unsigned and carries no VCEK. It exercises extraction and
-// report-data binding; verification must fail on it.
-func FakeSNPEvidence(reportData []byte) json.RawMessage {
+// It is unsigned and carries no VCEK, so it exercises parsing, extraction and
+// report-data binding; verification must fail on it. One builder rather than a
+// copy per test package keeps every fixture the same shape.
+func FakeSNPReport(reportData []byte) []byte {
 	report := make([]byte, SNPReportSize)
 	report[0] = 0x02    // report version
 	report[0x0A] = 0x03 // guest policy: SMT allowed
-	copy(report[reportDataOffset:reportDataOffset+64], reportData)
-	evidence, err := json.Marshal(map[string]string{
-		"attestation_report": base64.StdEncoding.EncodeToString(report),
+	copy(report[snp.ReportDataOffset:snp.ReportDataOffset+64], reportData)
+	return report
+}
+
+// FakeSNPEvidence wraps [FakeSNPReport] as {"attestation_report": <base64>},
+// the shape evidence extraction reads, and is what /attest answers.
+func FakeSNPEvidence(reportData []byte) json.RawMessage {
+	evidence, err := json.Marshal(snp.SnpEvidence{
+		AttestationReport: base64.StdEncoding.EncodeToString(FakeSNPReport(reportData)),
 	})
-	if err != nil { // a map[string]string always marshals
+	if err != nil { // a struct of strings always marshals
 		panic(err)
 	}
 	return evidence

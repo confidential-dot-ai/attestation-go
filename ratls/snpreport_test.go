@@ -10,10 +10,11 @@ import (
 	"testing"
 
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
+	"github.com/confidential-dot-ai/attestation-go/remote/mockapi"
 )
 
 func TestNormalizeSEVSNPReport(t *testing.T) {
-	report := fakeSNPReport([64]byte{1, 2, 3})
+	report := mockapi.FakeSNPReport([]byte{1, 2, 3})
 
 	t.Run("a bare report passes through", func(t *testing.T) {
 		got, err := NormalizeSEVSNPReport(report)
@@ -78,7 +79,7 @@ func TestNormalizeSEVSNPReport(t *testing.T) {
 }
 
 func TestExtractSNPReport(t *testing.T) {
-	report := fakeSNPReport([64]byte{0x99})
+	report := mockapi.FakeSNPReport([]byte{0x99})
 
 	mkEvidence := func(t *testing.T, platform teetypes.PlatformType, fields map[string]any) teetypes.AttestationEvidence {
 		t.Helper()

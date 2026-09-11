@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/confidential-dot-ai/attestation-go/attestation/snp"
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
 	"github.com/confidential-dot-ai/attestation-go/attestation/tpmcommon"
 )
@@ -30,11 +31,11 @@ func NormalizeSEVSNPReport(raw []byte) ([]byte, error) {
 }
 
 // snpEvidenceFields are the two places an evidence envelope can put the SEV-SNP
-// report. The base64 alphabets differ by field and are part of each producer's
-// wire format, so they are not interchangeable.
+// report: the bare-metal object [snp.SnpEvidence] describes, or the Azure
+// overlay's HCL envelope. The base64 alphabets differ by field and are part of
+// each producer's wire format, so they are not interchangeable.
 type snpEvidenceFields struct {
-	// AttestationReport is the bare report, standard base64.
-	AttestationReport string `json:"attestation_report"`
+	snp.SnpEvidence
 	// HCLReport is the Hyper-V HCL envelope, URL-safe base64 without padding.
 	HCLReport string `json:"hcl_report"`
 }

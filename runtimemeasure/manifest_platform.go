@@ -43,16 +43,17 @@ func ManifestFamilies(path string) ([]teetypes.Family, error) {
 	if h.Version != manifestSchemaVersion {
 		return nil, fmt.Errorf("image manifest %s is schema version %d, want %d — rebuild it with the current builder", path, h.Version, manifestSchemaVersion)
 	}
-	switch h.Build.Platform {
-	case "snp":
-		return []teetypes.Family{teetypes.FamilySNP}, nil
-	case "tdx":
-		return []teetypes.Family{teetypes.FamilyTDX}, nil
-	case "multi":
+	// "multi" is this file format's own word for "both", so it is resolved
+	// here; every other spelling is a platform or family teetypes already
+	// knows, and resolving it there keeps one mapping.
+	if h.Build.Platform == "multi" {
 		return []teetypes.Family{teetypes.FamilyTDX, teetypes.FamilySNP}, nil
-	default:
-		return nil, fmt.Errorf("image manifest %s has platform %q, want \"snp\", \"tdx\" or \"multi\"", path, h.Build.Platform)
 	}
+	fam, err := teetypes.ParseFamily(h.Build.Platform)
+	if err != nil {
+		return nil, fmt.Errorf("image manifest %s: %w (or \"multi\")", path, err)
+	}
+	return []teetypes.Family{fam}, nil
 }
 
 // LoadImageManifest loads whichever image pin a manifest carries, so a caller

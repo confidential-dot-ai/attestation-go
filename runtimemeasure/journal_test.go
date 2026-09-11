@@ -304,16 +304,16 @@ func TestOpenJournalSeeded(t *testing.T) {
 	seed := Seed([]byte("anchor-bytes-v1\n"))
 	node := newNode(t, nodePath, seed)
 
-	j, err := OpenJournalSeeded(journalPath, node, seed)
+	j, err := openJournalSeeded(journalPath, node, seed)
 	if err != nil {
-		t.Fatalf("OpenJournalSeeded = _, %v", err)
+		t.Fatalf("openJournalSeeded = _, %v", err)
 	}
 	mustMeasure(t, j, digestA, true)
 	if want := FromDigestsSeeded(seed, []string{digestA}); registerValue(t, node) != want {
 		t.Error("register does not match the seeded fold")
 	}
 
-	if _, err := OpenJournalSeeded(journalPath, node, seed); err != nil {
+	if _, err := openJournalSeeded(journalPath, node, seed); err != nil {
 		t.Fatalf("seeded restart = _, %v, want a clean restart", err)
 	}
 	// The same guest opened as if it booted from Zero: the seed is unaccounted

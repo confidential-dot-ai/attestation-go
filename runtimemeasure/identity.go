@@ -2,7 +2,6 @@ package runtimemeasure
 
 import (
 	"bytes"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"maps"
@@ -82,34 +81,24 @@ func (p tdxImagePins) RTMRs() map[int][Size]byte {
 // RTMR[3] is not checked here: it carries the launch anchor and the workload
 // chain, which [VerifyBinding] checks.
 func (p tdxImagePins) Verify(r *teetypes.VerificationResult) error {
-	if err := checkVerified(r); err != nil {
+	if err := r.Check(); err != nil {
 		return err
 	}
 	if err := checkFamily(r.Platform, teetypes.FamilyTDX, "a TDX image tuple (MRTD + RTMR[1] + RTMR[2])"); err != nil {
 		return err
 	}
-	launch := strings.ToLower(strings.TrimSpace(r.Claims.LaunchDigest))
-	if launch == "" {
+	if strings.TrimSpace(r.Claims.LaunchDigest) == "" {
 		return fmt.Errorf("verified claims carry no launch digest (MRTD)")
 	}
-	if want := hex.EncodeToString(p.MRTD[:]); launch != want {
-		return fmt.Errorf("MRTD mismatch: node reports %s, image manifest pins %s (a different guest firmware/image booted)", launch, want)
+	launch, err := r.Claims.LaunchMeasurement()
+	if err != nil {
+		return fmt.Errorf("MRTD: %w", err)
 	}
-	for _, reg := range []struct {
-		index   int
-		meaning string
-		want    [Size]byte
-	}{
-		{1, "guest kernel", p.RTMR1},
-		{2, "guest rootfs", p.RTMR2},
-	} {
-		got, err := r.Claims.RTMR(reg.index)
-		if err != nil {
-			return fmt.Errorf("RTMR[%d] mismatch (%s): %w", reg.index, reg.meaning, err)
-		}
-		if !bytes.Equal(got, reg.want[:]) {
-			return fmt.Errorf("RTMR[%d] mismatch (%s): node reports %x, image manifest pins %x", reg.index, reg.meaning, got, reg.want)
-		}
+	if !bytes.Equal(launch, p.MRTD[:]) {
+		return fmt.Errorf("MRTD mismatch: node reports %x, image manifest pins %x (a different guest firmware/image booted)", launch, p.MRTD)
+	}
+	if err := r.Claims.CheckRTMRs(map[int][]byte{1: p.RTMR1[:], 2: p.RTMR2[:]}); err != nil {
+		return fmt.Errorf("image pin mismatch: %w (RTMR[1] is the guest kernel, RTMR[2] the guest rootfs)", err)
 	}
 	return nil
 }
@@ -142,36 +131,23 @@ func (p snpImagePins) RTMRs() map[int][Size]byte { return nil }
 // HOST_DATA is not checked here: it carries the launch anchor, which
 // [VerifyBinding] checks.
 func (p snpImagePins) Verify(r *teetypes.VerificationResult) error {
-	if err := checkVerified(r); err != nil {
+	if err := r.Check(); err != nil {
 		return err
 	}
 	if err := checkFamily(r.Platform, teetypes.FamilySNP, "an SNP per-SMP launch-digest set"); err != nil {
 		return err
 	}
-	launch := strings.ToLower(strings.TrimSpace(r.Claims.LaunchDigest))
-	if launch == "" {
+	if strings.TrimSpace(r.Claims.LaunchDigest) == "" {
 		return fmt.Errorf("verified claims carry no launch digest (SNP MEASUREMENT)")
 	}
-	raw, err := hex.DecodeString(launch)
-	if err != nil || len(raw) != Size {
-		return fmt.Errorf("launch digest %q is not %d hex chars", launch, Size*2)
+	raw, err := r.Claims.LaunchMeasurement()
+	if err != nil {
+		return err
 	}
 	var got [Size]byte
 	copy(got[:], raw)
 	if !p.has(got) {
-		return fmt.Errorf("launch digest mismatch: node reports %s, image manifest pins %s (a different guest image booted, or a vCPU count the manifest has no variant for)", launch, p)
-	}
-	return nil
-}
-
-// checkVerified refuses a result whose claims no hardware signature covers.
-// Every field these checks read is host-chosen until then.
-func checkVerified(r *teetypes.VerificationResult) error {
-	if r == nil {
-		return fmt.Errorf("no verification result")
-	}
-	if !r.SignatureValid {
-		return fmt.Errorf("verification result does not carry a valid signature, so its claims are unverified")
+		return fmt.Errorf("launch digest mismatch: node reports %x, image manifest pins %s (a different guest image booted, or a vCPU count the manifest has no variant for)", raw, p)
 	}
 	return nil
 }

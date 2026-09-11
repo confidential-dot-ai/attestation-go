@@ -16,7 +16,7 @@ import (
 // pins nothing is the state an operator most needs reported.
 func Render(rv ReferenceValues) ([]byte, error) {
 	if len(rv.Images) == 0 {
-		f := wire{SchemaVersion: SchemaVersion1, TEE: string(rv.Family), Measurements: []wireImage{}}
+		f := wire{SchemaVersion: schemaVersion1, TEE: string(rv.Family), Measurements: []wireImage{}}
 		out, err := json.MarshalIndent(f, "", "  ")
 		if err != nil {
 			return nil, fmt.Errorf("encode rendered measurements: %w", err)
@@ -35,8 +35,8 @@ func ParseRendered(data []byte) (ReferenceValues, error) {
 	if err := json.NewDecoder(bytes.NewReader(data)).Decode(&f); err != nil {
 		return ReferenceValues{}, fmt.Errorf("decode rendered measurements: %w", err)
 	}
-	if f.SchemaVersion != SchemaVersion1 {
-		return ReferenceValues{}, fmt.Errorf("rendered schema_version %q, want %q", f.SchemaVersion, SchemaVersion1)
+	if f.SchemaVersion != schemaVersion1 {
+		return ReferenceValues{}, fmt.Errorf("rendered schema_version %q, want %q", f.SchemaVersion, schemaVersion1)
 	}
 	fam, err := teetypes.ParseFamily(f.TEE)
 	if err != nil {

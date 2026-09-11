@@ -21,45 +21,52 @@ import (
 // Azure overlays keep theirs: their evidence is a different object, and
 // rewriting it would drop the vTPM quote the binding rests on.
 func EvidenceForExtension(env teetypes.AttestationEvidence) ([]byte, error) {
+	payload, _, err := evidenceForExtension(env)
+	return payload, err
+}
+
+// evidenceForExtension also returns the envelope the payload encodes, or nil
+// when the payload is a raw SEV-SNP report, so [NewAttestation] need not parse
+// back what it just marshalled.
+func evidenceForExtension(env teetypes.AttestationEvidence) ([]byte, *teetypes.AttestationEvidence, error) {
 	platform := teetypes.NormalizePlatform(string(env.Platform))
 	family := platform.Family()
 	if family == teetypes.FamilyUnknown {
-		return nil, fmt.Errorf("%w: no RA-TLS evidence shape for platform %q", ErrUnsupportedTEE, env.Platform)
+		return nil, nil, fmt.Errorf("%w: no RA-TLS evidence shape for platform %q", ErrUnsupportedTEE, env.Platform)
 	}
 	// Both branches turn on the native/vTPM split, not on the tag: a guest that
 	// attests through its hardware report alone is handled the same way whether
 	// it runs bare-metal or on GCP.
 	if !platform.HasVTPMQuote() {
 		if family == teetypes.FamilySNP {
-			return ExtractSNPReport(env)
+			report, err := ExtractSNPReport(env)
+			return report, nil, err
 		}
 		stripped, err := stripTDXEventlog(env.Evidence)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		env.Evidence = stripped
 	}
 	env.Platform = platform
 	evidence, err := json.Marshal(env)
 	if err != nil {
-		return nil, fmt.Errorf("ratls: marshal %q evidence envelope: %w", platform, err)
+		return nil, nil, fmt.Errorf("ratls: marshal %q evidence envelope: %w", platform, err)
 	}
-	return evidence, nil
+	return evidence, &env, nil
 }
 
 // NewAttestation builds the attestation to embed from a service's evidence
-// envelope: the TEE type from the platform tag, the payload from
-// [EvidenceForExtension].
+// envelope: the family from the platform tag, the payload from
+// [EvidenceForExtension]. A tag with no family is refused there, so a cloud
+// overlay embeds exactly as its bare-metal counterpart does and nothing else
+// gets a default.
 func NewAttestation(env teetypes.AttestationEvidence) (*Attestation, error) {
-	teeType, err := TEETypeFor(teetypes.NormalizePlatform(string(env.Platform)))
+	report, embedded, err := evidenceForExtension(env)
 	if err != nil {
 		return nil, err
 	}
-	report, err := EvidenceForExtension(env)
-	if err != nil {
-		return nil, err
-	}
-	return newAttestation(teeType, report, nil)
+	return newAttestation(env.Platform.Family(), report, nil, embedded)
 }
 
 // stripTDXEventlog drops cc_eventlog from native TDX evidence, keeping the

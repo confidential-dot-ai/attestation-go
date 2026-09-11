@@ -55,7 +55,7 @@ func (k *KernelHashes) table() []byte {
 // offset comes from OVMF's SEV_HASH_TABLE_RV entry, not from the metadata
 // section that names the page.
 func (k *KernelHashes) page(offset uint64) []byte {
-	p := make([]byte, PageSize)
+	p := make([]byte, pageSize)
 	copy(p[offset:], k.table())
 	return p
 }

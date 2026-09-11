@@ -32,6 +32,16 @@ import (
 // report "collateral unavailable" instead of "attestation invalid".
 var ErrCollateralUnavailable = errors.New("snp: collateral unavailable")
 
+// ReportSize is the byte length of an AMD SEV-SNP attestation report
+// (ATTESTATION_REPORT, AMD SEV-SNP ABI Specification table 21). It is fixed:
+// a report of any other length is not one.
+const ReportSize = 0x4A0 // 1184 bytes
+
+// ReportDataOffset is where the 64-byte REPORTDATA field starts within an
+// ATTESTATION_REPORT. It is what binds a key or a nonce to the guest, so a
+// caller reading it out of raw report bytes reads from here.
+const ReportDataOffset = 0x50
+
 // Report version bounds. Bare-metal SNP requires v3+ (CPUID fields); Azure CVMs
 // emit v2 reports, so az-snp passes MinReportVersionAzure.
 const (

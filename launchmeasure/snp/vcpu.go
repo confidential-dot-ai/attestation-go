@@ -37,12 +37,13 @@ func knownVCPUTypes() map[string]uint32 {
 func VCPUSignatureByName(name string) (uint32, error) {
 	sig, ok := vcpuTypes[name]
 	if !ok {
-		return 0, fmt.Errorf("unknown vcpu type %q (known: %s)", name, strings.Join(VCPUTypes(), ", "))
+		return 0, fmt.Errorf("unknown vcpu type %q (known: %s)", name, strings.Join(vcpuTypeNames(), ", "))
 	}
 	return sig, nil
 }
 
-// VCPUTypes lists the known QEMU -cpu model names, sorted.
-func VCPUTypes() []string {
+// vcpuTypeNames lists the known QEMU -cpu model names, sorted, for the error
+// [VCPUSignatureByName] returns.
+func vcpuTypeNames() []string {
 	return slices.Sorted(maps.Keys(vcpuTypes))
 }

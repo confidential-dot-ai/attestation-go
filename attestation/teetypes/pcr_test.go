@@ -50,7 +50,7 @@ func TestClaimsPCRFailsClosed(t *testing.T) {
 		{"empty value", pcrClaims(map[string]any{"pcr01": ""}), 1, "no pcr01"},
 		{"non-string value", pcrClaims(map[string]any{"pcr01": 7}), 1, "no pcr01"},
 		{"not hex", pcrClaims(map[string]any{"pcr01": "zz"}), 1, "pcr01"},
-		{"wrong width", pcrClaims(map[string]any{"pcr01": hex.EncodeToString([]byte{1, 2, 3})}), 1, "want 32"},
+		{"wrong width", pcrClaims(map[string]any{"pcr01": hex.EncodeToString([]byte{1, 2, 3})}), 1, "want 64 lowercase hex chars"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := tc.claims.PCR(tc.index)
@@ -91,6 +91,30 @@ func TestHasVTPMQuote(t *testing.T) {
 	} {
 		if got := tc.platform.HasVTPMQuote(); got != tc.want {
 			t.Errorf("PlatformType(%q).HasVTPMQuote() = %v, want %v", tc.platform, got, tc.want)
+		}
+	}
+}
+
+// TestHasRegisters keeps the register property in lockstep with the vTPM one:
+// the same tags, answered per family rather than per tag.
+func TestHasRegisters(t *testing.T) {
+	for _, tc := range []struct {
+		platform PlatformType
+		want     bool
+	}{
+		{PlatformTDX, true},
+		{PlatformAzTDX, true},
+		{PlatformGcpTDX, true},
+		{" AZ-TDX ", true},
+		{PlatformSNP, false},
+		{PlatformAzSNP, false},
+		{PlatformGcpSNP, false},
+		{PlatformDstack, false},
+		{"nonsense", false},
+		{"", false},
+	} {
+		if got := tc.platform.HasRegisters(); got != tc.want {
+			t.Errorf("PlatformType(%q).HasRegisters() = %v, want %v", tc.platform, got, tc.want)
 		}
 	}
 }

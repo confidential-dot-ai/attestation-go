@@ -1,10 +1,11 @@
 package refvalues
 
 import (
-	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
 )
 
 // ParseHexMeasurements parses a comma-separated list of hex-encoded launch
@@ -18,6 +19,9 @@ func ParseHexMeasurements(raw string) ([][]byte, error) {
 // launch measurement or a TDX MRTD, both [DigestSize] bytes — into the byte
 // form the reference values carry. Blank entries are skipped; an all-blank or
 // empty slice returns nil.
+//
+// A digest must be lowercase: a reference value is compared byte for byte, so
+// [teetypes.ParseDigest] refuses the second spelling rather than folding it.
 func ParseHexMeasurementsList(raw []string) ([][]byte, error) {
 	out := make([][]byte, 0, len(raw))
 	for _, p := range raw {
@@ -25,12 +29,9 @@ func ParseHexMeasurementsList(raw []string) ([][]byte, error) {
 		if p == "" {
 			continue
 		}
-		decoded, err := hex.DecodeString(p)
+		decoded, err := teetypes.ParseDigest(p, DigestSize)
 		if err != nil {
 			return nil, fmt.Errorf("invalid hex measurement %q: %w", p, err)
-		}
-		if len(decoded) != DigestSize {
-			return nil, fmt.Errorf("measurement %q is %d bytes, want %d", p, len(decoded), DigestSize)
 		}
 		out = append(out, decoded)
 	}
@@ -47,6 +48,9 @@ func ParseHexMeasurementsList(raw []string) ([][]byte, error) {
 // Only indices 1, 2 and 3 are pinnable: RTMR[0] carries the TD HOB, so it
 // varies with the guest's vCPU and memory shape and a pin on it would deny
 // guests by size rather than by identity.
+//
+// A pinned value must be lowercase hex, for the reason
+// [teetypes.ParseDigest] gives.
 func ParseRTMRPins(raw []string) (map[int][]byte, error) {
 	out := make(map[int][]byte, len(raw))
 	for _, p := range raw {
@@ -72,12 +76,9 @@ func ParseRTMRPins(raw []string) (map[int][]byte, error) {
 		if _, dup := out[idx]; dup {
 			return nil, fmt.Errorf("RTMR[%d] pinned more than once", idx)
 		}
-		v, err := hex.DecodeString(strings.TrimSpace(hexStr))
+		v, err := teetypes.ParseDigest(strings.TrimSpace(hexStr), DigestSize)
 		if err != nil {
-			return nil, fmt.Errorf("rtmr pin %d: value is not hex: %w", idx, err)
-		}
-		if len(v) != DigestSize {
-			return nil, fmt.Errorf("rtmr pin %d: value is %d bytes, want %d (%d hex characters)", idx, len(v), DigestSize, DigestSize*2)
+			return nil, fmt.Errorf("rtmr pin %d: value %w", idx, err)
 		}
 		out[idx] = v
 	}

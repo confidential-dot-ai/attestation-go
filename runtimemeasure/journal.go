@@ -53,13 +53,13 @@ type Journal struct {
 // OpenJournal loads the journal at path and cross-checks it against reg, whose
 // value at guest boot is [Zero].
 //
-// Use [OpenJournalSeeded] on a guest whose register was seeded before the
+// Use [openJournalSeeded] on a guest whose register was seeded before the
 // measurer started — every guest launched with an anchor (see [Seed]) is one.
 func OpenJournal(path string, reg Register) (*Journal, error) {
-	return OpenJournalSeeded(path, reg, Zero)
+	return openJournalSeeded(path, reg, Zero)
 }
 
-// OpenJournalSeeded is [OpenJournal] for a register that already held seed
+// openJournalSeeded is [OpenJournal] for a register that already held seed
 // before any journaled extend. On TDX a guest launched with an anchor reads
 // back Seed(anchor) with nothing measured, so folding the journal from [Zero]
 // there would report every restart as divergence.
@@ -81,7 +81,7 @@ func OpenJournal(path string, reg Register) (*Journal, error) {
 // also comes back alongside a usable journal. To fail closed, treat any
 // non-nil error as fatal; to keep measuring, log everything except
 // [ErrRegisterDiverged], which already blocks further extends.
-func OpenJournalSeeded(path string, reg Register, seed [Size]byte) (*Journal, error) {
+func openJournalSeeded(path string, reg Register, seed [Size]byte) (*Journal, error) {
 	if reg == nil {
 		return nil, errors.New("open journal: no register to measure into")
 	}

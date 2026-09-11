@@ -39,17 +39,6 @@ func readFixture(t *testing.T) []byte {
 	return b
 }
 
-func TestFirmwareDigest(t *testing.T) {
-	got, err := FirmwareDigest(fixture)
-	if err != nil {
-		t.Fatal(err)
-	}
-	const want = "086e2e9149ebf45abdc3445fba5b2da8270bdbb04094d7a2c37faaa4b24af3aa16aff8c374c2a55c467a50da6d466b74"
-	if hex.EncodeToString(got) != want {
-		t.Errorf("firmware digest\n got %s\nwant %s", hex.EncodeToString(got), want)
-	}
-}
-
 // TestParseFirmware pins what the upstream OVMF parser reads out of the
 // fixture, so a dependency bump that changes any of it fails here rather than
 // silently moving every digest.
@@ -332,11 +321,11 @@ func TestLaunchDigestRejectsBadInput(t *testing.T) {
 		{"missing file", plain(filepath.Join(t.TempDir(), "absent.fd")), "read firmware"},
 		{"empty image", plain(writeFirmware(t, nil)), "not a positive multiple"},
 		{"unaligned image", plain(writeFirmware(t, fw[:len(fw)-1])), "not a positive multiple"},
-		{"no footer table", plain(writeFirmware(t, make([]byte, PageSize))), "parse firmware"},
+		{"no footer table", plain(writeFirmware(t, make([]byte, pageSize))), "parse firmware"},
 		{"no ASEV entry", plain(writeFirmware(t, stripSEVMetadataEntry(t, fw))), "no SEV metadata sections"},
 		{
 			"ASEV header starts before the image",
-			plain(writeFirmware(t, patchFooterEntryData(t, fw, ovmf.OVMF_SEV_META_DATA_GUID, le32(2*PageSize)))),
+			plain(writeFirmware(t, patchFooterEntryData(t, fw, ovmf.OVMF_SEV_META_DATA_GUID, le32(2*pageSize)))),
 			"malformed OVMF image",
 		},
 		{
@@ -366,7 +355,7 @@ func TestLaunchDigestRejectsBadInput(t *testing.T) {
 		},
 		{
 			"hashes section spans two pages",
-			hashed(patched(ovmf.SNPKernelHashes, func(s *ovmf.MetadataSection) { s.Size = 2 * PageSize })),
+			hashed(patched(ovmf.SNPKernelHashes, func(s *ovmf.MetadataSection) { s.Size = 2 * pageSize })),
 			"kernel-hashes section is 8192 bytes",
 		},
 		{
@@ -383,37 +372,6 @@ func TestLaunchDigestRejectsBadInput(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			ld, err := LaunchDigest(tc.cfg)
-			if err == nil {
-				t.Fatalf("want error, got digest %x", ld)
-			}
-			if ld != nil {
-				t.Errorf("digest %x returned alongside error %v", ld, err)
-			}
-			if !strings.Contains(err.Error(), tc.wantErr) {
-				t.Errorf("error %q does not name %q", err, tc.wantErr)
-			}
-		})
-	}
-}
-
-// TestFirmwareDigestRejectsBadInput holds the cached, guest-independent prefix
-// to the same fail-closed contract: a digest returned for an image that never
-// parsed would seed every launch measurement built on top of it.
-func TestFirmwareDigestRejectsBadInput(t *testing.T) {
-	cases := []struct {
-		name    string
-		path    string
-		wantErr string
-	}{
-		{"empty path", "", "firmware path is required"},
-		{"missing file", filepath.Join(t.TempDir(), "absent.fd"), "read firmware"},
-		{"empty image", writeFirmware(t, nil), "not a positive multiple"},
-		{"no footer table", writeFirmware(t, make([]byte, PageSize)), "parse firmware"},
-		{"no ASEV entry", writeFirmware(t, stripSEVMetadataEntry(t, readFixture(t))), "no SEV metadata sections"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			ld, err := FirmwareDigest(tc.path)
 			if err == nil {
 				t.Fatalf("want error, got digest %x", ld)
 			}

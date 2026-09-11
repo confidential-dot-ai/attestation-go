@@ -24,7 +24,9 @@ func TestParseHexMeasurementsList(t *testing.T) {
 		{"all blank returns nil", []string{"", "  "}, nil, ""},
 		{"empty slice returns nil", nil, nil, ""},
 		{"invalid hex", []string{"zz"}, nil, "invalid hex measurement"},
-		{"wrong length", []string{hex.EncodeToString([]byte{1, 2, 3})}, nil, "want 48"},
+		{"wrong length", []string{hex.EncodeToString([]byte{1, 2, 3})}, nil, "want 96 lowercase hex chars"},
+		// A reference value has one spelling: uppercase is refused, not folded.
+		{"uppercase", []string{strings.ToUpper(hex.EncodeToString(m1))}, nil, "lowercase hex chars"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -94,6 +96,7 @@ func TestParseRTMRPins(t *testing.T) {
 		"duplicate index":    {"1=" + hex48, "1=" + hex48},
 		"non-hex value":      {"1=zz"},
 		"short value":        {"1=abcd"},
+		"uppercase value":    {"1=" + strings.ToUpper(hex48)},
 	}
 	for name, in := range rejects {
 		t.Run(name, func(t *testing.T) {

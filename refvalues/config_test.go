@@ -97,11 +97,11 @@ func TestParseRejects(t *testing.T) {
 		{"missing measurements", `{"schema_version":"1","tee":"tdx"}`, "empty"},
 		{"unknown field", snpFile(`{"name":"a","measurement":"` + d1 + `","host_data":"ab"}`), "host_data"},
 		{"unknown top-level field", `{"schema_version":"1","tee":"tdx","extra":1,"measurements":[{"name":"a","mrtd":"` + d1 + `"}]}`, "extra"},
-		{"duplicate top-level key", `{"schema_version":"1","tee":"tdx","tee":"sev-snp","measurements":[{"name":"a","mrtd":"` + d1 + `"}]}`, "duplicate key"},
-		{"duplicate key inside an image", tdxFile(`{"name":"a","mrtd":"` + d1 + `","mrtd":"` + d2 + `"}`), "duplicate key"},
+		{"duplicate top-level key", `{"schema_version":"1","tee":"tdx","tee":"sev-snp","measurements":[{"name":"a","mrtd":"` + d1 + `"}]}`, "duplicate"},
+		{"duplicate key inside an image", tdxFile(`{"name":"a","mrtd":"` + d1 + `","mrtd":"` + d2 + `"}`), "duplicate"},
 		{"uppercase hex", snpFile(`{"name":"a","measurement":"` + strings.ToUpper(d1) + `"}`), "lowercase"},
 		{"short digest", snpFile(`{"name":"a","measurement":"c1e0a7"}`), "hex chars"},
-		{"non-hex digest", snpFile(`{"name":"a","measurement":"` + strings.Repeat("z", 96) + `"}`), "not hex"},
+		{"non-hex digest", snpFile(`{"name":"a","measurement":"` + strings.Repeat("z", 96) + `"}`), "lowercase hex chars"},
 		{"missing name", snpFile(`{"measurement":"` + d1 + `"}`), "name is required"},
 		{"blank name", snpFile(`{"name":"  ","measurement":"` + d1 + `"}`), "name is required"},
 		{"missing measurement", snpFile(`{"name":"a"}`), "measurement is required"},
@@ -321,7 +321,6 @@ func FuzzParse(f *testing.F) {
 			}
 		}
 		rv.CommonRTMRs()
-		rv.DigestSet()
 		if _, err := Format(rv); err != nil {
 			t.Fatalf("a parsed set does not format: %v", err)
 		}

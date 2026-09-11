@@ -101,7 +101,9 @@ func TestStubAttestRecordsAndReturnsSNPEvidence(t *testing.T) {
 }
 
 // Report data wider than the hardware field is truncated, not an error: the
-// stub answers what the hardware would.
+// stub answers what the hardware would. The evidence wraps exactly the report
+// [mockapi.FakeSNPReport] builds, so a test that needs the bytes alone gets the
+// same fixture the server serves.
 func TestFakeSNPEvidenceClampsReportDataToTheField(t *testing.T) {
 	oversize := bytes.Repeat([]byte{0xAB}, 100)
 	report := snpReport(t, mockapi.FakeSNPEvidence(oversize))
@@ -110,6 +112,9 @@ func TestFakeSNPEvidenceClampsReportDataToTheField(t *testing.T) {
 	}
 	if report[0] != 0x02 {
 		t.Fatalf("report version = %d, want 2", report[0])
+	}
+	if !bytes.Equal(report, mockapi.FakeSNPReport(oversize)) {
+		t.Error("the evidence does not wrap FakeSNPReport's bytes")
 	}
 }
 
