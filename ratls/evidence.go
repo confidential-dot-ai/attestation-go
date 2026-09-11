@@ -1,9 +1,11 @@
 package ratls
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 
+	"github.com/confidential-dot-ai/attestation-go/attestation/snp"
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
 )
 
@@ -60,13 +62,27 @@ func evidenceForExtension(env teetypes.AttestationEvidence) ([]byte, *teetypes.A
 // envelope: the family from the platform tag, the payload from
 // [EvidenceForExtension]. A tag with no family is refused there, so a cloud
 // overlay embeds exactly as its bare-metal counterpart does and nothing else
-// gets a default.
+// gets a default. Native SNP collateral is preserved in CertChain so the
+// resulting extension can still be verified offline.
 func NewAttestation(env teetypes.AttestationEvidence) (*Attestation, error) {
 	report, embedded, err := evidenceForExtension(env)
 	if err != nil {
 		return nil, err
 	}
-	return newAttestation(env.Platform.Family(), report, nil, embedded)
+	var certChain []byte
+	if embedded == nil && env.Platform.IsSNP() {
+		var evidence snp.SnpEvidence
+		if err := json.Unmarshal(env.Evidence, &evidence); err != nil {
+			return nil, fmt.Errorf("ratls: parse snp collateral: %w", err)
+		}
+		if evidence.CertChain != nil && evidence.CertChain.Vcek != "" {
+			certChain, err = base64.StdEncoding.DecodeString(evidence.CertChain.Vcek)
+			if err != nil {
+				return nil, fmt.Errorf("ratls: decode snp cert_chain.vcek: %w", err)
+			}
+		}
+	}
+	return newAttestation(env.Platform.Family(), report, certChain, embedded)
 }
 
 // stripTDXEventlog drops cc_eventlog from native TDX evidence, keeping the

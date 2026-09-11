@@ -2,12 +2,16 @@ package ratls
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"os"
 	"testing"
 
+	"github.com/confidential-dot-ai/attestation-go/attestation/snp"
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
+	"github.com/confidential-dot-ai/attestation-go/attestation/teeverify"
 	"github.com/confidential-dot-ai/attestation-go/remote/mockapi"
 )
 
@@ -186,4 +190,82 @@ func TestNewAttestation(t *testing.T) {
 			t.Fatalf("err = %v, want ErrUnsupportedTEE", err)
 		}
 	})
+}
+
+func TestNewAttestationPreservesSNPCollateral(t *testing.T) {
+	data, err := os.ReadFile("../attestation/teeverify/testdata/snp-genoa.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var env teetypes.AttestationEvidence
+	if err := json.Unmarshal(data, &env); err != nil {
+		t.Fatal(err)
+	}
+	var evidence snp.SnpEvidence
+	if err := json.Unmarshal(env.Evidence, &evidence); err != nil {
+		t.Fatal(err)
+	}
+	want, err := base64.StdEncoding.DecodeString(evidence.CertChain.Vcek)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, platform := range []teetypes.PlatformType{teetypes.PlatformSNP, teetypes.PlatformGcpSNP} {
+		t.Run(string(platform), func(t *testing.T) {
+			env.Platform = platform
+			att, err := NewAttestation(env)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ext, err := att.MarshalExtension(testOID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			parsed, err := UnmarshalExtension(ext.Value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(parsed.CertChain, want) {
+				t.Fatal("inline endorsement certificate lost in extension round trip")
+			}
+			restored, err := parsed.Envelope()
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The captured report binds its original nonce, not a generated test key.
+			// Verify the restored evidence offline to exercise the hardware chain.
+			if _, err := teeverify.VerifyEnvelope(context.Background(), restored, teetypes.VerifyParams{}, teeverify.Options{}); err != nil {
+				t.Fatalf("restored evidence does not verify offline: %v", err)
+			}
+		})
+	}
+}
+
+func TestNewAttestationSNPCollateralEncoding(t *testing.T) {
+	for _, platform := range []teetypes.PlatformType{teetypes.PlatformSNP, teetypes.PlatformGcpSNP} {
+		for _, vcek := range []string{"", "not base64!"} {
+			t.Run(string(platform)+"/"+vcek, func(t *testing.T) {
+				evidence := snp.SnpEvidence{
+					AttestationReport: base64.StdEncoding.EncodeToString(mockapi.FakeSNPReport(nil)),
+					CertChain:         &snp.SnpCertChain{Vcek: vcek},
+				}
+				raw, err := json.Marshal(evidence)
+				if err != nil {
+					t.Fatal(err)
+				}
+				att, err := NewAttestation(teetypes.AttestationEvidence{Platform: platform, Evidence: raw})
+				if vcek != "" {
+					if err == nil {
+						t.Fatal("accepted malformed collateral encoding")
+					}
+				} else {
+					if err != nil {
+						t.Fatal(err)
+					}
+					if len(att.CertChain) != 0 {
+						t.Fatal("invented collateral for an empty VCEK")
+					}
+				}
+			})
+		}
+	}
 }
