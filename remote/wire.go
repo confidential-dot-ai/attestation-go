@@ -1,4 +1,4 @@
-package apiclient
+package remote
 
 import (
 	"crypto/sha512"
@@ -131,7 +131,7 @@ func (p *VerifyParams) SetExpectedMeasurements(platform teetypes.PlatformType, l
 	if err := checkMeasurementWidth("launch measurement", launchMeasurement); err != nil {
 		return err
 	}
-	if len(rtmrs) > 0 && !platform.IsTDX() {
+	if len(rtmrs) > 0 && !platform.HasRegisters() {
 		return fmt.Errorf("platform %q has no runtime measurement registers, so %d register pin(s) cannot be enforced", platform, len(rtmrs))
 	}
 

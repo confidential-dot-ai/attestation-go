@@ -100,8 +100,8 @@ func TestBindingRefusesAzureSNP(t *testing.T) {
 // empty anchor file must not verify as bound.
 func TestExpectedBindingRejectsEmptyAnchor(t *testing.T) {
 	for _, p := range []teetypes.PlatformType{teetypes.PlatformTDX, teetypes.PlatformSNP} {
-		if _, err := ExpectedBinding(p, nil, nil); err == nil {
-			t.Errorf("ExpectedBinding(%q, empty anchor) = _, nil, want an error", p)
+		if _, err := expectedBinding(p, nil, nil); err == nil {
+			t.Errorf("expectedBinding(%q, empty anchor) = _, nil, want an error", p)
 		}
 	}
 	seed := Seed(nil)
@@ -156,10 +156,10 @@ func TestBindingsAreNotInterchangeable(t *testing.T) {
 }
 
 func TestExpectedBindingUnknownPlatform(t *testing.T) {
-	if _, err := ExpectedBinding("nonsense", anchor, nil); !errors.Is(err, ErrUnknownPlatform) {
-		t.Errorf("ExpectedBinding(unknown) = _, %v, want ErrUnknownPlatform", err)
+	if _, err := expectedBinding("nonsense", anchor, nil); !errors.Is(err, ErrUnknownPlatform) {
+		t.Errorf("expectedBinding(unknown) = _, %v, want ErrUnknownPlatform", err)
 	}
-	if _, err := ExpectedBinding("nonsense", anchor, nil); errors.Is(err, ErrNoRegister) {
-		t.Error("ExpectedBinding(unknown) matches ErrNoRegister, so a caller skipping SNP would skip an unknown tag too")
+	if _, err := expectedBinding("nonsense", anchor, nil); errors.Is(err, ErrNoRegister) {
+		t.Error("expectedBinding(unknown) matches ErrNoRegister, so a caller skipping SNP would skip an unknown tag too")
 	}
 }

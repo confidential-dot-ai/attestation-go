@@ -1,9 +1,7 @@
-package apiclient
+package remote
 
 import (
 	"bytes"
-	"crypto/sha512"
-	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -59,7 +57,7 @@ func EnforceImages(resp VerifyResponse, images []ImagePin, platform teetypes.Pla
 		if len(img.RTMRs) == 0 {
 			return nil
 		}
-		if !platform.IsTDX() {
+		if !platform.HasRegisters() {
 			lastErr = fmt.Errorf("%s: %w: %d register(s) pinned but platform %q has none",
 				img.Name, ErrRTMRNotAllowed, len(img.RTMRs), platform)
 			continue
@@ -76,18 +74,15 @@ func EnforceImages(resp VerifyResponse, images []ImagePin, platform teetypes.Pla
 	return fmt.Errorf("%w: no pinned image has this launch measurement", ErrMeasurementNotAllowed)
 }
 
-// launchDigest decodes and width-checks the reported launch measurement.
+// launchDigest reads the reported launch measurement, separating "the service
+// reported none" — a policy miss — from a value it could not parse.
 func launchDigest(resp VerifyResponse) ([]byte, error) {
-	raw := strings.ToLower(strings.TrimSpace(resp.Result.Claims.LaunchDigest))
-	if raw == "" {
+	if strings.TrimSpace(resp.Result.Claims.LaunchDigest) == "" {
 		return nil, fmt.Errorf("%w: launch measurement missing", ErrMeasurementNotAllowed)
 	}
-	digest, err := hex.DecodeString(raw)
+	digest, err := resp.Result.Claims.LaunchMeasurement()
 	if err != nil {
-		return nil, fmt.Errorf("%w: launch digest is not hex: %w", ErrInvalidLaunchDigest, err)
-	}
-	if len(digest) != sha512.Size384 {
-		return nil, fmt.Errorf("%w: launch digest is %d bytes, want %d", ErrInvalidLaunchDigest, len(digest), sha512.Size384)
+		return nil, fmt.Errorf("%w: %w", ErrInvalidLaunchDigest, err)
 	}
 	return digest, nil
 }

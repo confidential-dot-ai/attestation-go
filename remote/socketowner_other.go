@@ -1,6 +1,6 @@
 //go:build !unix
 
-package apiclient
+package remote
 
 import (
 	"fmt"

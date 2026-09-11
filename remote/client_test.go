@@ -1,4 +1,4 @@
-package apiclient
+package remote
 
 import (
 	"context"

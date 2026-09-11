@@ -4,6 +4,8 @@ github.com/GoogleCloudPlatform/confidential-space/server v0.0.0-20260706204617-c
 github.com/GoogleCloudPlatform/confidential-space/server v0.0.0-20260706204617-c9f710ef3461/go.mod h1:07jta9kodtzgHx670Bj6y9zaXlv3zapamb7XxZEuDpg=
 github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc h1:U9qPSI2PIWSS1VwoXQT9A3Wy9MM3WgvqSxFWenqJduM=
 github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
+github.com/google/gce-tcb-verifier v0.3.1 h1:4L9YgkOtqC2U7cj4FofCUufHFCCpdD4Y0yPKI8UhOhI=
+github.com/google/gce-tcb-verifier v0.3.1/go.mod h1:GZCDLQxmEOCqUTL2BMB/zjo+hgXdUrR0Wgwz1OrwRYg=
 github.com/google/go-attestation v0.6.1 h1:HcdQn+2L3yyGiKWHREJNSjSVAftyF6qB1bkqksbB0FM=
 github.com/google/go-attestation v0.6.1/go.mod h1:Kin36coq5+yhHymNoDm4W/iL7QwMhDOCR/5ksu3SxcA=
 github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
@@ -28,10 +30,14 @@ github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 h1:Jamvg5psRI
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
+github.com/virtee/sev-snp-measure-go v0.0.0-20260408174629-fd0cc4c95d62 h1:WzcCLqYZ1YN59AzOtvKJ8pKzME/zjECOLganHdnW1m4=
+github.com/virtee/sev-snp-measure-go v0.0.0-20260408174629-fd0cc4c95d62/go.mod h1:dEkBe8JnxU5itNjZDEQINFd7f7l4DtjfqRuzPQcit4w=
 go.uber.org/multierr v1.11.0 h1:blXXJkSxSSfBVBlC76pxqeO+LN3aDfLQo+309xJstO0=
 go.uber.org/multierr v1.11.0/go.mod h1:20+QtiLqy0Nd6FdQB9TLXag12DsQkrbs3htMFfDN80Y=
 golang.org/x/crypto v0.54.0 h1:YLIA59K4fiNzHzjnZt2tUJQjQtUWfWbeHBqKtk3eScw=
 golang.org/x/crypto v0.54.0/go.mod h1:KWL8ny2AZdGR2cWmzeHrp2azQPGogOv+HeQaVEXC2dk=
+golang.org/x/exp v0.0.0-20240409090435-93d18d7e34b8 h1:ESSUROHIBHg7USnszlcdmjBEwdMj9VUvU+OPk4yl2mc=
+golang.org/x/exp v0.0.0-20240409090435-93d18d7e34b8/go.mod h1:/lliqkxwWAhPjf5oSOIJup2XcqJaw8RGS6k3TGEc7GI=
 golang.org/x/sys v0.47.0 h1:o7XGOvZQCADBQQ4Y7VNq2dRWQR7JmOUW8Kxx4ZsNgWs=
 golang.org/x/sys v0.47.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=
 google.golang.org/protobuf v1.36.11 h1:fV6ZwhNocDyBLK0dj+fg8ektcVegBBuEolpbTQyBNVE=

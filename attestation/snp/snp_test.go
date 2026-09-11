@@ -273,7 +273,7 @@ func TestVCEKProductRoots_GenoaVCEK(t *testing.T) {
 	}
 }
 
-// TestVCEKProductRoots_BadVCEK ensures an unclassifiable report carrying
+// TestVCEKProductRoots_BadVCEK checks that an unclassifiable report carrying
 // non-certificate VCEK bytes surfaces a parse error instead of silently
 // skipping the back-fill.
 func TestVCEKProductRoots_BadVCEK(t *testing.T) {
@@ -422,5 +422,91 @@ func TestVerifyReport_BindingFlags(t *testing.T) {
 	}
 	if res.InitDataMatch == nil || !*res.InitDataMatch {
 		t.Errorf("InitDataMatch = %v, want true", res.InitDataMatch)
+	}
+}
+
+// TestVerifyEvidenceContext_MissingVCEK covers the bare RA-TLS serving cert:
+// an envelope carrying the report with no cert_chain.vcek. With no Getter that
+// stays an error — offline verification never reaches the network on its own —
+// and with one the VCEK is fetched from KDS and the evidence verifies.
+func TestVerifyEvidenceContext_MissingVCEK(t *testing.T) {
+	report, vcek := genoaFixture(t)
+	rp, err := abi.ReportToProto(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	url := kds.VCEKCertURL("Genoa", rp.GetChipId(), kds.TCBVersion(rp.GetReportedTcb()))
+
+	for _, tc := range []struct {
+		name string
+		ev   SnpEvidence
+	}{
+		{"absent cert_chain", SnpEvidence{AttestationReport: base64.StdEncoding.EncodeToString(report)}},
+		{"empty vcek field", SnpEvidence{
+			AttestationReport: base64.StdEncoding.EncodeToString(report),
+			CertChain:         &SnpCertChain{},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := VerifyEvidence(tc.ev, teetypes.VerifyParams{}, Options{}); err == nil {
+				t.Fatal("a VCEK-less envelope with no Getter must fail")
+			}
+
+			getter := test.SimpleGetter(map[string][]byte{url: vcek})
+			res, err := VerifyEvidenceContext(context.Background(), tc.ev, teetypes.VerifyParams{}, Options{Getter: getter})
+			if err != nil {
+				t.Fatalf("VerifyEvidenceContext with a Getter: %v", err)
+			}
+			if !res.SignatureValid || res.Platform != teetypes.PlatformSNP || len(res.Claims.LaunchDigest) != 96 {
+				t.Fatalf("unexpected result: %+v", res)
+			}
+		})
+	}
+}
+
+// TestVerifyEvidenceContext_KDSFailure: a Getter that cannot serve the VCEK is
+// an availability failure, not a verdict.
+func TestVerifyEvidenceContext_KDSFailure(t *testing.T) {
+	report, _ := genoaFixture(t)
+	ev := SnpEvidence{AttestationReport: base64.StdEncoding.EncodeToString(report)}
+	_, err := VerifyEvidenceContext(context.Background(), ev, teetypes.VerifyParams{},
+		Options{Getter: test.SimpleGetter(nil)})
+	if !errors.Is(err, ErrCollateralUnavailable) {
+		t.Fatalf("want ErrCollateralUnavailable, got %v", err)
+	}
+}
+
+// TestVerifyEvidence_InlineVCEKNeedsNoGetter: the offline path is unchanged by
+// the fallback — an inline VCEK still verifies with no Getter at all.
+func TestVerifyEvidence_InlineVCEKNeedsNoGetter(t *testing.T) {
+	report, vcek := genoaFixture(t)
+	ev := SnpEvidence{
+		AttestationReport: base64.StdEncoding.EncodeToString(report),
+		CertChain:         &SnpCertChain{Vcek: base64.StdEncoding.EncodeToString(vcek)},
+	}
+	if _, err := VerifyEvidence(ev, teetypes.VerifyParams{}, Options{}); err != nil {
+		t.Fatalf("inline VCEK must verify offline: %v", err)
+	}
+}
+
+// TestDefaultKDSGetter pins the retry policy callers get, including the
+// substitution for a non-positive bound: a zero MaxRetryDelay makes
+// go-sev-guest retry in a tight loop.
+func TestDefaultKDSGetter(t *testing.T) {
+	g, ok := DefaultKDSGetter(0, 0).(*trust.RetryHTTPSGetter)
+	if !ok {
+		t.Fatalf("DefaultKDSGetter returned %T, want *trust.RetryHTTPSGetter", g)
+	}
+	if g.Timeout != DefaultKDSMaxFetch || g.MaxRetryDelay != DefaultKDSMaxRetryDelay {
+		t.Errorf("defaults = (%v, %v), want (%v, %v)", g.Timeout, g.MaxRetryDelay,
+			DefaultKDSMaxFetch, DefaultKDSMaxRetryDelay)
+	}
+	if _, ok := g.Getter.(*trust.SimpleHTTPSGetter); !ok {
+		t.Errorf("inner getter = %T, want *trust.SimpleHTTPSGetter", g.Getter)
+	}
+
+	g = DefaultKDSGetter(time.Second, 2*time.Second).(*trust.RetryHTTPSGetter)
+	if g.Timeout != time.Second || g.MaxRetryDelay != 2*time.Second {
+		t.Errorf("explicit bounds = (%v, %v), want (1s, 2s)", g.Timeout, g.MaxRetryDelay)
 	}
 }

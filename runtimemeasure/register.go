@@ -35,30 +35,28 @@ type Register interface {
 	Extension() ([]byte, error)
 }
 
-// DefaultTDXRegisterPath is the kernel TSM node backing RTMR[3] on Intel TDX.
+// defaultTDXRegisterPath is the kernel TSM node backing RTMR[3] on Intel TDX.
 // Writing Size bytes to it performs TDG.MR.RTMR.EXTEND; reading returns the
 // current register. Needs mainline Linux 6.16 or later.
-const DefaultTDXRegisterPath = "/sys/devices/virtual/misc/tdx_guest/measurements/rtmr3:sha384"
+const defaultTDXRegisterPath = "/sys/devices/virtual/misc/tdx_guest/measurements/rtmr3:sha384"
 
 // Open returns the local runtime measurement register for p, or ErrNoRegister
 // on a platform without one. Platform tags are compared by family, so the
 // cloud overlays (az-tdx, gcp-tdx) resolve the same as bare-metal tdx.
 func Open(p teetypes.PlatformType) (Register, error) {
-	switch p.Family() {
-	case teetypes.FamilyTDX:
-		return TDXRegister(DefaultTDXRegisterPath), nil
-	case teetypes.FamilySNP:
-		return nil, fmt.Errorf("%q: %w", p, ErrNoRegister)
-	default:
-		// An unrecognized tag gets no register rather than a TDX one: this
-		// module has no verifier for it, so nothing it reported could be
-		// checked anyway.
-		return nil, fmt.Errorf("%w %q", ErrUnknownPlatform, p)
+	if p.HasRegisters() {
+		return TDXRegister(defaultTDXRegisterPath), nil
 	}
+	if p.IsSNP() {
+		return nil, fmt.Errorf("%q: %w", p, ErrNoRegister)
+	}
+	// An unrecognized tag gets no register rather than a TDX one: this module
+	// has no verifier for it, so nothing it reported could be checked anyway.
+	return nil, fmt.Errorf("%w %q", ErrUnknownPlatform, p)
 }
 
 // TDXRegister returns the RTMR[3] register backed by the TSM sysfs node at
-// path. Pass DefaultTDXRegisterPath outside tests; [Open] does that for you.
+// path. Pass defaultTDXRegisterPath outside tests; [Open] does that for you.
 func TDXRegister(path string) Register { return tdxRegister{path: path} }
 
 type tdxRegister struct{ path string }

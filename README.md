@@ -80,9 +80,40 @@ current, err := reg.Extension()
 Anchor bytes are hashed verbatim. Where they come from a file, pass the file
 contents exactly as written — never round-tripped through a parser — or the
 digest differs and verification fails silently.
-## attestation-api client (`apiclient`)
 
-`teeverify` verifies evidence in this process. `apiclient` is the alternative:
+An in-guest daemon that must extend exactly once per workload, across its own
+restarts, keeps a `Journal`: a log of digests already extended, written before
+each extend and reconciled against the register on open. A crash between the
+two can only under-extend, which the open repairs. A register that matches
+neither fold reports `ErrRegisterDiverged` and refuses further extends.
+
+```go
+j, err := runtimemeasure.OpenJournal("/run/measured", reg)
+extended, err := j.MeasureOnce("sha256:...") // false when already journaled
+```
+
+A verifier checking a whole node pins the image with the manifest its build
+published and the anchor with `VerifyBinding`. The manifest's shape names the
+family, so the caller loads it without knowing which, and reads the pinned
+values back through one interface. A "multi" build carries both shapes; name
+the family with `LoadImageManifestFor` to pick a half:
+
+```go
+identity, err := runtimemeasure.LoadImageManifest("manifest.json") // an ImageIdentity, family detected
+err = identity.Verify(res)                                        // MRTD+RTMR[1,2], or launch digest in the per-SMP set
+err = runtimemeasure.VerifyBinding(res, anchor, workloadDigests)  // RTMR[3] or HOSTDATA
+
+for _, v := range identity.LaunchDigests() { ... } // v.Label is "" on TDX, "smp4" on SNP
+registers := identity.RTMRs()                      // RTMR[1] and RTMR[2] on TDX, none on SNP
+```
+
+`InitDataAnchor` reads the 32-byte init-data digest back out of a verified
+result — SEV-SNP HOST_DATA verbatim, TDX MRCONFIGID with its zero padding
+checked — for a guest asking which document it was launched with.
+
+## attestation-api client (`remote`)
+
+`teeverify` verifies evidence in this process. `remote` is the alternative:
 it talks to **attestation-api**, the `attestation-rs` HTTP service that both
 produces evidence on a confidential host and verifies it. Use it when the
 evidence has to be generated locally, or when verification should follow the
@@ -103,11 +134,11 @@ platform's report-data field. `PlatformAuto` asks the service which TEE it is
 on, so the caller need not know:
 
 ```go
-c := apiclient.NewClient("unix:///run/attestation/attest.sock")
+c := remote.NewClient("unix:///run/attestation/attest.sock")
 
-resp, err := c.Attest(ctx, apiclient.AttestRequest{
+resp, err := c.Attest(ctx, remote.AttestRequest{
     ReportData: digest[:], // travels as base64, per encoding/json
-    Platform:   apiclient.PlatformAuto,
+    Platform:   remote.PlatformAuto,
 })
 evidence := resp.Envelope() // teetypes.AttestationEvidence
 ```
@@ -120,7 +151,7 @@ the report without gating on it accepts anything the service could parse. Use
 `VerifyEvidence`, which enforces the verdict and then your reference values:
 
 ```go
-resp, err := c.VerifyEvidence(ctx, evidence, apiclient.Policy{
+resp, err := c.VerifyEvidence(ctx, evidence, remote.Policy{
     ExpectedReportData: digest[:],         // the bytes sent to /attest, verbatim
     AllowDebug:         false,             // a debug guest's memory is host-readable
     Images:             pins,              // whole-image pins: digest + registers
@@ -143,7 +174,7 @@ The service names one concept twice, `expected_mrtd` on TDX and
 so callers do not:
 
 ```go
-var params apiclient.VerifyParams
+var params remote.VerifyParams
 err := params.SetExpectedMeasurements(platform, launchMeasurement, map[int][]byte{
     1: rtmr1, // guest kernel image
     2: rtmr2, // kernel command line and rootfs chain
@@ -162,7 +193,7 @@ PCRs**. Pinning only the launch measurement there proves the paravisor booted,
 not which guest ran. `Policy.PCRs` closes that:
 
 ```go
-resp, err := c.VerifyEvidence(ctx, evidence, apiclient.Policy{
+resp, err := c.VerifyEvidence(ctx, evidence, remote.Policy{
     ExpectedReportData:   expected,
     Measurements:         launchDigests, // the paravisor
     PCRs:                 pcrPins,       // the guest OS, SHA-256
@@ -218,11 +249,73 @@ platform without registers. A mixed fleet keeps one `Policy` per family.
 | `gcp-snp`, `gcp-tdx` | ✅ verify | identical to bare-metal; platform tag is an attester claim, not proof of GCP origin |
 | `dstack` | ⬜ not yet | — |
 
-Limitations: collateral (CRL / Intel TCB status / QE identity) requires a network
-`Getter` and is skipped offline (`CollateralVerified=false`); guest-side
-generation (`attest`) for the envelope platforms is not implemented (verify
-only); Turin FMC TCB and Genoa-family model `0xA0` (Bergamo/Siena) offline root
-selection are gated by go-sev-guest support.
+Limitations: collateral (CRL / Intel TCB status / QE identity) requires a
+network `Getter` and is skipped offline (`CollateralVerified=false`);
+guest-side generation (`attest`) for the envelope platforms is not implemented,
+so these platforms verify only — launch-measurement *prediction* is
+implemented, see `launchmeasure`; Turin FMC TCB and Genoa-family model `0xA0`
+(Bergamo/Siena) offline root selection are gated by go-sev-guest support.
+
+## Reference values (`refvalues`)
+
+A verifier compares evidence against the images a deployment accepts. This
+package holds that set in its three shapes — the measurements config file, the
+flat digest and register lists older flags carry, and a build manifest — and
+converts any of them into the `remote.Policy` the service enforces:
+
+```go
+rv, err := refvalues.Load("measurements.json") // {"schema_version":"1","tee":"tdx","measurements":[...]}
+policy := rv.Policy()                            // Images pinned whole
+pins, err := refvalues.FromImageManifest("build/manifest.json", "worker", teetypes.FamilyTDX)
+```
+
+`FromImageManifest` names the family because a build manifest may carry both;
+it reads the pin through `runtimemeasure.LoadImageManifestFor`.
+
+An image is one atomic tuple: SEV-SNP its launch digest, one pin per vCPU
+count; TDX its MRTD with RTMR[1] and RTMR[2], never RTMR[0] or RTMR[3]. The
+file names its family as `sev-snp` or `tdx` (`snp` is accepted; any known
+platform tag parses through `teetypes.ParseFamily`).
+
+## RA-TLS (`ratls`)
+
+An X.509 extension, under an OID the caller assigns, that binds a TLS key to a
+TEE: REPORTDATA is SHA-384 over the public key, and the evidence travels in the
+certificate. Bare-metal and GCP SEV-SNP embed the raw AMD report; every other
+platform embeds the JSON envelope, with the TDX event log stripped so the
+certificate fits a TLS record.
+
+```go
+// Producer, with evidence from /attest bound to ReportDataForKey(pub, nil):
+att, err := ratls.NewAttestation(resp.Envelope())
+ext, err := att.MarshalExtension(myOID)
+
+// Verifier, in-process or through the service:
+res, err := ratls.VerifyCertOffline(cert, myOID, nonce, teetypes.VerifyParams{}, teeverify.Options{})
+resp, err := ratls.VerifyCertWithService(ctx, client, cert, myOID, nonce, policy)
+```
+
+Certificate lifecycle — issuance, rotation, TLS configs — is the caller's.
+
+## Launch measurement prediction (`launchmeasure/snp`, `launchmeasure/tdx`)
+
+The producing side of the preceding reference values: what a guest image
+*will* measure, computed offline from the firmware and boot artifacts.
+
+```go
+digest, err := snp.LaunchDigest(snp.Config{FirmwarePath: "OVMF.fd", VCPUs: 4, VCPUSig: sig, KernelHashes: &kh})
+mrtd, err := tdx.MRTD(tdvfBytes)
+```
+
+An SNP launch digest is per guest shape (vCPU count, kernel hashes); a TDX
+MRTD is per TDVF build, with the guest measuring into RTMR[0..2] instead. These
+two packages pull `sev-snp-measure-go` and `gce-tcb-verifier`; nothing else in
+the module depends on them.
+
+## Test stub (`remote/mockapi`)
+
+A stub attestation-api over HTTP or a Unix socket, driven through a real
+`remote.Client`, for tests of anything that consumes the service.
 
 ## Installation
 

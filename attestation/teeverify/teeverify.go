@@ -9,6 +9,7 @@
 package teeverify
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -37,29 +38,52 @@ func Verify(evidenceJSON []byte, params teetypes.VerifyParams) (*teetypes.Verifi
 	return VerifyWithOptions(evidenceJSON, params, Options{})
 }
 
-// VerifyWithOptions verifies a self-describing evidence envelope, dispatching on
-// the platform tag.
+// VerifyWithOptions verifies a self-describing evidence envelope with a
+// background context; see VerifyWithOptionsContext.
 func VerifyWithOptions(evidenceJSON []byte, params teetypes.VerifyParams, opts Options) (*teetypes.VerificationResult, error) {
+	return VerifyWithOptionsContext(context.Background(), evidenceJSON, params, opts)
+}
+
+// VerifyWithOptionsContext verifies a self-describing evidence envelope,
+// dispatching on the platform tag.
+//
+// ctx bounds the AMD KDS fetch the snp and gcp-snp arms make when the evidence
+// carries no inline VCEK and opts.SNP.Getter is set (see
+// snp.VerifyEvidenceContext); a bare RA-TLS serving cert is the case that needs
+// it. Nothing else here reaches the network: az-snp carries its VCEK inside the
+// HCL envelope, and the TDX arms verify against collateral already supplied.
+func VerifyWithOptionsContext(ctx context.Context, evidenceJSON []byte, params teetypes.VerifyParams, opts Options) (*teetypes.VerificationResult, error) {
 	if len(evidenceJSON) > MaxEvidenceSize {
 		return nil, fmt.Errorf("evidence too large: %d bytes (max %d)", len(evidenceJSON), MaxEvidenceSize)
 	}
-	if len(params.ExpectedReportData) > 64 {
-		return nil, fmt.Errorf("expected_report_data is %d bytes (max 64)", len(params.ExpectedReportData))
-	}
-
 	var env teetypes.AttestationEvidence
 	if err := json.Unmarshal(evidenceJSON, &env); err != nil {
 		return nil, fmt.Errorf("parsing evidence envelope: %w", err)
 	}
+	return VerifyEnvelope(ctx, env, params, opts)
+}
 
+// VerifyEnvelope verifies an evidence envelope a caller already holds parsed,
+// and is where the dispatch happens: the byte-slice entry points unmarshal and
+// come here. A caller that built or received an envelope — RA-TLS extension
+// evidence, an attestation service's /attest response — calls this rather than
+// marshalling it only to have it parsed straight back.
+//
+// The size bound belongs to the byte-slice entry points, which is where
+// untrusted bytes arrive; an envelope in hand has already been parsed by
+// whoever produced it.
+func VerifyEnvelope(ctx context.Context, env teetypes.AttestationEvidence, params teetypes.VerifyParams, opts Options) (*teetypes.VerificationResult, error) {
+	if len(params.ExpectedReportData) > 64 {
+		return nil, fmt.Errorf("expected_report_data is %d bytes (max 64)", len(params.ExpectedReportData))
+	}
 	// Route on the canonicalized tag so the dispatcher accepts exactly what
 	// teetypes.NormalizePlatform/Family say a tag means; the result carries the
 	// canonical constant, never the attester's spelling.
 	switch teetypes.NormalizePlatform(string(env.Platform)) {
 	case teetypes.PlatformSNP:
-		return verifySNP(env.Evidence, params, opts.SNP, teetypes.PlatformSNP)
+		return verifySNP(ctx, env.Evidence, params, opts.SNP, teetypes.PlatformSNP)
 	case teetypes.PlatformGcpSNP:
-		return verifySNP(env.Evidence, params, opts.SNP, teetypes.PlatformGcpSNP)
+		return verifySNP(ctx, env.Evidence, params, opts.SNP, teetypes.PlatformGcpSNP)
 	case teetypes.PlatformAzSNP:
 		return azsnp.VerifyEvidence(env.Evidence, params, opts.SNP)
 	case teetypes.PlatformTDX:
@@ -73,12 +97,12 @@ func VerifyWithOptions(evidenceJSON []byte, params teetypes.VerifyParams, opts O
 	}
 }
 
-func verifySNP(inner json.RawMessage, params teetypes.VerifyParams, opts snp.Options, platform teetypes.PlatformType) (*teetypes.VerificationResult, error) {
+func verifySNP(ctx context.Context, inner json.RawMessage, params teetypes.VerifyParams, opts snp.Options, platform teetypes.PlatformType) (*teetypes.VerificationResult, error) {
 	var ev snp.SnpEvidence
 	if err := json.Unmarshal(inner, &ev); err != nil {
 		return nil, fmt.Errorf("parsing snp evidence: %w", err)
 	}
-	res, err := snp.VerifyEvidence(ev, params, opts)
+	res, err := snp.VerifyEvidenceContext(ctx, ev, params, opts)
 	if err != nil {
 		return nil, err
 	}

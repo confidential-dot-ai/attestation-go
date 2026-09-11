@@ -19,27 +19,22 @@ import (
 // risks matching a 48-byte TDX value against a 32-byte SNP one; use
 // [VerifyBinding] rather than comparing what this returns.
 func Binding(r *teetypes.VerificationResult) ([]byte, error) {
-	if r == nil {
-		return nil, fmt.Errorf("no verification result")
-	}
-	if !r.SignatureValid {
-		return nil, fmt.Errorf("verification result does not carry a valid signature, so its claims are unverified")
+	if err := r.Check(); err != nil {
+		return nil, err
 	}
 	if err := checkBindingPlatform(r.Platform); err != nil {
 		return nil, err
 	}
-	switch r.Platform.Family() {
-	case teetypes.FamilyTDX:
+	if r.Platform.HasRegisters() {
 		return r.Claims.RTMR(3)
-	default: // FamilySNP; checkBindingPlatform refused the rest.
-		// InitData is HOST_DATA on SNP. On TDX the same field is MR_CONFIG_ID
-		// at 48 bytes, which is why this arm is family-gated rather than
-		// reading InitData unconditionally.
-		if n := len(r.Claims.InitData); n != HostDataSize {
-			return nil, fmt.Errorf("HOSTDATA claim is %d bytes, want %d", n, HostDataSize)
-		}
-		return r.Claims.InitData, nil
 	}
+	// FamilySNP; checkBindingPlatform refused the rest. InitData is HOST_DATA
+	// on SNP. On TDX the same field is MR_CONFIG_ID at 48 bytes, which is why
+	// this arm is platform-gated rather than reading InitData unconditionally.
+	if n := len(r.Claims.InitData); n != HostDataSize {
+		return nil, fmt.Errorf("HOSTDATA claim is %d bytes, want %d", n, HostDataSize)
+	}
+	return r.Claims.InitData, nil
 }
 
 // checkBindingPlatform refuses platforms whose evidence carries no
@@ -58,7 +53,7 @@ func checkBindingPlatform(p teetypes.PlatformType) error {
 	return nil
 }
 
-// ExpectedBinding returns the value [Binding] must equal for a guest launched
+// expectedBinding returns the value [Binding] must equal for a guest launched
 // with anchor, having measured workloadDigests in that order.
 //
 // anchor is whatever the guest was launched to trust; see [Seed]. It is hashed
@@ -70,14 +65,14 @@ func checkBindingPlatform(p teetypes.PlatformType) error {
 // [CanonicalDigest]), deduplicated and in extend order. SEV-SNP has no runtime
 // extends, so a non-empty list there is a policy error rather than a value this
 // function could compute.
-func ExpectedBinding(p teetypes.PlatformType, anchor []byte, workloadDigests []string) ([]byte, error) {
+func expectedBinding(p teetypes.PlatformType, anchor []byte, workloadDigests []string) ([]byte, error) {
 	if len(anchor) == 0 {
 		return nil, fmt.Errorf("anchor is empty; a binding to no anchor proves nothing")
 	}
 	if err := checkBindingPlatform(p); err != nil {
 		return nil, err
 	}
-	if p.Family() == teetypes.FamilyTDX {
+	if p.HasRegisters() {
 		reg := FromDigestsSeeded(Seed(anchor), workloadDigests)
 		return reg[:], nil
 	}
@@ -107,7 +102,7 @@ func VerifyBinding(r *teetypes.VerificationResult, anchor []byte, workloadDigest
 	if err != nil {
 		return err
 	}
-	want, err := ExpectedBinding(r.Platform, anchor, workloadDigests)
+	want, err := expectedBinding(r.Platform, anchor, workloadDigests)
 	if err != nil {
 		return err
 	}
@@ -122,8 +117,8 @@ func VerifyBinding(r *teetypes.VerificationResult, anchor []byte, workloadDigest
 // bindingName names the field the binding lives in, so a mismatch error tells
 // an operator where to look rather than quoting two bare hex strings.
 func bindingName(p teetypes.PlatformType) string {
-	if p.Family() == teetypes.FamilySNP {
-		return "HOSTDATA"
+	if p.HasRegisters() {
+		return "RTMR[3]"
 	}
-	return "RTMR[3]"
+	return "HOSTDATA"
 }

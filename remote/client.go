@@ -1,6 +1,7 @@
-// Package apiclient is the Go client for attestation-api, the HTTP service that
+// Package remote is the Go client for attestation-api, the HTTP service that
 // produces and verifies TEE evidence on a confidential host (the attestation-rs
-// binary).
+// binary). It is remote in the sense that the evidence is produced and checked
+// by another process, reached over a socket or an HTTP address.
 //
 // The service exposes three endpoints, wrapped here as [Client.Attest],
 // [Client.Verify] and [Client.Health]. Most callers want neither raw endpoint
@@ -14,7 +15,7 @@
 // The /verify verdict is not signed, so the client trusts whatever answers.
 // Prefer a Unix-domain socket inside the trust boundary:
 //
-//	c := apiclient.NewClient("unix:///run/attestation/attest.sock")
+//	c := remote.NewClient("unix:///run/attestation/attest.sock")
 //
 // A routable HTTP address lets anything that can influence name resolution or
 // routing answer in the service's place. The socket's owner and mode are
@@ -28,7 +29,12 @@
 // teetypes.PlatformType and are compared by family, so the cloud overlays
 // (az-*, gcp-*) route like their bare-metal counterparts, and an unknown tag
 // fails closed instead of falling through to another platform's rules.
-package apiclient
+//
+// # Testing
+//
+// The mockapi subpackage serves a stub attestation-api, so a test drives
+// a real Client without a confidential host.
+package remote
 
 import (
 	"bytes"

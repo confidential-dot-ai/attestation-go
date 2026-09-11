@@ -1,12 +1,15 @@
 package teetypes
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
-// Family is the hardware TEE behind a platform tag: the cloud-overlay tags
-// (az-*, gcp-*) name the same silicon as their bare-metal counterpart and are
-// verified by the same code path, so policy that is inherently
-// hardware-specific — pinning TDX RTMRs, flooring the four-component SEV-SNP
-// TCB — must key off the family, never off the tag string.
+// Family is the hardware TEE behind a platform tag. The cloud-overlay tags
+// (az-*, gcp-*) name the same silicon as their bare-metal counterpart and take
+// the same verification path, so hardware-specific policy — pinning TDX RTMRs,
+// flooring the four-component SEV-SNP TCB — keys off the family, never off the
+// tag string.
 type Family string
 
 const (
@@ -20,9 +23,70 @@ const (
 	FamilyTDX Family = "tdx"
 )
 
+// String returns the family's canonical name, and "unknown" for FamilyUnknown
+// so a message formatted from a family never shows an empty string. Use it for
+// display; use the constants for comparison.
+func (f Family) String() string {
+	if f == FamilyUnknown {
+		return "unknown"
+	}
+	return string(f)
+}
+
+// DefaultPlatform returns the bare-metal platform tag for the family. A config
+// that names only a family needs it wherever an API demands a tag: opening a
+// runtimemeasure.Register, or filling a remote.AttestRequest.
+//
+// A cloud overlay is never the default, since it names the same silicon and
+// verifies identically; a guest that must announce az-snp or gcp-tdx says so
+// explicitly. FamilyUnknown maps to the empty tag, which routes to no verifier
+// and so fails closed.
+func (f Family) DefaultPlatform() PlatformType {
+	switch f {
+	case FamilySNP:
+		return PlatformSNP
+	case FamilyTDX:
+		return PlatformTDX
+	default:
+		return ""
+	}
+}
+
+// familySpellings is every input ParseFamily accepts, in the order its error
+// lists them, so the message cannot drift from what the function takes.
+var familySpellings = []string{
+	string(FamilySNP), string(PlatformSNP), string(PlatformAzSNP), string(PlatformGcpSNP),
+	string(FamilyTDX), string(PlatformAzTDX), string(PlatformGcpTDX),
+}
+
+// ParseFamily resolves a hardware TEE family from either spelling in use: a
+// family name ("sev-snp", its common alias "snp", or "tdx"), or any platform
+// tag this module verifies ("az-snp", "gcp-tdx", …). Surrounding space is
+// trimmed and ASCII case folded.
+//
+// Configuration names the family while evidence carries a tag, so a caller
+// holding a config string cannot call Family() on it: PlatformType("sev-snp")
+// has no verifier and answers FamilyUnknown by design. ParseFamily is the one
+// place the two vocabularies meet.
+//
+// It never returns FamilyUnknown with a nil error — an unrecognized input is
+// an error quoting what was supplied, so a typo fails closed at config load
+// rather than at first handshake.
+func ParseFamily(s string) (Family, error) {
+	p := NormalizePlatform(s)
+	if p == PlatformType(FamilySNP) {
+		return FamilySNP, nil
+	}
+	if f := p.Family(); f != FamilyUnknown {
+		return f, nil
+	}
+	return FamilyUnknown, fmt.Errorf("unknown TEE platform or family %q, want one of: %s",
+		s, strings.Join(familySpellings, ", "))
+}
+
 // Family reports the hardware TEE family this module routes the tag to, and is
-// the single place that mapping is defined — teeverify's dispatcher is kept in
-// lockstep with it by test.
+// the single definition of that mapping; a test keeps teeverify's dispatcher in
+// step with it.
 //
 // A tag is an attester claim carried outside any report or transcript (see
 // PlatformType), so comparing it raw lets an attester pick "gcp-tdx" to slip
@@ -76,3 +140,14 @@ func (p PlatformType) HasVTPMQuote() bool {
 		return false
 	}
 }
+
+// HasRegisters reports whether verified evidence from the platform carries
+// runtime measurement registers — the TDX RTMRs a guest extends after launch,
+// and so the values Claims.RTMR reads.
+//
+// It is a family property: every TDX tag exposes them, cloud overlays
+// included. SEV-SNP has no runtime-extend register and commits its post-launch
+// identity at launch instead, so a register pin there asks for a check no
+// evidence can answer — a policy error, not something to skip. False for an
+// unknown tag, so such a pin fails closed.
+func (p PlatformType) HasRegisters() bool { return p.Family() == FamilyTDX }

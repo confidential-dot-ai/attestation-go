@@ -4,10 +4,12 @@ go 1.25.0
 
 require (
 	cloud.google.com/go/compute/metadata v0.9.0
+	github.com/google/gce-tcb-verifier v0.3.1
 	github.com/google/go-sev-guest v0.15.0
 	github.com/google/go-tdx-guest v0.3.2-0.20250814004405-ffb0869e6f4d
 	github.com/google/go-tpm v0.9.8
 	github.com/google/go-tpm-tools v0.4.9
+	github.com/virtee/sev-snp-measure-go v0.0.0-20260408174629-fd0cc4c95d62
 	google.golang.org/protobuf v1.36.11
 )
 
@@ -23,5 +25,6 @@ require (
 	github.com/stretchr/testify v1.11.1 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/crypto v0.54.0 // indirect
+	golang.org/x/exp v0.0.0-20240409090435-93d18d7e34b8 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 )
