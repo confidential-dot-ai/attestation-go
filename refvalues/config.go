@@ -213,10 +213,9 @@ func Format(rv ReferenceValues) ([]byte, error) {
 	f := wire{SchemaVersion: schemaVersion1, TEE: string(rv.Family)}
 	for i, img := range rv.Images {
 		we := wireImage{Name: img.Name}
+		// The anchor is validated once, by the f.validate call below: it walks
+		// every entry through the same wireImage.validate the parse path uses.
 		if img.Anchor != nil {
-			if _, err := runtimemeasure.ParsePublicKeyPEM(img.Anchor); err != nil {
-				return nil, fmt.Errorf("measurements[%d].operator_key: %w", i, err)
-			}
 			we.OperatorKey, _ = json.Marshal(string(img.Anchor))
 		}
 		d := hex.EncodeToString(img.Digest)

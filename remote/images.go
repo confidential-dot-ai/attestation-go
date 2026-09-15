@@ -55,6 +55,11 @@ func EnforceImages(resp VerifyResponse, images []ImagePin, platform teetypes.Pla
 		return err
 	}
 
+	// Anchor bindings are read from the verified result, so a pin can only be
+	// checked when the caller's platform agrees with the evidence. This is a
+	// property of the response, not of any one pin, so it is decided once.
+	platformMatches := teetypes.NormalizePlatform(string(platform)) == teetypes.NormalizePlatform(string(resp.Result.Platform))
+
 	// The last register or anchor mismatch is kept so a near-miss names the image it
 	// nearly was, rather than the generic "nothing matched".
 	var lastErr error
@@ -74,7 +79,7 @@ func EnforceImages(resp VerifyResponse, images []ImagePin, platform teetypes.Pla
 			}
 		}
 		if img.Anchor != nil {
-			if teetypes.NormalizePlatform(string(platform)) != teetypes.NormalizePlatform(string(resp.Result.Platform)) {
+			if !platformMatches {
 				lastErr = fmt.Errorf("%s: %w: verified platform does not match evidence", img.Name, ErrAnchorNotAllowed)
 				continue
 			}

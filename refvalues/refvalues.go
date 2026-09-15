@@ -79,6 +79,10 @@ func (rv ReferenceValues) hexDigests() []string {
 // images agree. A verifier that cannot express per-image tuples takes these
 // pins; when uniform is false it must report that rather than drop them
 // silently.
+//
+// uniform here answers only about registers. Anchors are a separate loss that
+// [ReferenceValues.Flatten] folds in, so this reports uniform=true for an
+// anchored set whose registers agree.
 func (rv ReferenceValues) CommonRTMRs() (common map[int][]byte, uniform bool) {
 	if len(rv.Images) == 0 {
 		return nil, true
@@ -107,7 +111,11 @@ func (rv ReferenceValues) Flatten() (digests []string, rtmrs map[int][]byte, uni
 // FromFlags converts the legacy flat pins into images: every digest carries
 // the same registers, which is what the flat form enforced. Registers pinned
 // without any digest have no image form and stay on the flat path, so
-// FromFlags(nil, rtmrs) pins nothing.
+// FromFlags(nil, rtmrs) pins nothing. Repeated digests collapse to one image.
+//
+// The "image-N" names are placeholders that satisfy the document schema, which
+// requires a name; they are diagnostic only and never matched on, so nothing
+// should key off them.
 func FromFlags(digests [][]byte, rtmrs map[int][]byte) ReferenceValues {
 	images := make([]remote.ImagePin, 0, len(digests))
 	seen := make(map[string]bool, len(digests))
