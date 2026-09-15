@@ -117,3 +117,15 @@ func TestParseRTMRPinsString(t *testing.T) {
 		t.Fatalf("blank input = %v, %v; want nil, nil", got, err)
 	}
 }
+
+func TestFormatRTMRPinsIsStable(t *testing.T) {
+	pins := map[int][]byte{3: mustHex(t, r2), 1: mustHex(t, r1)}
+	formatted := FormatRTMRPins(pins)
+	if !reflect.DeepEqual(formatted, []string{"1=" + r1, "3=" + r2}) {
+		t.Fatalf("pins = %v", formatted)
+	}
+	got, err := ParseRTMRPins(formatted)
+	if err != nil || !reflect.DeepEqual(got, pins) {
+		t.Fatalf("roundtrip = %v, %v", got, err)
+	}
+}

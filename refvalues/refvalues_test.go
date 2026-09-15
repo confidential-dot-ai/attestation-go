@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"slices"
 	"testing"
+
+	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
 )
 
 // The flat flags enforced "digest in the list AND the one RTMR set". The
@@ -130,5 +132,24 @@ func TestDigestAccessors(t *testing.T) {
 	}
 	if got := rv.hexDigests(); !slices.Equal(got, []string{d1, d2}) {
 		t.Errorf("hexDigests() = %v, want both digests", got)
+	}
+}
+
+func TestFromFlagsRendersStrictlyWithoutDuplicatePins(t *testing.T) {
+	rv := FromFlags([][]byte{mustHex(t, d1), mustHex(t, d1), mustHex(t, d2)}, nil)
+	rv.Family = teetypes.FamilySNP
+	data, err := Render(rv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := ParseRendered(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Images) != 2 || got.Images[0].Name == "" || got.Images[0].Name == got.Images[1].Name {
+		t.Fatalf("legacy pins = %+v", got.Images)
+	}
+	if got.HasAnchors() {
+		t.Fatal("flat flags invented an anchor")
 	}
 }
