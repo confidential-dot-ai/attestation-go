@@ -25,9 +25,9 @@ func IdentityFromResult(result *teetypes.VerificationResult) (ImageIdentity, err
 	}
 	digest := [Size]byte(launch)
 	if family == teetypes.FamilySNP {
-		// Zero is an internal slot, not an inferred vCPU count. The wrapper
-		// removes the manifest-specific label while retaining its verifier.
-		return observedImageIdentity{snpImagePins{BySMP: map[int][Size]byte{0: digest}}}, nil
+		// The single slot holds the one digest the report carried; observed
+		// pins are reported unlabelled, since nothing here names a vCPU count.
+		return snpImagePins{BySMP: map[int][Size]byte{0: digest}, observed: true}, nil
 	}
 	rtmr1, err := result.Claims.RTMR(1)
 	if err != nil {
@@ -38,16 +38,4 @@ func IdentityFromResult(result *teetypes.VerificationResult) (ImageIdentity, err
 		return nil, err
 	}
 	return tdxImagePins{MRTD: digest, RTMR1: [Size]byte(rtmr1), RTMR2: [Size]byte(rtmr2)}, nil
-}
-
-// observedImageIdentity keeps the shared verifier while removing labels that
-// a verified report cannot establish.
-type observedImageIdentity struct{ ImageIdentity }
-
-func (p observedImageIdentity) LaunchDigests() []LaunchVariant {
-	variants := p.ImageIdentity.LaunchDigests()
-	for i := range variants {
-		variants[i].Label = ""
-	}
-	return variants
 }

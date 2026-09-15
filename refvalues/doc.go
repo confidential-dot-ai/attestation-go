@@ -12,6 +12,12 @@
 // Generic programmatic anchors cannot be formatted as operator_key unless
 // they satisfy that public-key contract.
 //
+// The field names its one kind deliberately. [remote.ImagePin.Anchor] is
+// opaque bytes because [runtimemeasure] hashes whatever it is given, but a
+// document an operator reviews should say what the value it pins is, so that a
+// reviewer can check it rather than compare hex. A second anchor kind is a new
+// field under a new schema_version, not a reinterpretation of this one.
+//
 // [ParseRendered] uses the same strict parsing rules as [Parse], while
 // permitting the empty set a component may report through [Render]. [Diff]
 // includes the anchor in the tuple. [ReferenceValues.HasAnchors] lets callers
