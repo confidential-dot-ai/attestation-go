@@ -93,9 +93,6 @@ func TestEnforceImagesPinsAnchorWithImage(t *testing.T) {
 			if err := remote.EnforceImages(unverified, policy, platform); !errors.Is(err, remote.ErrAnchorNotAllowed) {
 				t.Fatalf("unverified claims accepted: %v", err)
 			}
-			if err := remote.EnforceImages(bound(digestA, server), policy, "different-platform"); err == nil {
-				t.Fatalf("inconsistent verified platform accepted: %v", err)
-			}
 			// Neither key matching a different image nor the shared image
 			// matching a different role may satisfy half of a tuple.
 			other := entry
@@ -126,11 +123,27 @@ func TestEnforceImagesRefusesUnsupportedAnchorBinding(t *testing.T) {
 		t.Fatalf("Azure SNP launcher binding accepted: %v", err)
 	}
 	r.Result.Platform = teetypes.PlatformSNP
-	if err := remote.EnforceImages(r, images, teetypes.PlatformAzSNP); !errors.Is(err, remote.ErrAnchorNotAllowed) {
-		t.Fatalf("mismatched verified platform accepted: %v", err)
-	}
 	images[0].Anchor = []byte{}
 	if err := remote.EnforceImages(r, images, teetypes.PlatformSNP); !errors.Is(err, remote.ErrAnchorNotAllowed) {
 		t.Fatalf("explicit empty anchor accepted: %v", err)
+	}
+}
+
+// A verifier that attested one platform while the evidence was submitted for
+// another answers a different question than the policy asked, whatever pin
+// form is configured. EnforcePins settles that before any pin runs.
+func TestEnforcePinsRefusesMismatchedVerifiedPlatform(t *testing.T) {
+	r := evidence(t, digestA, nil)
+	r.Result.SignatureValid = true
+	r.Result.Platform = teetypes.PlatformSNP
+	policy := remote.Policy{Images: []remote.ImagePin{{Name: "image", Digest: mustHex(t, digestA)}}}
+	err := remote.EnforcePins(r, policy, teetypes.AttestationEvidence{Platform: teetypes.PlatformTDX})
+	if !errors.Is(err, remote.ErrPlatformMismatch) {
+		t.Fatalf("mismatched verified platform accepted: %v", err)
+	}
+	// A result naming no platform contradicts nothing.
+	r.Result.Platform = ""
+	if err := remote.EnforcePins(r, policy, teetypes.AttestationEvidence{Platform: teetypes.PlatformSNP}); err != nil {
+		t.Fatalf("unstated verified platform refused: %v", err)
 	}
 }

@@ -21,8 +21,10 @@ func (c Client) WaitHealthy(ctx context.Context, interval time.Duration) error {
 		attemptCtx, cancel := context.WithTimeout(ctx, interval)
 		health, err := c.Health(attemptCtx)
 		cancel()
+		// A service that answered "ok" has answered, whether or not the
+		// caller's deadline lapsed while that answer was in flight.
 		if err == nil && health.Status == "ok" {
-			return ctx.Err()
+			return nil
 		}
 		if err == nil {
 			err = fmt.Errorf("health status %q, want ok", health.Status)
