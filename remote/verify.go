@@ -38,6 +38,10 @@ var (
 	// malformed, or does not match what the policy pins.
 	ErrRTMRNotAllowed = errors.New("remote: RTMR not allowed")
 
+	// ErrAnchorNotAllowed: a matched image does not bind its pinned launch
+	// anchor, or the verified platform cannot carry that binding.
+	ErrAnchorNotAllowed = errors.New("remote: launch anchor not allowed")
+
 	// ErrMinTcbNotAllowed: the policy floors the SEV-SNP TCB but the evidence
 	// is from another family, where the floor pins nothing.
 	ErrMinTcbNotAllowed = errors.New("remote: TCB floor not allowed")
@@ -79,9 +83,9 @@ type Policy struct {
 	// family. The service ignores FMC.
 	MinTcb *teetypes.SnpTcb
 
-	// Images pins whole images — a launch digest together with the registers
-	// measured from the same build. When set it replaces Measurements and
-	// RTMRs, so a digest from one build cannot be paired with another's.
+	// Images pins whole images: launch digest, registers from the same build,
+	// and an optional launch anchor matched on that same entry. When set it
+	// replaces Measurements and RTMRs; none of these pins match independently.
 	Images []ImagePin
 
 	// Measurements is the set of acceptable launch measurements; empty accepts

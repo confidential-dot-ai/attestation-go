@@ -2,6 +2,8 @@ package refvalues
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -95,4 +97,14 @@ func ParseRTMRPinsString(raw string) (map[int][]byte, error) {
 		return nil, nil
 	}
 	return ParseRTMRPins(strings.Split(raw, ","))
+}
+
+// FormatRTMRPins renders register pins as "<index>=<hex>", in ascending index
+// order for stable command flags and deployment values.
+func FormatRTMRPins(rtmrs map[int][]byte) []string {
+	pins := make([]string, 0, len(rtmrs))
+	for _, idx := range slices.Sorted(maps.Keys(rtmrs)) {
+		pins = append(pins, fmt.Sprintf("%d=%x", idx, rtmrs[idx]))
+	}
+	return pins
 }

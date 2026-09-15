@@ -43,8 +43,8 @@ Packages: `teeverify` (dispatcher) · `snp`, `tdx` (bare-metal) · `azsnp`, `azt
 Launch measurement covers what booted. Runtime measurement covers what the
 guest committed afterwards — the *anchor* it was launched to trust, and the
 workloads it admitted. An anchor is whatever bytes distinguish one launch from
-another: a public key, a policy document, a configuration digest. The package
-hashes those bytes and does not interpret them.
+another: a public key, a policy document, a configuration digest. The package’s
+binding functions hash those bytes and do not interpret them.
 
 The two families express all this differently, and this package is the seam
 that hides the difference:
@@ -79,7 +79,9 @@ current, err := reg.Extension()
 
 Anchor bytes are hashed verbatim. Where they come from a file, pass the file
 contents exactly as written — never round-tripped through a parser — or the
-digest differs and verification fails silently.
+binding no longer matches. `ParsePublicKeyPEM` validates anchors that must be
+a single ECDSA P-256 public key, without changing the input bytes; it rejects
+extra PEM blocks, PEM headers, and non-whitespace outside the block.
 
 An in-guest daemon that must extend exactly once per workload, across its own
 restarts, keeps a `Journal`: a log of digests already extended, written before
@@ -107,6 +109,12 @@ for _, v := range identity.LaunchDigests() { ... } // v.Label is "" on TDX, "smp
 registers := identity.RTMRs()                      // RTMR[1] and RTMR[2] on TDX, none on SNP
 ```
 
+`IdentityFromResult(res)` derives an `ImageIdentity` from a signature-verified
+report: one launch digest, plus RTMR[1] and RTMR[2] on TDX. It rejects unknown
+families and missing or malformed claims. An observed SNP digest is unlabelled
+because the report does not establish a vCPU count. The caller must establish
+freshness and trust in the verifier before using that report as a reference.
+
 `InitDataAnchor` reads the 32-byte init-data digest back out of a verified
 result — SEV-SNP HOST_DATA verbatim, TDX MRCONFIGID with its zero padding
 checked — for a guest asking which document it was launched with.
@@ -126,6 +134,10 @@ service's collateral cache rather than this process's.
 | `POST` | `/attest` | `Client.Attest` — produce evidence binding a report-data value |
 | `POST` | `/verify` | `Client.Verify` — parse and check evidence, returning a report |
 | `GET` | `/health` | `Client.Health` — status, platform, collateral cache stats |
+
+`Client.WaitHealthy(ctx, interval)` waits for `/health` to report `ok`. The
+caller sets the total timeout on `ctx`; `interval` bounds each request and
+the pause after a failed attempt. Cancellation interrupts either wait.
 
 ### Producing evidence
 
@@ -154,9 +166,17 @@ the report without gating on it accepts anything the service could parse. Use
 resp, err := c.VerifyEvidence(ctx, evidence, remote.Policy{
     ExpectedReportData: digest[:],         // the bytes sent to /attest, verbatim
     AllowDebug:         false,             // a debug guest's memory is host-readable
-    Images:             pins,              // whole-image pins: digest + registers
+    Images:             pins,              // atomic pins: digest + registers + optional anchor
 })
 ```
+
+Each `ImagePin.Anchor` binds its exact bytes to that same image: TDX RTMR[3]
+or SNP HOSTDATA must match the bare launch binding, without workload extends.
+A matching image with another anchor cannot satisfy half of a pin. `nil`
+leaves the anchor unchecked; a non-nil empty anchor is refused.
+`EnforceImages` reports missing, mismatched, or unsupported anchor bindings
+as `ErrAnchorNotAllowed`.
+Azure SNP refuses this binding because its paravisor owns HOSTDATA.
 
 `Client.Verify` is the raw endpoint, for callers enforcing the verdict
 themselves; `Client.VerifyEnforced` is the middle ground (verdict gated,
@@ -261,7 +281,8 @@ implemented, see `launchmeasure`; Turin FMC TCB and Genoa-family model `0xA0`
 A verifier compares evidence against the images a deployment accepts. This
 package holds that set in its three shapes — the measurements config file, the
 flat digest and register lists older flags carry, and a build manifest — and
-converts any of them into the `remote.Policy` the service enforces:
+converts any of them into the `remote.Policy` the client enforces after
+verification:
 
 ```go
 rv, err := refvalues.Load("measurements.json") // {"schema_version":"1","tee":"tdx","measurements":[...]}
@@ -272,10 +293,30 @@ pins, err := refvalues.FromImageManifest("build/manifest.json", "worker", teetyp
 `FromImageManifest` names the family because a build manifest may carry both;
 it reads the pin through `runtimemeasure.LoadImageManifestFor`.
 
-An image is one atomic tuple: SEV-SNP its launch digest, one pin per vCPU
-count; TDX its MRTD with RTMR[1] and RTMR[2], never RTMR[0] or RTMR[3]. The
-file names its family as `sev-snp` or `tdx` (`snp` is accepted; any known
-platform tag parses through `teetypes.ParseFamily`).
+A manifest-derived image pins the SEV-SNP launch digest, one pin per vCPU
+count, or the TDX MRTD with RTMR[1] and RTMR[2]. A measurements file can also
+pin RTMR[3], but never RTMR[0]. The file names its family as `sev-snp` or
+`tdx` (`snp` and known platform tags parse through `teetypes.ParseFamily`).
+
+An optional `operator_key` field in each measurement entry carries one ECDSA
+P-256 public key as a PEM string. It maps to `ImagePin.Anchor` and preserves
+its exact bytes, including whitespace. The programmatic anchor accepts generic
+bytes; the wire format supports public-key anchors only and refuses other
+values. Identical image measurements with different anchors are distinct
+accepted tuples. Repeating a complete tuple or a name is an error.
+
+`Parse` and `ParseRendered` reject unknown or duplicate JSON fields, trailing
+data, and malformed pins. `Format` and `Render` refuse values they cannot
+preserve. `Render` and `ParseRendered` additionally support empty sets for
+components reporting that they pin nothing. `Diff` compares the complete
+digest/register/anchor tuple; diagnostic names do not affect admission.
+
+`HasAnchors` reports whether the set pins any anchor. `Flatten` returns
+`uniform=false` for such a set because flat digest/register flags cannot
+express its bindings; callers requiring the complete policy must reject that
+conversion. `FromFlags` gives distinct digests stable diagnostic names and
+removes repeated digests. `FormatRTMRPins` renders register flags in index
+order.
 
 ## RA-TLS (`ratls`)
 
