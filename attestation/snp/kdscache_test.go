@@ -91,6 +91,28 @@ func TestCachingGetter_FetchFailureIsNotCachedAndPropagates(t *testing.T) {
 	}
 }
 
+func TestCachingGetter_PublishFailureLeavesNoTemporaryFile(t *testing.T) {
+	dir := t.TempDir()
+	next := &countingGetter{body: []byte("vcek-der")}
+	g := NewCachingKDSGetter(dir, next).(*cachingGetter)
+	// A directory at the final filename prevents renaming a file over it.
+	if err := os.Mkdir(g.path(vcekURL), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if b, err := g.Get(vcekURL); err != nil || !bytes.Equal(b, next.body) {
+			t.Fatalf("call %d: got %q, %v, want successful fetch", i, b, err)
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil || len(entries) != 1 || !entries[0].IsDir() {
+			t.Fatalf("cache entries = %v, %v, want only the blocking directory", entries, err)
+		}
+	}
+	if next.calls != 2 {
+		t.Fatalf("fetches = %d, want 2 after failed cache publication", next.calls)
+	}
+}
+
 func TestNewCachingKDSGetter_NoDirMeansPassThrough(t *testing.T) {
 	next := &countingGetter{body: []byte("x")}
 	if g := NewCachingKDSGetter("", next); g != next {

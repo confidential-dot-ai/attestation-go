@@ -76,15 +76,23 @@ func (c *cachingGetter) GetContext(ctx context.Context, rawURL string) ([]byte, 
 	// Atomic publish so a concurrent reader never sees a partial file; a
 	// failed write only costs the next caller a fetch.
 	tmp, err := os.CreateTemp(c.dir, ".vcek-*")
-	if err == nil {
-		if _, werr := tmp.Write(b); werr == nil && tmp.Close() == nil {
-			if rerr := os.Rename(tmp.Name(), p); rerr != nil {
-				_ = os.Remove(tmp.Name())
-			}
-		} else {
-			_ = tmp.Close()
-			_ = os.Remove(tmp.Name())
-		}
+	if err != nil {
+		return b, nil
 	}
+	closeCalled := false
+	defer func() {
+		if !closeCalled {
+			_ = tmp.Close()
+		}
+		_ = os.Remove(tmp.Name())
+	}()
+	if _, err := tmp.Write(b); err != nil {
+		return b, nil
+	}
+	closeCalled = true
+	if err := tmp.Close(); err != nil {
+		return b, nil
+	}
+	_ = os.Rename(tmp.Name(), p)
 	return b, nil
 }
