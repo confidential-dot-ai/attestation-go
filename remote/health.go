@@ -27,7 +27,7 @@ func (c Client) WaitHealthy(ctx context.Context, interval time.Duration) error {
 			return nil
 		}
 		if err == nil {
-			err = fmt.Errorf("health status %q, want ok", health.Status)
+			err = fmt.Errorf("health status %q", health.Status)
 		}
 		lastErr = err
 		timer := time.NewTimer(interval)
