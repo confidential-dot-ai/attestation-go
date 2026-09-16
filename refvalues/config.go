@@ -4,15 +4,19 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
 	"github.com/confidential-dot-ai/attestation-go/internal/strictjson"
 	"github.com/confidential-dot-ai/attestation-go/remote"
+	"github.com/confidential-dot-ai/attestation-go/runtimemeasure"
 )
 
 // schemaVersion1 is the only measurements config schema version this package
@@ -32,10 +36,11 @@ type wire struct {
 }
 
 type wireImage struct {
-	Name        string    `json:"name"`
-	Measurement *string   `json:"measurement,omitempty"`
-	MRTD        *string   `json:"mrtd,omitempty"`
-	RTMR        []*string `json:"rtmr,omitempty"`
+	Name        string          `json:"name"`
+	Measurement *string         `json:"measurement,omitempty"`
+	MRTD        *string         `json:"mrtd,omitempty"`
+	RTMR        []*string       `json:"rtmr,omitempty"`
+	ApproverKey json.RawMessage `json:"approver_key,omitempty"`
 }
 
 // Load reads and validates a measurements config file. A missing or malformed
@@ -56,6 +61,10 @@ func Load(path string) (ReferenceValues, error) {
 // the same rules, so a file that lints clean is the file every component
 // loads. Errors name the JSON path they were found at.
 func Parse(data []byte) (ReferenceValues, error) {
+	return parse(data, false)
+}
+
+func parse(data []byte, allowEmpty bool) (ReferenceValues, error) {
 	if _, err := strictjson.RejectDuplicateKeys(data); err != nil {
 		return ReferenceValues{}, err
 	}
@@ -65,13 +74,13 @@ func Parse(data []byte) (ReferenceValues, error) {
 	if err := dec.Decode(&f); err != nil {
 		return ReferenceValues{}, fmt.Errorf("decode: %w", err)
 	}
-	if dec.More() {
+	if err := dec.Decode(new(any)); !errors.Is(err, io.EOF) {
 		return ReferenceValues{}, fmt.Errorf("trailing data after the JSON object")
 	}
-	return f.validate()
+	return f.validate(allowEmpty)
 }
 
-func (f wire) validate() (ReferenceValues, error) {
+func (f wire) validate(allowEmpty bool) (ReferenceValues, error) {
 	if f.SchemaVersion != schemaVersion1 {
 		return ReferenceValues{}, fmt.Errorf("schema_version %q, want %q", f.SchemaVersion, schemaVersion1)
 	}
@@ -81,7 +90,7 @@ func (f wire) validate() (ReferenceValues, error) {
 	}
 	// An empty list would pin nothing while reading as a pinned config;
 	// omitting the flag is how an operator asks for no pinning.
-	if len(f.Measurements) == 0 {
+	if len(f.Measurements) == 0 && !allowEmpty {
 		return ReferenceValues{}, fmt.Errorf("measurements is empty: a config file must pin at least one image")
 	}
 
@@ -113,6 +122,16 @@ func (we wireImage) validate(fam teetypes.Family, i int) (remote.ImagePin, error
 		return remote.ImagePin{}, fmt.Errorf("%s: name is required", at)
 	}
 	img := remote.ImagePin{Name: we.Name}
+	if we.ApproverKey != nil {
+		var text string
+		if err := json.Unmarshal(we.ApproverKey, &text); err != nil {
+			return remote.ImagePin{}, fmt.Errorf("%s.approver_key: %w", at, err)
+		}
+		img.Anchor = []byte(text)
+		if _, err := runtimemeasure.ParsePublicKeyPEM(img.Anchor); err != nil {
+			return remote.ImagePin{}, fmt.Errorf("%s.approver_key: %w", at, err)
+		}
+	}
 
 	switch fam {
 	case teetypes.FamilySNP:
@@ -196,6 +215,15 @@ func Format(rv ReferenceValues) ([]byte, error) {
 	f := wire{SchemaVersion: schemaVersion1, TEE: string(rv.Family)}
 	for i, img := range rv.Images {
 		we := wireImage{Name: img.Name}
+		// The anchor is validated once, by the f.validate call below: it walks
+		// every entry through the same wireImage.validate the parse path uses.
+		if img.Anchor != nil {
+			// JSON replaces invalid UTF-8, which would change the launch binding.
+			if !utf8.Valid(img.Anchor) {
+				return nil, fmt.Errorf("measurements[%d].approver_key: invalid UTF-8", i)
+			}
+			we.ApproverKey, _ = json.Marshal(string(img.Anchor))
+		}
 		d := hex.EncodeToString(img.Digest)
 		switch rv.Family {
 		case teetypes.FamilySNP:
@@ -211,6 +239,9 @@ func Format(rv ReferenceValues) ([]byte, error) {
 					if idx <= 0 || idx >= maxRTMRs {
 						return nil, fmt.Errorf("measurements[%d]: rtmr[%d] is not pinnable, want 1..%d", i, idx, maxRTMRs-1)
 					}
+					if len(v) != DigestSize {
+						return nil, fmt.Errorf("measurements[%d].rtmr[%d] is %d bytes, want %d", i, idx, len(v), DigestSize)
+					}
 					h := hex.EncodeToString(v)
 					we.RTMR[idx] = &h
 				}
@@ -220,6 +251,9 @@ func Format(rv ReferenceValues) ([]byte, error) {
 		}
 		f.Measurements = append(f.Measurements, we)
 	}
+	if _, err := f.validate(false); err != nil {
+		return nil, err
+	}
 	out, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("encode measurements config: %w", err)
@@ -227,13 +261,16 @@ func Format(rv ReferenceValues) ([]byte, error) {
 	return append(out, '\n'), nil
 }
 
-// tupleKey is the identity a pin is matched on: the digest and its registers.
+// tupleKey is the identity a pin is matched on: digest, registers, and anchor.
 // The name is diagnostic only, so it is not part of the key.
 func tupleKey(img remote.ImagePin) string {
 	var b strings.Builder
 	b.WriteString(hex.EncodeToString(img.Digest))
 	for _, i := range slices.Sorted(maps.Keys(img.RTMRs)) {
 		fmt.Fprintf(&b, "|%d=%s", i, hex.EncodeToString(img.RTMRs[i]))
+	}
+	if img.Anchor != nil {
+		fmt.Fprintf(&b, "|anchor=%x", img.Anchor)
 	}
 	return b.String()
 }

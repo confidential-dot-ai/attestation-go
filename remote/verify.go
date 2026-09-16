@@ -38,6 +38,15 @@ var (
 	// malformed, or does not match what the policy pins.
 	ErrRTMRNotAllowed = errors.New("remote: RTMR not allowed")
 
+	// ErrAnchorNotAllowed: a matched image does not bind its pinned launch
+	// anchor, or the verified platform cannot carry that binding.
+	ErrAnchorNotAllowed = errors.New("remote: launch anchor not allowed")
+
+	// ErrPlatformMismatch: the verifier attested a platform other than the one
+	// the evidence was submitted for, so every claim read from the result
+	// answers a different question than the policy asked.
+	ErrPlatformMismatch = errors.New("remote: verified platform does not match the evidence")
+
 	// ErrMinTcbNotAllowed: the policy floors the SEV-SNP TCB but the evidence
 	// is from another family, where the floor pins nothing.
 	ErrMinTcbNotAllowed = errors.New("remote: TCB floor not allowed")
@@ -79,9 +88,9 @@ type Policy struct {
 	// family. The service ignores FMC.
 	MinTcb *teetypes.SnpTcb
 
-	// Images pins whole images — a launch digest together with the registers
-	// measured from the same build. When set it replaces Measurements and
-	// RTMRs, so a digest from one build cannot be paired with another's.
+	// Images pins whole images: launch digest, registers from the same build,
+	// and an optional launch anchor matched on that same entry. When set it
+	// replaces Measurements and RTMRs; none of these pins match independently.
 	Images []ImagePin
 
 	// Measurements is the set of acceptable launch measurements; empty accepts
@@ -234,6 +243,18 @@ func (c Client) VerifyEvidence(ctx context.Context, evidence teetypes.Attestatio
 // so an operator who set only that sees exactly the decisions it always made.
 func EnforcePins(resp VerifyResponse, policy Policy, evidence teetypes.AttestationEvidence) error {
 	platform := evidence.Platform
+	// Every pin below reads claims out of the verified result and judges them
+	// against the platform the evidence was submitted for. If the verifier
+	// attested a different platform, those claims answer a different question,
+	// so this is settled once for the response rather than per pin form.
+	//
+	// A result that names no platform states nothing to contradict; the pin
+	// forms below already refuse the claims such a response fails to carry.
+	if resp.Result.Platform != "" &&
+		teetypes.NormalizePlatform(string(platform)) != teetypes.NormalizePlatform(string(resp.Result.Platform)) {
+		return fmt.Errorf("%w: verified %q, evidence submitted for %q",
+			ErrPlatformMismatch, resp.Result.Platform, platform)
+	}
 	// PCR pins are orthogonal to the launch measurement: on an Azure guest the
 	// launch measurement identifies the paravisor and the PCRs identify the
 	// guest OS, so both forms apply to the same evidence.

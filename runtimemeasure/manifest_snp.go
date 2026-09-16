@@ -21,6 +21,11 @@ import (
 type snpImagePins struct {
 	// BySMP maps vCPU count to that variant's launch digest.
 	BySMP map[int][Size]byte
+
+	// observed marks pins read back from a report rather than a manifest.
+	// A report carries a launch digest but nothing that establishes the vCPU
+	// count behind it, so those variants are reported without an smp label.
+	observed bool
 }
 
 // String renders the pinned digests as hex in ascending SMP order, so

@@ -107,14 +107,17 @@ func (p tdxImagePins) Verify(r *teetypes.VerificationResult) error {
 func (p snpImagePins) Family() teetypes.Family { return teetypes.FamilySNP }
 
 // LaunchDigests reports the pinned launch digests in ascending SMP order, one
-// per vCPU count the build ships an IGVM for, labelled "smp<N>".
+// per vCPU count the build ships an IGVM for, labelled "smp<N>". Pins observed
+// from a report carry no label, because the report does not establish a vCPU
+// count to name.
 func (p snpImagePins) LaunchDigests() []LaunchVariant {
 	out := make([]LaunchVariant, 0, len(p.BySMP))
 	for _, smp := range slices.Sorted(maps.Keys(p.BySMP)) {
-		out = append(out, LaunchVariant{
-			Label:  fmt.Sprintf("smp%d", smp),
-			Digest: p.BySMP[smp],
-		})
+		v := LaunchVariant{Digest: p.BySMP[smp]}
+		if !p.observed {
+			v.Label = fmt.Sprintf("smp%d", smp)
+		}
+		out = append(out, v)
 	}
 	return out
 }
