@@ -81,7 +81,8 @@ Anchor bytes are hashed verbatim. Where they come from a file, pass the file
 contents exactly as written — never round-tripped through a parser — or the
 binding no longer matches. `ParsePublicKeyPEM` validates anchors that must be
 a single ECDSA P-256 public key, without changing the input bytes; it rejects
-extra PEM blocks, PEM headers, and non-whitespace outside the block.
+extra PEM blocks, PEM headers, and non-whitespace after the block. Leading text
+is accepted as in `pem.Decode` and remains part of the launch binding.
 
 An in-guest daemon that must extend exactly once per workload, across its own
 restarts, keeps a `Journal`: a log of digests already extended, written before
@@ -298,12 +299,13 @@ count, or the TDX MRTD with RTMR[1] and RTMR[2]. A measurements file can also
 pin RTMR[3], but never RTMR[0]. The file names its family as `sev-snp` or
 `tdx` (`snp` and known platform tags parse through `teetypes.ParseFamily`).
 
-An optional `operator_key` field in each measurement entry carries one ECDSA
-P-256 public key as a PEM string. It maps to `ImagePin.Anchor` and preserves
-its exact bytes, including whitespace. The programmatic anchor accepts generic
-bytes; the wire format supports public-key anchors only and refuses other
-values. Identical image measurements with different anchors are distinct
-accepted tuples. Repeating a complete tuple or a name is an error.
+An optional `approver_key` field in each measurement entry carries the launch
+approver's ECDSA P-256 public key as a PEM string. It maps to `ImagePin.Anchor`
+and preserves its exact bytes, including whitespace. The programmatic anchor
+accepts generic bytes; the wire format supports public-key anchors only and
+refuses other values or invalid UTF-8 that JSON cannot preserve. Identical image
+measurements with different anchors are distinct accepted tuples. Repeating a
+complete tuple or a name is an error.
 
 `Parse` and `ParseRendered` reject unknown or duplicate JSON fields, trailing
 data, and malformed pins. `Format` and `Render` refuse values they cannot

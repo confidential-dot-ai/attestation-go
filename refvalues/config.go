@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
 	"os"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
 	"github.com/confidential-dot-ai/attestation-go/internal/strictjson"
@@ -38,7 +40,7 @@ type wireImage struct {
 	Measurement *string         `json:"measurement,omitempty"`
 	MRTD        *string         `json:"mrtd,omitempty"`
 	RTMR        []*string       `json:"rtmr,omitempty"`
-	OperatorKey json.RawMessage `json:"operator_key,omitempty"`
+	ApproverKey json.RawMessage `json:"approver_key,omitempty"`
 }
 
 // Load reads and validates a measurements config file. A missing or malformed
@@ -72,7 +74,7 @@ func parse(data []byte, allowEmpty bool) (ReferenceValues, error) {
 	if err := dec.Decode(&f); err != nil {
 		return ReferenceValues{}, fmt.Errorf("decode: %w", err)
 	}
-	if err := dec.Decode(new(any)); err != io.EOF {
+	if err := dec.Decode(new(any)); !errors.Is(err, io.EOF) {
 		return ReferenceValues{}, fmt.Errorf("trailing data after the JSON object")
 	}
 	return f.validate(allowEmpty)
@@ -120,14 +122,14 @@ func (we wireImage) validate(fam teetypes.Family, i int) (remote.ImagePin, error
 		return remote.ImagePin{}, fmt.Errorf("%s: name is required", at)
 	}
 	img := remote.ImagePin{Name: we.Name}
-	if we.OperatorKey != nil {
+	if we.ApproverKey != nil {
 		var text string
-		if err := json.Unmarshal(we.OperatorKey, &text); err != nil {
-			return remote.ImagePin{}, fmt.Errorf("%s.operator_key: %w", at, err)
+		if err := json.Unmarshal(we.ApproverKey, &text); err != nil {
+			return remote.ImagePin{}, fmt.Errorf("%s.approver_key: %w", at, err)
 		}
 		img.Anchor = []byte(text)
 		if _, err := runtimemeasure.ParsePublicKeyPEM(img.Anchor); err != nil {
-			return remote.ImagePin{}, fmt.Errorf("%s.operator_key: %w", at, err)
+			return remote.ImagePin{}, fmt.Errorf("%s.approver_key: %w", at, err)
 		}
 	}
 
@@ -216,7 +218,11 @@ func Format(rv ReferenceValues) ([]byte, error) {
 		// The anchor is validated once, by the f.validate call below: it walks
 		// every entry through the same wireImage.validate the parse path uses.
 		if img.Anchor != nil {
-			we.OperatorKey, _ = json.Marshal(string(img.Anchor))
+			// JSON replaces invalid UTF-8, which would change the launch binding.
+			if !utf8.Valid(img.Anchor) {
+				return nil, fmt.Errorf("measurements[%d].approver_key: invalid UTF-8", i)
+			}
+			we.ApproverKey, _ = json.Marshal(string(img.Anchor))
 		}
 		d := hex.EncodeToString(img.Digest)
 		switch rv.Family {

@@ -6,10 +6,10 @@
 // built against the same TDVF firmware share an MRTD — so an image matches
 // whole or not at all. A pinned image is an [remote.ImagePin], the type
 // [remote.Policy] enforces, so a reference set is never restated on its way
-// to the verifier. An optional operator_key in the measurements document maps
+// to the verifier. An optional approver_key in the measurements document maps
 // to ImagePin.Anchor: one ECDSA P-256 public key in PEM, pinned byte for byte.
 // An image may appear with several anchors; a complete tuple must be unique.
-// Generic programmatic anchors cannot be formatted as operator_key unless
+// Generic programmatic anchors cannot be formatted as approver_key unless
 // they satisfy that public-key contract.
 //
 // The field names its one kind deliberately. [remote.ImagePin.Anchor] is

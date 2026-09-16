@@ -13,11 +13,10 @@ func (c Client) WaitHealthy(ctx context.Context, interval time.Duration) error {
 	if interval <= 0 {
 		return fmt.Errorf("health interval must be positive")
 	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
 	var lastErr error
-	for {
-		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("wait for healthy attestation-api: %w (last health check: %v)", err, lastErr)
-		}
+	for ctx.Err() == nil {
 		attemptCtx, cancel := context.WithTimeout(ctx, interval)
 		health, err := c.Health(attemptCtx)
 		cancel()
@@ -30,12 +29,11 @@ func (c Client) WaitHealthy(ctx context.Context, interval time.Duration) error {
 			err = fmt.Errorf("health status %q", health.Status)
 		}
 		lastErr = err
-		timer := time.NewTimer(interval)
+		ticker.Reset(interval)
 		select {
 		case <-ctx.Done():
-			timer.Stop()
-			return fmt.Errorf("wait for healthy attestation-api: %w (last health check: %v)", ctx.Err(), lastErr)
-		case <-timer.C:
+		case <-ticker.C:
 		}
 	}
+	return fmt.Errorf("wait for healthy attestation-api: %w (last health check: %v)", ctx.Err(), lastErr)
 }

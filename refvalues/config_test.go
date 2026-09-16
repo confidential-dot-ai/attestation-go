@@ -333,7 +333,7 @@ func FuzzParse(f *testing.F) {
 	})
 }
 
-func operatorPEM(t *testing.T) []byte {
+func approverPEM(t *testing.T) []byte {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -349,7 +349,7 @@ func operatorPEM(t *testing.T) []byte {
 func TestAnchorRoundTripAndTupleIdentity(t *testing.T) {
 	for _, family := range []teetypes.Family{teetypes.FamilyTDX, teetypes.FamilySNP} {
 		t.Run(string(family), func(t *testing.T) {
-			key := operatorPEM(t)
+			key := append([]byte("Approved launch key\n"), approverPEM(t)...)
 			// Equivalent keys with distinct PEM bytes are distinct launch anchors.
 			rv := ReferenceValues{Family: family, Images: []remote.ImagePin{
 				{Name: "server", Digest: mustHex(t, d1), Anchor: key},
@@ -374,6 +374,9 @@ func TestAnchorRoundTripAndTupleIdentity(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				if !bytes.Contains(data, []byte(`"approver_key":`)) {
+					t.Fatal("formatted policy omitted approver_key")
+				}
 				for _, parse := range []func([]byte) (ReferenceValues, error){Parse, ParseRendered} {
 					got, err := parse(data)
 					if err != nil {
@@ -397,24 +400,25 @@ func TestAnchorRoundTripAndTupleIdentity(t *testing.T) {
 }
 
 func TestAnchorWireAndRenderedDocumentsFailClosed(t *testing.T) {
-	key, err := json.Marshal(string(operatorPEM(t)))
+	key, err := json.Marshal(string(approverPEM(t)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	entry := `{"name":"image","measurement":"` + d1 + `","operator_key":` + string(key) + `}`
+	entry := `{"name":"image","measurement":"` + d1 + `","approver_key":` + string(key) + `}`
 	valid := snpFile(entry)
 	cases := map[string]string{
-		"null anchor":         snpFile(`{"name":"image","measurement":"` + d1 + `","operator_key":null}`),
-		"empty anchor":        snpFile(`{"name":"image","measurement":"` + d1 + `","operator_key":""}`),
-		"nonstring anchor":    snpFile(`{"name":"image","measurement":"` + d1 + `","operator_key":42}`),
-		"malformed anchor":    snpFile(`{"name":"image","measurement":"` + d1 + `","operator_key":"not PEM"}`),
+		"null anchor":         snpFile(`{"name":"image","measurement":"` + d1 + `","approver_key":null}`),
+		"empty anchor":        snpFile(`{"name":"image","measurement":"` + d1 + `","approver_key":""}`),
+		"nonstring anchor":    snpFile(`{"name":"image","measurement":"` + d1 + `","approver_key":42}`),
+		"malformed anchor":    snpFile(`{"name":"image","measurement":"` + d1 + `","approver_key":"not PEM"}`),
+		"old key name":        strings.Replace(valid, `"approver_key":`, `"operator_key":`, 1),
 		"unknown field":       strings.Replace(valid, `"name":`, `"anchor":"ignored","name":`, 1),
-		"duplicate anchor":    strings.Replace(valid, `"operator_key":`, `"operator_key":null,"OPERATOR_KEY":`, 1),
+		"duplicate anchor":    strings.Replace(valid, `"approver_key":`, `"approver_key":null,"APPROVER_KEY":`, 1),
 		"duplicate tuple":     snpFile(entry + "," + strings.Replace(entry, "image", "other", 1)),
 		"duplicate name":      snpFile(entry + "," + strings.Replace(entry, d1, d2, 1)),
 		"trailing object":     valid + `{}`,
 		"trailing garbage":    valid + `garbage`,
-		"empty unknown field": `{"schema_version":"1","tee":"tdx","measurements":[],"operator_key":"ignored"}`,
+		"empty unknown field": `{"schema_version":"1","tee":"tdx","measurements":[],"approver_key":"ignored"}`,
 		"empty duplicate key": `{"schema_version":"1","tee":"tdx","measurements":[],"MEASUREMENTS":[]}`,
 	}
 	for name, data := range cases {
@@ -429,7 +433,9 @@ func TestAnchorWireAndRenderedDocumentsFailClosed(t *testing.T) {
 }
 
 func TestFormatRefusesInvalidOrLossyPins(t *testing.T) {
+	invalidUTF8 := append([]byte{0xff, '\n'}, approverPEM(t)...)
 	for name, mutate := range map[string]func(*remote.ImagePin){
+		"invalid UTF-8 anchor":   func(p *remote.ImagePin) { p.Anchor = invalidUTF8 },
 		"empty anchor":           func(p *remote.ImagePin) { p.Anchor = []byte{} },
 		"generic anchor not PEM": func(p *remote.ImagePin) { p.Anchor = []byte("generic bytes") },
 		"short digest":           func(p *remote.ImagePin) { p.Digest = []byte{1} },

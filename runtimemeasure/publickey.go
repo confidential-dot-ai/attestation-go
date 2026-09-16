@@ -9,9 +9,10 @@ import (
 	"fmt"
 )
 
-// ParsePublicKeyPEM accepts exactly one headerless PEM PUBLIC KEY containing an
-// ECDSA P-256 key, allowing only whitespace around it. Parsing never rewrites
-// the input: launch bindings hash the caller's exact bytes, including whitespace.
+// ParsePublicKeyPEM accepts a headerless PEM PUBLIC KEY containing an ECDSA
+// P-256 key, with only whitespace after it. Leading text follows [pem.Decode].
+// Parsing never rewrites the input: launch bindings hash the caller's exact
+// bytes, including leading text and whitespace.
 func ParsePublicKeyPEM(key []byte) (*ecdsa.PublicKey, error) {
 	block, rest := pem.Decode(key)
 	if block == nil || block.Type != "PUBLIC KEY" || len(block.Headers) != 0 || len(bytes.TrimSpace(rest)) != 0 {

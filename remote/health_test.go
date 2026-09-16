@@ -3,10 +3,13 @@ package remote
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -56,6 +59,50 @@ func TestWaitHealthyBoundsRequestsAndTotalWait(t *testing.T) {
 	if attempts.Load() < 2 {
 		t.Error("a hung health request prevented retries")
 	}
+}
+
+func TestWaitHealthyPausesAfterFailedRequest(t *testing.T) {
+	const interval = time.Second
+	for _, duration := range []time.Duration{interval / 2, interval} {
+		t.Run(duration.String(), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				start := time.Now()
+				var attempts []time.Duration
+				client := NewClientWithHTTP("http://health.test", &http.Client{
+					Transport: healthRoundTripperFunc(func(*http.Request) (*http.Response, error) {
+						attempts = append(attempts, time.Since(start))
+						if len(attempts) == 1 {
+							time.Sleep(duration)
+						} else {
+							cancel()
+						}
+						return &http.Response{
+							StatusCode: http.StatusOK,
+							Body:       io.NopCloser(strings.NewReader(`{"status":"starting"}`)),
+						}, nil
+					}),
+				})
+				err := client.WaitHealthy(ctx, interval)
+				if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), `health status "starting"`) {
+					t.Fatalf("error = %v, want cancellation with last unhealthy status", err)
+				}
+				if len(attempts) != 2 {
+					t.Fatalf("attempts = %v, want two requests", attempts)
+				}
+				if attempts[0] != 0 || attempts[1] != duration+interval {
+					t.Errorf("request times = %v, want [0 %s]", attempts, duration+interval)
+				}
+			})
+		})
+	}
+}
+
+type healthRoundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f healthRoundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
 }
 
 func TestWaitHealthyCancelsPauseAndRejectsInvalidInterval(t *testing.T) {
