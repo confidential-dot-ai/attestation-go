@@ -38,6 +38,25 @@ res, err := teeverify.Verify(evidenceJSON, teetypes.VerifyParams{
 Packages: `teeverify` (dispatcher) · `snp`, `tdx` (bare-metal) · `azsnp`, `aztdx`
 (Azure vTPM) · `tpmcommon` (HCL/vTPM layer) · `teetypes` (shared types).
 
+Bare SNP reports can fetch their missing VCEK with a caller-supplied getter.
+To reuse certificates across processes, opt into the disk cache with a directory
+your application owns:
+
+```go
+import "github.com/confidential-dot-ai/attestation-go/attestation/snp"
+
+getter := snp.NewCachingKDSGetter(cacheDir, snp.DefaultKDSGetter(0, 0))
+opts := teeverify.Options{SNP: snp.Options{Getter: getter}}
+res, err := teeverify.VerifyEnvelope(ctx, envelope, params, opts)
+```
+
+The cache stores VCEK/VLEK certificate responses by their full URL. Certificates
+still undergo normal verification on every use; CRLs and certificate chains
+always go through the supplied getter. An empty or unavailable directory disables
+caching, and write failures leave successful fetches usable. The library chooses
+no default directory or environment variable; a nil getter stays nil so an
+offline configuration cannot enable network fetching implicitly.
+
 ## Runtime measurement (`runtimemeasure`)
 
 Launch measurement covers what booted. Runtime measurement covers what the

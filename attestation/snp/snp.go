@@ -74,6 +74,7 @@ type Options struct {
 	CheckRevocations bool
 	// Getter fetches collateral: the VCEK for a bare report (see fetchVCEK) and
 	// CRLs. Defaults to none → fully offline, VCEK must be supplied inline.
+	// NewCachingKDSGetter adds an optional disk cache to a supplied getter.
 	Getter trust.HTTPSGetter
 }
 
