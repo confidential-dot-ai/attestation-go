@@ -36,7 +36,7 @@ var (
 
 	// ErrRegistersNotAllowed: a pinned runtime measurement register is absent,
 	// malformed, or does not match what the policy pins.
-	ErrRegistersNotAllowed = errors.New("remote: RTMR not allowed")
+    ErrRegistersNotAllowed = errors.New("remote: register not allowed")
 
 	// ErrAnchorNotAllowed: a matched image does not bind its pinned launch
 	// anchor, or the verified platform cannot carry that binding.
