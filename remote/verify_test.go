@@ -182,8 +182,8 @@ func TestVerifyEnforcedChecksExpectedMeasurementsAgainstClaims(t *testing.T) {
 		want   error
 	}{
 		{"launch digest differs", other, nil, ErrMeasurementNotAllowed},
-		{"register differs", reported, map[int][]byte{1: other}, ErrRTMRNotAllowed},
-		{"register not reported", reported, map[int][]byte{2: reported}, ErrRTMRNotAllowed},
+		{"register differs", reported, map[int][]byte{1: other}, ErrRegistersNotAllowed},
+		{"register not reported", reported, map[int][]byte{2: reported}, ErrRegistersNotAllowed},
 		{"both match", reported, map[int][]byte{1: reported}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -218,12 +218,12 @@ func TestEnforceRTMRs(t *testing.T) {
 	if err := EnforceRTMRs(resp, map[int][]byte{1: val}); err != nil {
 		t.Errorf("EnforceRTMRs(matching) = %v, want nil", err)
 	}
-	if err := EnforceRTMRs(resp, map[int][]byte{1: make([]byte, 48)}); !errors.Is(err, ErrRTMRNotAllowed) {
-		t.Errorf("EnforceRTMRs(mismatch) = %v, want ErrRTMRNotAllowed", err)
+	if err := EnforceRTMRs(resp, map[int][]byte{1: make([]byte, 48)}); !errors.Is(err, ErrRegistersNotAllowed) {
+		t.Errorf("EnforceRTMRs(mismatch) = %v, want ErrRegistersNotAllowed", err)
 	}
 	// A pinned register the evidence does not carry is a refusal, not a pass.
-	if err := EnforceRTMRs(resp, map[int][]byte{2: val}); !errors.Is(err, ErrRTMRNotAllowed) {
-		t.Errorf("EnforceRTMRs(unreported) = %v, want ErrRTMRNotAllowed", err)
+	if err := EnforceRTMRs(resp, map[int][]byte{2: val}); !errors.Is(err, ErrRegistersNotAllowed) {
+		t.Errorf("EnforceRTMRs(unreported) = %v, want ErrRegistersNotAllowed", err)
 	}
 }
 
@@ -231,10 +231,10 @@ func TestEnforceRTMRs(t *testing.T) {
 // skipping the pin would report a policy as enforced when it was not.
 func TestEnforcePinsRefusesRTMRPinsOnSNP(t *testing.T) {
 	resp := VerifyResponse{Result: teetypes.VerificationResult{Claims: teetypes.Claims{LaunchDigest: digestHex}}}
-	policy := Policy{RTMRs: map[int][]byte{1: make([]byte, 48)}}
+	policy := Policy{Registers: map[int][]byte{1: make([]byte, 48)}}
 	snp := teetypes.AttestationEvidence{Platform: teetypes.PlatformSNP}
-	if err := EnforcePins(resp, policy, snp); !errors.Is(err, ErrRTMRNotAllowed) {
-		t.Fatalf("EnforcePins(snp with RTMR pins) = %v, want ErrRTMRNotAllowed", err)
+	if err := EnforcePins(resp, policy, snp); !errors.Is(err, ErrRegistersNotAllowed) {
+		t.Fatalf("EnforcePins(snp with RTMR pins) = %v, want ErrRegistersNotAllowed", err)
 	}
 	if err := EnforcePins(resp, Policy{}, snp); err != nil {
 		t.Fatalf("EnforcePins(snp, no pins) = %v, want nil", err)
@@ -260,18 +260,18 @@ func TestEnforceImagesMatchesWholeImages(t *testing.T) {
 		{"wrong digest", []ImagePin{{Name: "a", Digest: other}}, teetypes.PlatformSNP, true},
 		// A register pin the platform cannot answer is a non-match, not a pass
 		// on the digest alone.
-		{"registers pinned, snp", []ImagePin{{Name: "a", Digest: digest, RTMRs: map[int][]byte{3: rtmr}}}, teetypes.PlatformSNP, true},
-		{"registers pinned, unknown platform", []ImagePin{{Name: "a", Digest: digest, RTMRs: map[int][]byte{3: rtmr}}}, "dstack", true},
+		{"registers pinned, snp", []ImagePin{{Name: "a", Digest: digest, Registers: map[int][]byte{3: rtmr}}}, teetypes.PlatformSNP, true},
+		{"registers pinned, unknown platform", []ImagePin{{Name: "a", Digest: digest, Registers: map[int][]byte{3: rtmr}}}, "dstack", true},
 		{"mixed set, digest-only candidate matches", []ImagePin{
-			{Name: "tdx", Digest: digest, RTMRs: map[int][]byte{1: rtmr}},
+			{Name: "tdx", Digest: digest, Registers: map[int][]byte{1: rtmr}},
 			{Name: "snp", Digest: digest},
 		}, teetypes.PlatformSNP, false},
-		{"digest and register", []ImagePin{{Name: "a", Digest: digest, RTMRs: map[int][]byte{1: rtmr}}}, teetypes.PlatformTDX, false},
-		{"right digest, wrong register", []ImagePin{{Name: "a", Digest: digest, RTMRs: map[int][]byte{1: other}}}, teetypes.PlatformTDX, true},
+		{"digest and register", []ImagePin{{Name: "a", Digest: digest, Registers: map[int][]byte{1: rtmr}}}, teetypes.PlatformTDX, false},
+		{"right digest, wrong register", []ImagePin{{Name: "a", Digest: digest, Registers: map[int][]byte{1: other}}}, teetypes.PlatformTDX, true},
 		// The crossed pairing an image pin exists to refuse.
 		{"digest of one, registers of another", []ImagePin{
-			{Name: "a", Digest: other, RTMRs: map[int][]byte{1: rtmr}},
-			{Name: "b", Digest: digest, RTMRs: map[int][]byte{1: other}},
+			{Name: "a", Digest: other, Registers: map[int][]byte{1: rtmr}},
+			{Name: "b", Digest: digest, Registers: map[int][]byte{1: other}},
 		}, teetypes.PlatformTDX, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -359,13 +359,13 @@ func TestEnforceImagesPinsAnchorWithImage(t *testing.T) {
 				return r
 			}
 			entry := ImagePin{
-				Name:   "server",
-				Digest: mustHex(t, digestA),
-				RTMRs:  map[int][]byte{1: mustHex(t, regA1)},
-				Anchor: server,
+				Name:      "server",
+				Digest:    mustHex(t, digestA),
+				Registers: map[int][]byte{1: mustHex(t, regA1)},
+				Anchor:    server,
 			}
 			if platform == teetypes.PlatformSNP {
-				entry.RTMRs = nil
+				entry.Registers = nil
 			}
 			policy := []ImagePin{entry}
 			if err := EnforceImages(bound(digestA, server), policy, platform); err != nil {

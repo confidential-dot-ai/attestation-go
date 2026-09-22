@@ -32,9 +32,9 @@ func FromImageManifest(path, name string, fam teetypes.Family) ([]remote.ImagePi
 			pin.Name = name + "-" + v.Label
 		}
 		if len(registers) > 0 {
-			pin.RTMRs = make(map[int][]byte, len(registers))
+			pin.Registers = make(map[int][]byte, len(registers))
 			for idx, reg := range registers {
-				pin.RTMRs[idx] = slices.Clone(reg[:])
+				pin.Registers[idx] = slices.Clone(reg[:])
 			}
 		}
 		out = append(out, pin)

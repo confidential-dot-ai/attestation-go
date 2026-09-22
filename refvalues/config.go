@@ -162,7 +162,7 @@ func (we wireImage) validate(fam teetypes.Family, i int) (remote.ImagePin, error
 		if err != nil {
 			return remote.ImagePin{}, err
 		}
-		img.RTMRs = rtmrs
+		img.Registers = rtmrs
 	default:
 		return remote.ImagePin{}, fmt.Errorf("%s: tee %q has no known pin shape", at, fam)
 	}
@@ -227,15 +227,15 @@ func Format(rv ReferenceValues) ([]byte, error) {
 		d := hex.EncodeToString(img.Digest)
 		switch rv.Family {
 		case teetypes.FamilySNP:
-			if len(img.RTMRs) > 0 {
-				return nil, fmt.Errorf("measurements[%d]: %d rtmr pin(s) on a %q image, which has no registers", i, len(img.RTMRs), teetypes.FamilySNP)
+			if len(img.Registers) > 0 {
+				return nil, fmt.Errorf("measurements[%d]: %d rtmr pin(s) on a %q image, which has no registers", i, len(img.Registers), teetypes.FamilySNP)
 			}
 			we.Measurement = &d
 		case teetypes.FamilyTDX:
 			we.MRTD = &d
-			if len(img.RTMRs) > 0 {
+			if len(img.Registers) > 0 {
 				we.RTMR = make([]*string, maxRTMRs)
-				for idx, v := range img.RTMRs {
+				for idx, v := range img.Registers {
 					if idx <= 0 || idx >= maxRTMRs {
 						return nil, fmt.Errorf("measurements[%d]: rtmr[%d] is not pinnable, want 1..%d", i, idx, maxRTMRs-1)
 					}
@@ -266,8 +266,8 @@ func Format(rv ReferenceValues) ([]byte, error) {
 func tupleKey(img remote.ImagePin) string {
 	var b strings.Builder
 	b.WriteString(hex.EncodeToString(img.Digest))
-	for _, i := range slices.Sorted(maps.Keys(img.RTMRs)) {
-		fmt.Fprintf(&b, "|%d=%s", i, hex.EncodeToString(img.RTMRs[i]))
+	for _, i := range slices.Sorted(maps.Keys(img.Registers)) {
+		fmt.Fprintf(&b, "|%d=%s", i, hex.EncodeToString(img.Registers[i]))
 	}
 	if img.Anchor != nil {
 		fmt.Fprintf(&b, "|anchor=%x", img.Anchor)

@@ -43,7 +43,7 @@ func ParseHexMeasurementsList(raw []string) ([][]byte, error) {
 	return out, nil
 }
 
-// ParseRTMRPins parses TDX RTMR pins of the form <index>=<sha384-hex> into the
+// ParseRegisterPins parses TDX RTMR pins of the form <index>=<sha384-hex> into the
 // map form the reference values carry. Blank entries are skipped; an all-blank
 // or empty slice returns nil (no pin).
 //
@@ -53,7 +53,7 @@ func ParseHexMeasurementsList(raw []string) ([][]byte, error) {
 //
 // A pinned value must be lowercase hex, for the reason
 // [teetypes.ParseDigest] gives.
-func ParseRTMRPins(raw []string) (map[int][]byte, error) {
+func ParseRegisterPins(raw []string) (map[int][]byte, error) {
 	out := make(map[int][]byte, len(raw))
 	for _, p := range raw {
 		p = strings.TrimSpace(p)
@@ -90,18 +90,18 @@ func ParseRTMRPins(raw []string) (map[int][]byte, error) {
 	return out, nil
 }
 
-// ParseRTMRPinsString parses a comma-separated list of <index>=<sha384-hex>
-// RTMR pins (see [ParseRTMRPins]). Empty input returns nil.
-func ParseRTMRPinsString(raw string) (map[int][]byte, error) {
+// ParseRegisterPinsString parses a comma-separated list of <index>=<sha384-hex>
+// RTMR pins (see [ParseRegisterPins]). Empty input returns nil.
+func ParseRegisterPinsString(raw string) (map[int][]byte, error) {
 	if strings.TrimSpace(raw) == "" {
 		return nil, nil
 	}
-	return ParseRTMRPins(strings.Split(raw, ","))
+	return ParseRegisterPins(strings.Split(raw, ","))
 }
 
-// FormatRTMRPins renders register pins as "<index>=<hex>", in ascending index
+// FormatRegisterPins renders register pins as "<index>=<hex>", in ascending index
 // order for stable command flags and deployment values.
-func FormatRTMRPins(rtmrs map[int][]byte) []string {
+func FormatRegisterPins(rtmrs map[int][]byte) []string {
 	pins := make([]string, 0, len(rtmrs))
 	for _, idx := range slices.Sorted(maps.Keys(rtmrs)) {
 		pins = append(pins, fmt.Sprintf("%d=%x", idx, rtmrs[idx]))

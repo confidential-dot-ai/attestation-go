@@ -25,10 +25,10 @@ type ImagePin struct {
 	// Digest is the SEV-SNP launch measurement or the TDX MRTD, 48 bytes.
 	Digest []byte
 
-	// RTMRs pins runtime measurement registers by index. An absent index is
+	// Registers pins runtime measurement registers by index. An absent index is
 	// unchecked; an all-zero value pins the register to zero. Empty on
 	// platforms without registers.
-	RTMRs map[int][]byte
+	Registers map[int][]byte
 
 	// Anchor pins the exact launch-bound bytes along with this image. Nil
 	// leaves the binding unchecked; a non-nil empty anchor is invalid.
@@ -62,13 +62,13 @@ func EnforceImages(resp VerifyResponse, images []ImagePin, platform teetypes.Pla
 		if !bytes.Equal(digest, img.Digest) {
 			continue
 		}
-		if len(img.RTMRs) > 0 {
+		if len(img.Registers) > 0 {
 			if !platform.HasRegisters() {
 				lastErr = fmt.Errorf("%s: %w: %d register(s) pinned but platform %q has none",
-					img.Name, ErrRTMRNotAllowed, len(img.RTMRs), platform)
+					img.Name, ErrRegistersNotAllowed, len(img.Registers), platform)
 				continue
 			}
-			if err := enforceRTMRsAgainst(resp.Result.Claims, img.RTMRs); err != nil {
+			if err := enforceRTMRsAgainst(resp.Result.Claims, img.Registers); err != nil {
 				lastErr = fmt.Errorf("%s: %w", img.Name, err)
 				continue
 			}

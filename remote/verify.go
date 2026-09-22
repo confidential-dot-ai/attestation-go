@@ -34,9 +34,9 @@ var (
 	// hex or not measurement-sized — malformed, distinct from a policy miss.
 	ErrInvalidLaunchDigest = errors.New("remote: launch digest malformed")
 
-	// ErrRTMRNotAllowed: a pinned runtime measurement register is absent,
+	// ErrRegistersNotAllowed: a pinned runtime measurement register is absent,
 	// malformed, or does not match what the policy pins.
-	ErrRTMRNotAllowed = errors.New("remote: RTMR not allowed")
+	ErrRegistersNotAllowed = errors.New("remote: RTMR not allowed")
 
 	// ErrAnchorNotAllowed: a matched image does not bind its pinned launch
 	// anchor, or the verified platform cannot carry that binding.
@@ -90,7 +90,7 @@ type Policy struct {
 
 	// Images pins whole images: launch digest, registers from the same build,
 	// and an optional launch anchor matched on that same entry. When set it
-	// replaces Measurements and RTMRs; none of these pins match independently.
+	// replaces Measurements and Registers; none of these pins match independently.
 	Images []ImagePin
 
 	// Measurements is the set of acceptable launch measurements; empty accepts
@@ -98,19 +98,19 @@ type Policy struct {
 	// MRTD into one claim, so one set covers both.
 	Measurements [][]byte
 
-	// RTMRs pins runtime measurement registers by index, and is what makes a
+	// Registers pins runtime measurement registers by index, and is what makes a
 	// TDX guest's own bytes attested rather than just its firmware's: MRTD
 	// covers TDVF alone, which measures the guest kernel into RTMR[1] and the
 	// command line — carrying the dm-verity root hash — into RTMR[2]. Without
 	// these a host can boot a different guest image under the pinned MRTD.
 	//
 	// A pin against a platform without registers is refused with
-	// [ErrRTMRNotAllowed], never skipped. Absent indices are unpinned;
+	// [ErrRegistersNotAllowed], never skipped. Absent indices are unpinned;
 	// RTMR[0] should stay that way, as it carries the TD HOB and so
 	// varies with the guest's vCPU and memory shape. RTMR[3] is extended by
 	// in-guest software and cannot speak to guest identity on its own — a
 	// substituted guest extends it with whatever it likes.
-	RTMRs map[int][]byte
+	Registers map[int][]byte
 
 	// PCRs pins vTPM platform configuration registers by index, and is what
 	// makes an Azure guest's OS attested rather than just Microsoft's
@@ -270,11 +270,11 @@ func EnforcePins(resp VerifyResponse, policy Policy, evidence teetypes.Attestati
 	// Registers exist only where the platform has them; pinning them elsewhere
 	// is a policy error the caller should have caught, not a silent pass.
 	if platform.HasRegisters() {
-		return EnforceRTMRs(resp, policy.RTMRs)
+		return EnforceRTMRs(resp, policy.Registers)
 	}
-	if len(policy.RTMRs) > 0 {
+	if len(policy.Registers) > 0 {
 		return fmt.Errorf("%w: %d register(s) pinned but platform %q has none",
-			ErrRTMRNotAllowed, len(policy.RTMRs), platform)
+			ErrRegistersNotAllowed, len(policy.Registers), platform)
 	}
 	return nil
 }
@@ -359,7 +359,7 @@ func EnforceRTMRs(resp VerifyResponse, pinned map[int][]byte) error {
 // encoding and width in one place rather than per caller.
 func enforceRTMRsAgainst(claims teetypes.Claims, pinned map[int][]byte) error {
 	if err := claims.CheckRTMRs(pinned); err != nil {
-		return fmt.Errorf("%w: %w", ErrRTMRNotAllowed, err)
+		return fmt.Errorf("%w: %w", ErrRegistersNotAllowed, err)
 	}
 	return nil
 }

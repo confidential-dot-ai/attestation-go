@@ -225,8 +225,8 @@ func TestVerifyWithServiceFailsClosed(t *testing.T) {
 		{
 			name:    "register pinned on a platform without registers",
 			result:  passingVerdict(measurement),
-			policy:  remote.Policy{RTMRs: map[int][]byte{1: measurement}},
-			wantErr: remote.ErrRTMRNotAllowed,
+			policy:  remote.Policy{Registers: map[int][]byte{1: measurement}},
+			wantErr: remote.ErrRegistersNotAllowed,
 		},
 	}
 	for _, tc := range cases {

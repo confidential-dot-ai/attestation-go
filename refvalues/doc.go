@@ -30,7 +30,7 @@
 //     deployment writes for one TEE family;
 //   - the flat digest and register lists that older flags and APIs carry
 //     ([FromFlags], [ReferenceValues.Flatten], [ParseHexMeasurements],
-//     [ParseRTMRPins]);
+//     [ParseRegisterPins]);
 //   - a confidential-os build manifest ([FromImageManifest]).
 //
 // Family differences are hidden here. SEV-SNP folds the guest image into its
