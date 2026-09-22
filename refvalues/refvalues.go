@@ -50,7 +50,7 @@ func (rv ReferenceValues) HasAnchors() bool {
 // those pins and still compiles.
 //
 // Registers pinned without any digest have no image form (see [FromFlags]);
-// a caller holding those sets Policy.RTMRs itself.
+// a caller holding those sets Policy.Registers itself.
 func (rv ReferenceValues) Policy() remote.Policy {
 	return remote.Policy{Images: rv.Images}
 }
@@ -75,7 +75,7 @@ func (rv ReferenceValues) hexDigests() []string {
 	return out
 }
 
-// CommonRTMRs returns the register pins shared by every image, and whether the
+// CommonRegisters returns the register pins shared by every image, and whether the
 // images agree. A verifier that cannot express per-image tuples takes these
 // pins; when uniform is false it must report that rather than drop them
 // silently.
@@ -83,13 +83,13 @@ func (rv ReferenceValues) hexDigests() []string {
 // uniform here answers only about registers. Anchors are a separate loss that
 // [ReferenceValues.Flatten] folds in, so this reports uniform=true for an
 // anchored set whose registers agree.
-func (rv ReferenceValues) CommonRTMRs() (common map[int][]byte, uniform bool) {
+func (rv ReferenceValues) CommonRegisters() (common map[int][]byte, uniform bool) {
 	if len(rv.Images) == 0 {
 		return nil, true
 	}
-	first := rv.Images[0].RTMRs
+	first := rv.Images[0].Registers
 	for _, img := range rv.Images[1:] {
-		if !maps.EqualFunc(first, img.RTMRs, bytes.Equal) {
+		if !maps.EqualFunc(first, img.Registers, bytes.Equal) {
 			return nil, false
 		}
 	}
@@ -104,7 +104,7 @@ func (rv ReferenceValues) CommonRTMRs() (common map[int][]byte, uniform bool) {
 // In that case the flat form loses policy constraints, so a caller requiring
 // the complete policy must refuse it rather than silently weaken admission.
 func (rv ReferenceValues) Flatten() (digests []string, rtmrs map[int][]byte, uniform bool) {
-	common, uniform := rv.CommonRTMRs()
+	common, uniform := rv.CommonRegisters()
 	return rv.hexDigests(), common, uniform && !rv.HasAnchors()
 }
 
@@ -129,7 +129,7 @@ func FromFlags(digests [][]byte, rtmrs map[int][]byte) ReferenceValues {
 		if len(own) == 0 {
 			own = nil
 		}
-		images = append(images, remote.ImagePin{Name: fmt.Sprintf("image-%d", len(images)+1), Digest: d, RTMRs: own})
+		images = append(images, remote.ImagePin{Name: fmt.Sprintf("image-%d", len(images)+1), Digest: d, Registers: own})
 	}
 	return ReferenceValues{Images: images}
 }

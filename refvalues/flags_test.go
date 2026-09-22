@@ -65,14 +65,14 @@ func TestParseHexMeasurements(t *testing.T) {
 	}
 }
 
-func TestParseRTMRPins(t *testing.T) {
+func TestParseRegisterPins(t *testing.T) {
 	hex48 := strings.Repeat("ab", DigestSize)
 	want := mustHex(t, hex48)
 
 	t.Run("valid pins", func(t *testing.T) {
-		got, err := ParseRTMRPins([]string{"1=" + hex48, " 2 = " + hex48})
+		got, err := ParseRegisterPins([]string{"1=" + hex48, " 2 = " + hex48})
 		if err != nil {
-			t.Fatalf("ParseRTMRPins: %v", err)
+			t.Fatalf("ParseRegisterPins: %v", err)
 		}
 		if len(got) != 2 || !bytes.Equal(got[1], want) || !bytes.Equal(got[2], want) {
 			t.Fatalf("pins = %v, want RTMR[1] and RTMR[2] = %s", got, hex48)
@@ -81,9 +81,9 @@ func TestParseRTMRPins(t *testing.T) {
 
 	t.Run("empty and blank entries pin nothing", func(t *testing.T) {
 		for _, in := range [][]string{nil, {}, {" ", ""}} {
-			got, err := ParseRTMRPins(in)
+			got, err := ParseRegisterPins(in)
 			if err != nil || got != nil {
-				t.Fatalf("ParseRTMRPins(%q) = %v, %v; want nil, nil", in, got, err)
+				t.Fatalf("ParseRegisterPins(%q) = %v, %v; want nil, nil", in, got, err)
 			}
 		}
 	})
@@ -100,31 +100,31 @@ func TestParseRTMRPins(t *testing.T) {
 	}
 	for name, in := range rejects {
 		t.Run(name, func(t *testing.T) {
-			if _, err := ParseRTMRPins(in); err == nil {
-				t.Fatalf("ParseRTMRPins(%q) accepted, want error", in)
+			if _, err := ParseRegisterPins(in); err == nil {
+				t.Fatalf("ParseRegisterPins(%q) accepted, want error", in)
 			}
 		})
 	}
 }
 
-func TestParseRTMRPinsString(t *testing.T) {
+func TestParseRegisterPinsString(t *testing.T) {
 	hex48 := strings.Repeat("cd", DigestSize)
-	got, err := ParseRTMRPinsString("1=" + hex48 + ",2=" + hex48)
+	got, err := ParseRegisterPinsString("1=" + hex48 + ",2=" + hex48)
 	if err != nil || len(got) != 2 {
-		t.Fatalf("ParseRTMRPinsString = %v, %v; want two pins", got, err)
+		t.Fatalf("ParseRegisterPinsString = %v, %v; want two pins", got, err)
 	}
-	if got, err := ParseRTMRPinsString(" "); err != nil || got != nil {
+	if got, err := ParseRegisterPinsString(" "); err != nil || got != nil {
 		t.Fatalf("blank input = %v, %v; want nil, nil", got, err)
 	}
 }
 
 func TestFormatRTMRPinsIsStable(t *testing.T) {
 	pins := map[int][]byte{3: mustHex(t, r2), 1: mustHex(t, r1)}
-	formatted := FormatRTMRPins(pins)
+	formatted := FormatRegisterPins(pins)
 	if !reflect.DeepEqual(formatted, []string{"1=" + r1, "3=" + r2}) {
 		t.Fatalf("pins = %v", formatted)
 	}
-	got, err := ParseRTMRPins(formatted)
+	got, err := ParseRegisterPins(formatted)
 	if err != nil || !reflect.DeepEqual(got, pins) {
 		t.Fatalf("roundtrip = %v, %v", got, err)
 	}

@@ -19,13 +19,13 @@ func TestFromFlagsMatchesFlatSemantics(t *testing.T) {
 		t.Fatalf("got %d images, want 2", len(rv.Images))
 	}
 	for i, img := range rv.Images {
-		if !bytes.Equal(img.RTMRs[1], pins) {
+		if !bytes.Equal(img.Registers[1], pins) {
 			t.Errorf("image %d does not carry the shared RTMR pin", i)
 		}
 	}
-	common, uniform := rv.CommonRTMRs()
+	common, uniform := rv.CommonRegisters()
 	if !uniform || !bytes.Equal(common[1], pins) {
-		t.Errorf("CommonRTMRs = %v, %v; want the shared pin", common, uniform)
+		t.Errorf("CommonRegisters = %v, %v; want the shared pin", common, uniform)
 	}
 }
 
@@ -52,8 +52,8 @@ func TestFromFlagsRTMRsWithoutDigests(t *testing.T) {
 func TestFromFlagsImagesOwnTheirRTMRs(t *testing.T) {
 	rv := FromFlags([][]byte{mustHex(t, d1), mustHex(t, d2)}, map[int][]byte{1: mustHex(t, r1)})
 
-	rv.Images[0].RTMRs[2] = make([]byte, DigestSize)
-	if _, leaked := rv.Images[1].RTMRs[2]; leaked {
+	rv.Images[0].Registers[2] = make([]byte, DigestSize)
+	if _, leaked := rv.Images[1].Registers[2]; leaked {
 		t.Error("mutating one image's RTMRs changed another's")
 	}
 }
@@ -82,8 +82,8 @@ func TestPolicyCarriesEveryImage(t *testing.T) {
 	if !bytes.Equal(policy.Images[0].Digest, mustHex(t, d1)) {
 		t.Errorf("digest = %x, want %s", policy.Images[0].Digest, d1)
 	}
-	if !bytes.Equal(policy.Images[0].RTMRs[1], mustHex(t, r1)) {
-		t.Errorf("RTMR[1] = %x, want %s", policy.Images[0].RTMRs[1], r1)
+	if !bytes.Equal(policy.Images[0].Registers[1], mustHex(t, r1)) {
+		t.Errorf("RTMR[1] = %x, want %s", policy.Images[0].Registers[1], r1)
 	}
 }
 

@@ -59,8 +59,8 @@ func TestParseValidSNP(t *testing.T) {
 	if got := hex.EncodeToString(rv.Images[0].Digest); got != d1 {
 		t.Errorf("digest = %s, want %s", got, d1)
 	}
-	if rv.Images[0].RTMRs != nil {
-		t.Errorf("SNP image carries RTMRs: %v", rv.Images[0].RTMRs)
+	if rv.Images[0].Registers != nil {
+		t.Errorf("SNP image carries RTMRs: %v", rv.Images[0].Registers)
 	}
 	if rv.Empty() {
 		t.Error("Empty() = true for a populated set")
@@ -75,7 +75,7 @@ func TestParseTDXRTMRSlots(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	got := rv.Images[0].RTMRs
+	got := rv.Images[0].Registers
 	if _, pinned := got[0]; pinned {
 		t.Error("rtmr[0] pinned from a null slot")
 	}
@@ -198,7 +198,7 @@ func TestFormatFieldNames(t *testing.T) {
 	}
 	tdx, err := Format(ReferenceValues{
 		Family: teetypes.FamilyTDX,
-		Images: []remote.ImagePin{{Name: "a", Digest: mustHex(t, d1), RTMRs: map[int][]byte{1: mustHex(t, r1)}}},
+		Images: []remote.ImagePin{{Name: "a", Digest: mustHex(t, d1), Registers: map[int][]byte{1: mustHex(t, r1)}}},
 	})
 	if err != nil {
 		t.Fatalf("Format: %v", err)
@@ -220,13 +220,13 @@ func TestFormatRejects(t *testing.T) {
 	}{
 		{"unknown tee", ReferenceValues{Family: "sev", Images: []remote.ImagePin{{Name: "a", Digest: make([]byte, DigestSize)}}}, "tee"},
 		{"rtmr on an snp image", ReferenceValues{Family: teetypes.FamilySNP, Images: []remote.ImagePin{
-			{Name: "a", Digest: make([]byte, DigestSize), RTMRs: map[int][]byte{1: make([]byte, DigestSize)}},
+			{Name: "a", Digest: make([]byte, DigestSize), Registers: map[int][]byte{1: make([]byte, DigestSize)}},
 		}}, "rtmr"},
 		{"rtmr index out of range", ReferenceValues{Family: teetypes.FamilyTDX, Images: []remote.ImagePin{
-			{Name: "a", Digest: make([]byte, DigestSize), RTMRs: map[int][]byte{7: make([]byte, DigestSize)}},
+			{Name: "a", Digest: make([]byte, DigestSize), Registers: map[int][]byte{7: make([]byte, DigestSize)}},
 		}}, "rtmr[7]"},
 		{"rtmr zero pinned", ReferenceValues{Family: teetypes.FamilyTDX, Images: []remote.ImagePin{
-			{Name: "a", Digest: make([]byte, DigestSize), RTMRs: map[int][]byte{0: make([]byte, DigestSize)}},
+			{Name: "a", Digest: make([]byte, DigestSize), Registers: map[int][]byte{0: make([]byte, DigestSize)}},
 		}}, "rtmr[0]"},
 	}
 	for _, tc := range tests {
@@ -317,7 +317,7 @@ func FuzzParse(f *testing.F) {
 			if len(img.Digest) != DigestSize {
 				t.Fatalf("accepted a %d-byte digest", len(img.Digest))
 			}
-			for idx, v := range img.RTMRs {
+			for idx, v := range img.Registers {
 				if idx == 0 {
 					t.Fatalf("accepted a pin on RTMR[0]")
 				}
@@ -326,7 +326,7 @@ func FuzzParse(f *testing.F) {
 				}
 			}
 		}
-		rv.CommonRTMRs()
+		rv.CommonRegisters()
 		if _, err := Format(rv); err != nil {
 			t.Fatalf("a parsed set does not format: %v", err)
 		}
@@ -357,7 +357,7 @@ func TestAnchorRoundTripAndTupleIdentity(t *testing.T) {
 			}}
 			if family == teetypes.FamilyTDX {
 				for i := range rv.Images {
-					rv.Images[i].RTMRs = map[int][]byte{1: mustHex(t, r1), 2: mustHex(t, r2)}
+					rv.Images[i].Registers = map[int][]byte{1: mustHex(t, r1), 2: mustHex(t, r2)}
 				}
 			}
 			if !rv.HasAnchors() {
@@ -440,8 +440,8 @@ func TestFormatRefusesInvalidOrLossyPins(t *testing.T) {
 		"generic anchor not PEM": func(p *remote.ImagePin) { p.Anchor = []byte("generic bytes") },
 		"short digest":           func(p *remote.ImagePin) { p.Digest = []byte{1} },
 		"missing name":           func(p *remote.ImagePin) { p.Name = "" },
-		"empty register":         func(p *remote.ImagePin) { p.RTMRs = map[int][]byte{1: {}} },
-		"short register":         func(p *remote.ImagePin) { p.RTMRs = map[int][]byte{1: {1}} },
+		"empty register":         func(p *remote.ImagePin) { p.Registers = map[int][]byte{1: {}} },
+		"short register":         func(p *remote.ImagePin) { p.Registers = map[int][]byte{1: {1}} },
 	} {
 		t.Run(name, func(t *testing.T) {
 			rv := ReferenceValues{Family: teetypes.FamilyTDX, Images: []remote.ImagePin{{Name: "image", Digest: mustHex(t, d1)}}}

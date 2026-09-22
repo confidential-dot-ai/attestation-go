@@ -41,8 +41,8 @@ func TestFromImageManifestSNP(t *testing.T) {
 		t.Errorf("smp2 digest = %s, want %s", got, d1)
 	}
 	for _, p := range pins {
-		if len(p.RTMRs) != 0 {
-			t.Errorf("%s pins registers, but SNP reports none: %v", p.Name, p.RTMRs)
+		if len(p.Registers) != 0 {
+			t.Errorf("%s pins registers, but SNP reports none: %v", p.Name, p.Registers)
 		}
 	}
 }
@@ -62,11 +62,11 @@ func TestFromImageManifestTDX(t *testing.T) {
 	if got := hex.EncodeToString(pins[0].Digest); got != d1 {
 		t.Errorf("mrtd = %s, want %s", got, d1)
 	}
-	if !bytes.Equal(pins[0].RTMRs[1], mustHex(t, r1)) || !bytes.Equal(pins[0].RTMRs[2], mustHex(t, r2)) {
-		t.Errorf("registers = %v, want RTMR[1]=%s RTMR[2]=%s", pins[0].RTMRs, r1, r2)
+	if !bytes.Equal(pins[0].Registers[1], mustHex(t, r1)) || !bytes.Equal(pins[0].Registers[2], mustHex(t, r2)) {
+		t.Errorf("registers = %v, want RTMR[1]=%s RTMR[2]=%s", pins[0].Registers, r1, r2)
 	}
 	for _, idx := range []int{0, 3} {
-		if _, pinned := pins[0].RTMRs[idx]; pinned {
+		if _, pinned := pins[0].Registers[idx]; pinned {
 			t.Errorf("RTMR[%d] pinned from a manifest", idx)
 		}
 	}
