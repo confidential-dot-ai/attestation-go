@@ -11,8 +11,8 @@ import (
 )
 
 // tdxImagePins is the complete TDX measurement identity of one guest image:
-// MRTD (the TDVF firmware's measured regions) plus RTMR[1] (guest kernel /
-// UKI image identity) and RTMR[2] (guest rootfs / UKI section chain). MRTD
+// MRTD (the TDVF firmware's measured regions) plus RTMR[1] (bootloader and
+// UKI image) and RTMR[2] (UKI sections, command line and initrd). MRTD
 // alone does not identify an image — two different guest images built against
 // the same firmware share it — so the three registers are only meaningful as
 // one tuple from one build.
