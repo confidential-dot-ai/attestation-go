@@ -216,8 +216,8 @@ so callers do not:
 ```go
 var params remote.VerifyParams
 err := params.SetExpectedMeasurements(platform, launchMeasurement, map[int][]byte{
-    1: rtmr1, // guest kernel image
-    2: rtmr2, // kernel command line and rootfs chain
+    1: rtmr1, // bootloader and UKI image
+    2: rtmr2, // UKI sections, command line and initrd
 })
 ```
 
