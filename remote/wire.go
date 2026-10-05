@@ -99,9 +99,10 @@ type VerifyParams struct {
 	// the guest's vCPU and memory shape; pinning it denies guests by size
 	// rather than by identity.
 	ExpectedRTMR0 []byte `json:"expected_rtmr0,omitempty"`
-	// ExpectedRTMR1 pins TDX RTMR[1], the guest kernel image.
+	// ExpectedRTMR1 pins TDX RTMR[1], the bootloader and UKI image.
 	ExpectedRTMR1 []byte `json:"expected_rtmr1,omitempty"`
-	// ExpectedRTMR2 pins TDX RTMR[2], the kernel command line and rootfs chain.
+	// ExpectedRTMR2 pins TDX RTMR[2], the UKI sections, command line and
+	// initrd.
 	ExpectedRTMR2 []byte `json:"expected_rtmr2,omitempty"`
 	// ExpectedRTMR3 pins TDX RTMR[3], extended by in-guest software after
 	// launch. See the runtimemeasure package for what a guest puts there.

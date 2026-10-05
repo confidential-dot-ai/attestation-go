@@ -67,16 +67,16 @@ func (p tdxImagePins) LaunchDigests() []LaunchVariant {
 	return []LaunchVariant{{Digest: p.MRTD}}
 }
 
-// RTMRs reports the two registers the build pins: RTMR[1] (guest kernel) and
-// RTMR[2] (guest rootfs). RTMR[0] varies with the VM shape and RTMR[3] is
-// extended at runtime, so neither comes from a manifest.
+// RTMRs reports the two registers the build pins, RTMR[1] and RTMR[2]. RTMR[0]
+// varies with the VM shape and RTMR[3] is extended at runtime, so neither
+// comes from a manifest.
 func (p tdxImagePins) RTMRs() map[int][Size]byte {
 	return map[int][Size]byte{1: p.RTMR1, 2: p.RTMR2}
 }
 
-// Verify checks the verified claims against the pinned image tuple: MRTD (the
-// firmware's measured regions), RTMR[1] (guest kernel) and RTMR[2] (guest
-// rootfs). All three come from one build and only mean anything together.
+// Verify checks the verified claims against the pinned image tuple of MRTD,
+// RTMR[1] and RTMR[2]. All three come from one build and only mean anything
+// together.
 //
 // RTMR[3] is not checked here: it carries the launch anchor and the workload
 // chain, which [VerifyBinding] checks.
@@ -98,7 +98,7 @@ func (p tdxImagePins) Verify(r *teetypes.VerificationResult) error {
 		return fmt.Errorf("MRTD mismatch: node reports %x, image manifest pins %x (a different guest firmware/image booted)", launch, p.MRTD)
 	}
 	if err := r.Claims.CheckRTMRs(map[int][]byte{1: p.RTMR1[:], 2: p.RTMR2[:]}); err != nil {
-		return fmt.Errorf("image pin mismatch: %w (RTMR[1] is the guest kernel, RTMR[2] the guest rootfs)", err)
+		return fmt.Errorf("image pin mismatch: %w (RTMR[1] is the bootloader and UKI image, RTMR[2] the UKI sections, command line and initrd)", err)
 	}
 	return nil
 }
