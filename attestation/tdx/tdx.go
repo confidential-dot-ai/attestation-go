@@ -47,6 +47,13 @@ type Options struct {
 	// time.Now(). Pin it to verify older captured quotes whose PCK certs have
 	// since expired.
 	Now time.Time
+	// AcceptedTCBStatuses replaces go-tdx-guest's TCB status check, which
+	// accepts UpToDate only. When set, the platform TCB level, the TDX module
+	// TCB level (when TEE_TCB_SVN[1] > 0) and the QE identity TCB level matched
+	// from the collateral must each carry a status in this set, and the result
+	// reports the least favourable of them in TCBStatus. Requires GetCollateral.
+	// Revoked is never accepted.
+	AcceptedTCBStatuses []teetypes.TdxTcbStatus
 }
 
 // VerifyEvidence verifies a bare-metal TDX evidence envelope and returns
@@ -107,6 +114,10 @@ func VerifyQuoteBytes(quoteBytes []byte, params teetypes.VerifyParams, platform 
 		return nil, fmt.Errorf("tdx: quote has no TD report body")
 	}
 
+	if err := checkAcceptedTCBStatuses(opts); err != nil {
+		return nil, err
+	}
+
 	trustedRoots := opts.TrustedRoots
 	if trustedRoots == nil {
 		trustedRoots, err = tdxtrust.IntelSGXRootCAPool()
@@ -122,6 +133,12 @@ func VerifyQuoteBytes(quoteBytes []byte, params teetypes.VerifyParams, platform 
 		Getter:           opts.Getter,
 		Now:              verificationTimeSet(opts.Now),
 		TrustedRoots:     trustedRoots,
+	}
+	var recorder *collateralRecorder
+	if len(opts.AcceptedTCBStatuses) > 0 {
+		recorder = newCollateralRecorder(opts.Getter)
+		vOpts.Getter = recorder
+		vOpts.DisableTcbStatusCheck = true
 	}
 	if err := tverify.TdxQuote(quote, vOpts); err != nil {
 		return nil, fmt.Errorf("tdx: DCAP verification failed: %w", err)
@@ -146,6 +163,13 @@ func VerifyQuoteBytes(quoteBytes []byte, params teetypes.VerifyParams, platform 
 		Platform:           platform,
 		Claims:             extractClaims(quote),
 		CollateralVerified: opts.GetCollateral,
+	}
+	if recorder != nil {
+		status, err := evaluateTCBStatus(quote, recorder, opts.AcceptedTCBStatuses)
+		if err != nil {
+			return nil, err
+		}
+		res.TCBStatus = status
 	}
 	if params.ExpectedReportData != nil {
 		res.ReportDataMatch = teetypes.Ptr(true)
