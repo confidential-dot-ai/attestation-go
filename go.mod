@@ -1,22 +1,22 @@
 module github.com/confidential-dot-ai/attestation-go
 
-go 1.25.0
+go 1.26.2
 
 require (
-	cloud.google.com/go/compute/metadata v0.9.0
+	cloud.google.com/go/compute/metadata v0.10.0
 	github.com/google/gce-tcb-verifier v0.3.1
 	github.com/google/go-sev-guest v0.15.0
 	github.com/google/go-tdx-guest v0.3.2-0.20261003001058-b0a2dd8100a0
 	github.com/google/go-tpm v0.9.8
-	github.com/google/go-tpm-tools v0.4.9
+	github.com/google/go-tpm-tools v0.4.10
 	github.com/virtee/sev-snp-measure-go v0.0.0-20260408174629-fd0cc4c95d62
-	google.golang.org/protobuf v1.36.11
+	google.golang.org/protobuf v1.36.12
 )
 
 require (
-	github.com/GoogleCloudPlatform/confidential-space/server v0.0.0-20260706204617-c9f710ef3461 // indirect
+	github.com/GoogleCloudPlatform/confidential-space/server v0.0.0-20261002214134-78a680fd8b60 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
-	github.com/google/go-attestation v0.6.1 // indirect
+	github.com/google/go-attestation v0.6.4 // indirect
 	github.com/google/go-configfs-tsm v0.3.3 // indirect
 	github.com/google/go-eventlog v0.0.3-0.20260617163629-883cc5652c69 // indirect
 	github.com/google/logger v1.1.2 // indirect
@@ -24,7 +24,7 @@ require (
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	golang.org/x/crypto v0.54.0 // indirect
-	golang.org/x/exp v0.0.0-20240409090435-93d18d7e34b8 // indirect
-	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/crypto v0.57.0 // indirect
+	golang.org/x/exp v0.0.0-20261005173118-76772065c9b0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
 )
