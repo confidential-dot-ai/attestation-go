@@ -1,4 +1,4 @@
-package ratls
+package armtls
 
 import "errors"
 
@@ -14,15 +14,15 @@ var (
 	// unknown wire value in the extension, or a platform tag that maps to
 	// teetypes.FamilyUnknown. Fail closed on it — it means no verification
 	// rules apply, not that none are needed.
-	ErrUnsupportedTEE = errors.New("ratls: unsupported TEE platform")
+	ErrUnsupportedTEE = errors.New("armtls: unsupported TEE platform")
 
 	// ErrInvalidReport reports structurally unusable evidence: an SEV-SNP
 	// report that is neither 1184 bytes nor a valid HCL envelope, an evidence
 	// envelope missing its platform or payload, or a shape the extension does
 	// not allow for the TEE type it declares.
-	ErrInvalidReport = errors.New("ratls: invalid attestation report")
+	ErrInvalidReport = errors.New("armtls: invalid attestation report")
 
-	// ErrNoAttestation reports a certificate with no RA-TLS extension, so
+	// ErrNoAttestation reports a certificate with no ARmTLS extension, so
 	// nothing binds its key to a TEE.
-	ErrNoAttestation = errors.New("ratls: certificate carries no RA-TLS attestation extension")
+	ErrNoAttestation = errors.New("armtls: certificate carries no ARmTLS attestation extension")
 )

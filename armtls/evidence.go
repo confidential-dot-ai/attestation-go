@@ -1,4 +1,4 @@
-package ratls
+package armtls
 
 import (
 	"encoding/base64"
@@ -34,7 +34,7 @@ func evidenceForExtension(env teetypes.AttestationEvidence) ([]byte, *teetypes.A
 	platform := teetypes.NormalizePlatform(string(env.Platform))
 	family := platform.Family()
 	if family == teetypes.FamilyUnknown {
-		return nil, nil, fmt.Errorf("%w: no RA-TLS evidence shape for platform %q", ErrUnsupportedTEE, env.Platform)
+		return nil, nil, fmt.Errorf("%w: no ARmTLS evidence shape for platform %q", ErrUnsupportedTEE, env.Platform)
 	}
 	// Both branches turn on the native/vTPM split, not on the tag: a guest that
 	// attests through its hardware report alone is handled the same way whether
@@ -53,7 +53,7 @@ func evidenceForExtension(env teetypes.AttestationEvidence) ([]byte, *teetypes.A
 	env.Platform = platform
 	evidence, err := json.Marshal(env)
 	if err != nil {
-		return nil, nil, fmt.Errorf("ratls: marshal %q evidence envelope: %w", platform, err)
+		return nil, nil, fmt.Errorf("armtls: marshal %q evidence envelope: %w", platform, err)
 	}
 	return evidence, &env, nil
 }
@@ -73,12 +73,12 @@ func NewAttestation(env teetypes.AttestationEvidence) (*Attestation, error) {
 	if embedded == nil && env.Platform.IsSNP() {
 		var evidence snp.SnpEvidence
 		if err := json.Unmarshal(env.Evidence, &evidence); err != nil {
-			return nil, fmt.Errorf("ratls: parse snp collateral: %w", err)
+			return nil, fmt.Errorf("armtls: parse snp collateral: %w", err)
 		}
 		if evidence.CertChain != nil && evidence.CertChain.Vcek != "" {
 			certChain, err = base64.StdEncoding.DecodeString(evidence.CertChain.Vcek)
 			if err != nil {
-				return nil, fmt.Errorf("ratls: decode snp cert_chain.vcek: %w", err)
+				return nil, fmt.Errorf("armtls: decode snp cert_chain.vcek: %w", err)
 			}
 		}
 	}
@@ -101,11 +101,11 @@ func stripTDXEventlog(raw json.RawMessage) (json.RawMessage, error) {
 		Quote string `json:"quote"`
 	}
 	if err := json.Unmarshal(raw, &body); err != nil {
-		return nil, fmt.Errorf("ratls: parse tdx evidence for event-log strip: %w", err)
+		return nil, fmt.Errorf("armtls: parse tdx evidence for event-log strip: %w", err)
 	}
 	out, err := json.Marshal(body)
 	if err != nil {
-		return nil, fmt.Errorf("ratls: re-marshal stripped tdx evidence: %w", err)
+		return nil, fmt.Errorf("armtls: re-marshal stripped tdx evidence: %w", err)
 	}
 	return out, nil
 }

@@ -1,4 +1,5 @@
-// Package ratls binds a TLS key to a TEE with an X.509 certificate extension.
+// Package armtls provides the attestation extension and key binding for
+// attestation-rooted TLS (ARmTLS).
 //
 // The binding is one equality. The guest asks its hardware for an attestation
 // report whose REPORTDATA is SHA-384 over the public key (see
@@ -28,4 +29,4 @@
 // [VerifyOffline] runs the verifiers in-process, and [VerifyWithService]
 // forwards the envelope to an attestation service. Both refuse a platform tag
 // they have no rules for rather than approving it under another platform's.
-package ratls
+package armtls

@@ -1,4 +1,4 @@
-package ratls
+package armtls
 
 import (
 	"bytes"
