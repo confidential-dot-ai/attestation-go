@@ -290,7 +290,9 @@ platform without registers. A mixed fleet keeps one `Policy` per family.
 | `dstack` | ⬜ not yet | — |
 
 Limitations: collateral (CRL / Intel TCB status / QE identity) requires a
-network `Getter` and is skipped offline (`CollateralVerified=false`);
+network `Getter` and is skipped offline (`CollateralVerified=false`). With
+collateral, TDX accepts only the `UpToDate` TCB status unless
+`tdx.Options.AcceptedTCBStatuses` names the statuses to accept;
 guest-side generation (`attest`) for the envelope platforms is not implemented,
 so these platforms verify only — launch-measurement *prediction* is
 implemented, see `launchmeasure`; Turin FMC TCB and Genoa-family model `0xA0`

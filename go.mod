@@ -6,7 +6,7 @@ require (
 	cloud.google.com/go/compute/metadata v0.9.0
 	github.com/google/gce-tcb-verifier v0.3.1
 	github.com/google/go-sev-guest v0.15.0
-	github.com/google/go-tdx-guest v0.3.2-0.20250814004405-ffb0869e6f4d
+	github.com/google/go-tdx-guest v0.3.2-0.20261003001058-b0a2dd8100a0
 	github.com/google/go-tpm v0.9.8
 	github.com/google/go-tpm-tools v0.4.9
 	github.com/virtee/sev-snp-measure-go v0.0.0-20260408174629-fd0cc4c95d62
