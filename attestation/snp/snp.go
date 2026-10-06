@@ -89,7 +89,7 @@ func VerifyEvidence(ev SnpEvidence, params teetypes.VerifyParams, opts Options) 
 //
 // An inline cert_chain.vcek is the offline path: the endorsement key arrives
 // with the report and nothing is fetched. Evidence that omits it — a bare
-// RA-TLS serving cert carries the report alone — needs opts.Getter, and the
+// ARmTLS serving cert carries the report alone — needs opts.Getter, and the
 // VCEK is then fetched from AMD KDS within ctx. Without a Getter, a missing
 // VCEK is an error: offline verification never reaches the network on its
 // own.

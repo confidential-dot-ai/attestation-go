@@ -49,7 +49,7 @@ func VerifyWithOptions(evidenceJSON []byte, params teetypes.VerifyParams, opts O
 //
 // ctx bounds the AMD KDS fetch the snp and gcp-snp arms make when the evidence
 // carries no inline VCEK and opts.SNP.Getter is set (see
-// snp.VerifyEvidenceContext); a bare RA-TLS serving cert is the case that needs
+// snp.VerifyEvidenceContext); a bare ARmTLS serving cert is the case that needs
 // it. Nothing else here reaches the network: az-snp carries its VCEK inside the
 // HCL envelope, and the TDX arms verify against collateral already supplied.
 func VerifyWithOptionsContext(ctx context.Context, evidenceJSON []byte, params teetypes.VerifyParams, opts Options) (*teetypes.VerificationResult, error) {
@@ -65,7 +65,7 @@ func VerifyWithOptionsContext(ctx context.Context, evidenceJSON []byte, params t
 
 // VerifyEnvelope verifies an evidence envelope a caller already holds parsed,
 // and is where the dispatch happens: the byte-slice entry points unmarshal and
-// come here. A caller that built or received an envelope — RA-TLS extension
+// come here. A caller that built or received an envelope — ARmTLS extension
 // evidence, an attestation service's /attest response — calls this rather than
 // marshalling it only to have it parsed straight back.
 //

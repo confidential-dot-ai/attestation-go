@@ -1,4 +1,4 @@
-package ratls
+package armtls
 
 import (
 	"bytes"
@@ -43,21 +43,21 @@ func VerifyOffline(att *Attestation, pub crypto.PublicKey, nonce []byte, params 
 
 	result, err := teeverify.VerifyEnvelope(context.Background(), env, params, opts)
 	if err != nil {
-		return nil, fmt.Errorf("ratls: verify %s evidence: %w", env.Platform, err)
+		return nil, fmt.Errorf("armtls: verify %s evidence: %w", env.Platform, err)
 	}
 	// The verifier reports a mismatch as an error, so both hold on this path.
 	// Re-check them anyway: a verifier that ever returns a result without an
 	// error must not read here as a pass.
 	if err := result.Check(); err != nil {
-		return nil, fmt.Errorf("ratls: %s evidence: %w", env.Platform, err)
+		return nil, fmt.Errorf("armtls: %s evidence: %w", env.Platform, err)
 	}
 	if result.ReportDataMatch == nil || !*result.ReportDataMatch {
-		return nil, fmt.Errorf("ratls: %s evidence does not bind the certificate key", env.Platform)
+		return nil, fmt.Errorf("armtls: %s evidence does not bind the certificate key", env.Platform)
 	}
 	return result, nil
 }
 
-// VerifyCertOffline verifies the RA-TLS extension cert carries under oid
+// VerifyCertOffline verifies the ARmTLS extension cert carries under oid
 // against cert's own public key, which is what makes the certificate
 // self-attesting.
 //
@@ -100,7 +100,7 @@ func VerifyWithService(ctx context.Context, svc remote.Client, att *Attestation,
 	return svc.VerifyEvidence(ctx, env, policy)
 }
 
-// VerifyCertWithService verifies the RA-TLS extension cert carries under oid
+// VerifyCertWithService verifies the ARmTLS extension cert carries under oid
 // against cert's own public key through an attestation service. Like [VerifyCertOffline] it
 // checks the evidence alone; the certificate's validity and chain remain the
 // caller's to verify.
@@ -125,13 +125,13 @@ func bindingAnchor(pub crypto.PublicKey, nonce, supplied []byte) ([]byte, error)
 	}
 	anchor := reportData[:sha512.Size384]
 	if len(supplied) > 0 && !bytes.Equal(supplied, anchor) {
-		return nil, fmt.Errorf("ratls: expected report data %x does not bind the key; leave it unset and it is derived from the key", supplied)
+		return nil, fmt.Errorf("armtls: expected report data %x does not bind the key; leave it unset and it is derived from the key", supplied)
 	}
 	return anchor, nil
 }
 
 // attestationAndKey returns the two things a certificate contributes to
-// verification: its RA-TLS extension and the key that extension must bind.
+// verification: its ARmTLS extension and the key that extension must bind.
 func attestationAndKey(cert *x509.Certificate, oid asn1.ObjectIdentifier) (*Attestation, crypto.PublicKey, error) {
 	att, err := ExtractAttestation(cert, oid)
 	if err != nil {

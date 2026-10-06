@@ -1,4 +1,4 @@
-package ratls
+package armtls
 
 import (
 	"bytes"
@@ -44,7 +44,7 @@ func wireTEEType(f teetypes.Family) (int, error) {
 	case teetypes.FamilyTDX:
 		return wireTDX, nil
 	default:
-		return 0, fmt.Errorf("%w: no RA-TLS wire value for TEE family %q", ErrUnsupportedTEE, f)
+		return 0, fmt.Errorf("%w: no ARmTLS wire value for TEE family %q", ErrUnsupportedTEE, f)
 	}
 }
 
@@ -62,7 +62,7 @@ func familyFromWire(v int) (teetypes.Family, error) {
 	}
 }
 
-// Attestation is the TEE evidence carried by an RA-TLS certificate extension.
+// Attestation is the TEE evidence carried by an ARmTLS certificate extension.
 type Attestation struct {
 	// Family is the hardware TEE family that produced the evidence. It is the
 	// same vocabulary the evidence envelope and the verifiers use, so an
@@ -108,7 +108,7 @@ type attestationASN1 struct {
 // evidence, not by certificate parsing.
 func (a *Attestation) MarshalExtension(oid asn1.ObjectIdentifier) (pkix.Extension, error) {
 	if len(oid) == 0 {
-		return pkix.Extension{}, errors.New("ratls: no extension OID")
+		return pkix.Extension{}, errors.New("armtls: no extension OID")
 	}
 	teeType, err := wireTEEType(a.Family)
 	if err != nil {
@@ -120,7 +120,7 @@ func (a *Attestation) MarshalExtension(oid asn1.ObjectIdentifier) (pkix.Extensio
 		CertChain: a.CertChain,
 	})
 	if err != nil {
-		return pkix.Extension{}, fmt.Errorf("ratls: marshal attestation: %w", err)
+		return pkix.Extension{}, fmt.Errorf("armtls: marshal attestation: %w", err)
 	}
 	return pkix.Extension{Id: oid, Critical: false, Value: value}, nil
 }
@@ -133,7 +133,7 @@ func UnmarshalExtension(der []byte) (*Attestation, error) {
 	var raw attestationASN1
 	rest, err := asn1.Unmarshal(der, &raw)
 	if err != nil {
-		return nil, fmt.Errorf("ratls: unmarshal attestation: %w", err)
+		return nil, fmt.Errorf("armtls: unmarshal attestation: %w", err)
 	}
 	if len(rest) > 0 {
 		return nil, fmt.Errorf("%w: %d trailing bytes after the attestation extension", ErrInvalidReport, len(rest))
@@ -196,7 +196,7 @@ func parseEmbeddedEvidence(raw []byte) (*teetypes.AttestationEvidence, error) {
 	}
 	var envelope teetypes.AttestationEvidence
 	if err := json.Unmarshal(trimmed, &envelope); err != nil {
-		return nil, fmt.Errorf("ratls: parse embedded attestation evidence: %w", err)
+		return nil, fmt.Errorf("armtls: parse embedded attestation evidence: %w", err)
 	}
 	if envelope.Platform == "" || len(envelope.Evidence) == 0 {
 		return nil, fmt.Errorf("%w: embedded evidence has no platform or no payload", ErrInvalidReport)
@@ -251,12 +251,12 @@ func (a *Attestation) Envelope() (teetypes.AttestationEvidence, error) {
 	}
 	raw, err := json.Marshal(inner)
 	if err != nil {
-		return teetypes.AttestationEvidence{}, fmt.Errorf("ratls: build snp evidence: %w", err)
+		return teetypes.AttestationEvidence{}, fmt.Errorf("armtls: build snp evidence: %w", err)
 	}
 	return teetypes.AttestationEvidence{Platform: teetypes.PlatformSNP, Evidence: raw}, nil
 }
 
-// ExtractAttestation parses the RA-TLS extension carried under oid out of a
+// ExtractAttestation parses the ARmTLS extension carried under oid out of a
 // certificate, failing with [ErrNoAttestation] when there is none.
 //
 // It says nothing about the certificate itself: validity window, chain and
@@ -264,7 +264,7 @@ func (a *Attestation) Envelope() (teetypes.AttestationEvidence, error) {
 // key, so every other field is unattested.
 func ExtractAttestation(cert *x509.Certificate, oid asn1.ObjectIdentifier) (*Attestation, error) {
 	if len(oid) == 0 {
-		return nil, errors.New("ratls: no extension OID")
+		return nil, errors.New("armtls: no extension OID")
 	}
 	for _, ext := range cert.Extensions {
 		if ext.Id.Equal(oid) {
@@ -291,7 +291,7 @@ func ReportDataForKey(pub crypto.PublicKey, nonce []byte) ([64]byte, error) {
 	var reportData [64]byte
 	keyBytes, err := marshalPublicKey(pub)
 	if err != nil {
-		return reportData, fmt.Errorf("ratls: marshal public key: %w", err)
+		return reportData, fmt.Errorf("armtls: marshal public key: %w", err)
 	}
 	h := sha512.New384()
 	h.Write(keyBytes)
@@ -311,23 +311,23 @@ func marshalPublicKey(pub crypto.PublicKey) ([]byte, error) {
 	case ed25519.PublicKey:
 		return []byte(k), nil
 	default:
-		return nil, fmt.Errorf("ratls: unsupported key type %T", pub)
+		return nil, fmt.Errorf("armtls: unsupported key type %T", pub)
 	}
 }
 
 // publicKeyFromCert returns the certificate's public key, restricted to the
-// types RA-TLS binds: ECDSA on P-256 or P-384, and ed25519. Any other type is
+// types ARmTLS binds: ECDSA on P-256 or P-384, and ed25519. Any other type is
 // refused, because this package has fixed no hashing encoding for it.
 func publicKeyFromCert(cert *x509.Certificate) (crypto.PublicKey, error) {
 	switch pub := cert.PublicKey.(type) {
 	case *ecdsa.PublicKey:
 		if pub.Curve != elliptic.P256() && pub.Curve != elliptic.P384() {
-			return nil, fmt.Errorf("ratls: unsupported ECDSA curve %s", pub.Curve.Params().Name)
+			return nil, fmt.Errorf("armtls: unsupported ECDSA curve %s", pub.Curve.Params().Name)
 		}
 		return pub, nil
 	case ed25519.PublicKey:
 		return pub, nil
 	default:
-		return nil, fmt.Errorf("ratls: unsupported key type %T in certificate", pub)
+		return nil, fmt.Errorf("armtls: unsupported key type %T in certificate", pub)
 	}
 }

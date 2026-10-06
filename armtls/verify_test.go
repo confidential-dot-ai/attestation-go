@@ -1,4 +1,4 @@
-package ratls
+package armtls
 
 import (
 	"bytes"
@@ -26,7 +26,7 @@ import (
 //go:embed testdata/az-snp.json
 var azSnpEnvelope []byte
 
-// azSnpAttestation is that fixture carried in an RA-TLS extension.
+// azSnpAttestation is that fixture carried in an ARmTLS extension.
 func azSnpAttestation(t *testing.T) *Attestation {
 	t.Helper()
 	att, err := UnmarshalExtension(marshalASN1(t, attestationASN1{

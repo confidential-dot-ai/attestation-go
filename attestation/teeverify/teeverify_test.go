@@ -131,7 +131,7 @@ func TestDispatchMatchesFamily(t *testing.T) {
 }
 
 // TestVerifyWithOptionsContext_SNPKDSFallback drives the dispatcher's snp arm
-// with the VCEK stripped from the envelope — the shape a bare RA-TLS serving
+// with the VCEK stripped from the envelope — the shape a bare ARmTLS serving
 // cert produces. The dispatcher must refuse it offline and accept it once a
 // Getter can supply the VCEK, so callers stop reaching past this package to
 // snp.VerifyReportContext for that one case.

@@ -425,7 +425,7 @@ func TestVerifyReport_BindingFlags(t *testing.T) {
 	}
 }
 
-// TestVerifyEvidenceContext_MissingVCEK covers the bare RA-TLS serving cert:
+// TestVerifyEvidenceContext_MissingVCEK covers the bare ARmTLS serving cert:
 // an envelope carrying the report with no cert_chain.vcek. With no Getter that
 // stays an error — offline verification never reaches the network on its own —
 // and with one the VCEK is fetched from KDS and the evidence verifies.

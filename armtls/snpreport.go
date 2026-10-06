@@ -1,4 +1,4 @@
-package ratls
+package armtls
 
 import (
 	"encoding/base64"
@@ -47,19 +47,19 @@ type snpEvidenceFields struct {
 func ExtractSNPReport(env teetypes.AttestationEvidence) ([]byte, error) {
 	var fields snpEvidenceFields
 	if err := json.Unmarshal(env.Evidence, &fields); err != nil {
-		return nil, fmt.Errorf("ratls: parse %q evidence: %w", env.Platform, err)
+		return nil, fmt.Errorf("armtls: parse %q evidence: %w", env.Platform, err)
 	}
 	switch {
 	case fields.AttestationReport != "":
 		report, err := base64.StdEncoding.DecodeString(fields.AttestationReport)
 		if err != nil {
-			return nil, fmt.Errorf("ratls: decode attestation_report: %w", err)
+			return nil, fmt.Errorf("armtls: decode attestation_report: %w", err)
 		}
 		return report, nil
 	case fields.HCLReport != "":
 		hcl, err := base64.RawURLEncoding.DecodeString(fields.HCLReport)
 		if err != nil {
-			return nil, fmt.Errorf("ratls: decode hcl_report: %w", err)
+			return nil, fmt.Errorf("armtls: decode hcl_report: %w", err)
 		}
 		return NormalizeSEVSNPReport(hcl)
 	default:
