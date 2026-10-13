@@ -361,3 +361,44 @@ func writeJournal(t *testing.T, path, content string) {
 		t.Fatal(err)
 	}
 }
+
+func TestReadJournal(t *testing.T) {
+	a := "sha256:" + strings.Repeat("aa", 32)
+	b := "sha256:" + strings.Repeat("bb", 32)
+	for _, tc := range []struct {
+		name    string
+		content *string
+		want    []string
+	}{
+		{name: "missing file", content: nil, want: nil},
+		{name: "empty file", content: new(""), want: nil},
+		{name: "order kept", content: new(b + "\n" + a + "\n"), want: []string{b, a}},
+		{name: "duplicates dropped", content: new(a + "\n" + b + "\n" + a + "\n"), want: []string{a, b}},
+		{name: "partial last line skipped", content: new(a + "\n" + b[:20]), want: []string{a}},
+		{name: "malformed line skipped", content: new("tag:latest\n" + a + "\n"), want: []string{a}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "measured")
+			if tc.content != nil {
+				if err := os.WriteFile(path, []byte(*tc.content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := ReadJournal(path)
+			if err != nil || !slices.Equal(got, tc.want) {
+				t.Fatalf("ReadJournal() = %q, %v, want %q, nil", got, err, tc.want)
+			}
+		})
+	}
+}
+
+// ReadJournal never creates what it reads.
+func TestReadJournalCreatesNothing(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "absent")
+	if _, err := ReadJournal(filepath.Join(dir, "measured")); err != nil {
+		t.Fatalf("ReadJournal(missing dir) = _, %v", err)
+	}
+	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ReadJournal created %s: %v", dir, err)
+	}
+}
