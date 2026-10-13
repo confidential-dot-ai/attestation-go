@@ -173,6 +173,7 @@ func TestMatchBindingPrefix(t *testing.T) {
 		return reg[:]
 	}
 	hostData := HostData(anchor)
+	twice := FromDigestsSeeded(seed, []string{claimed[0], claimed[0]})
 
 	for _, tc := range []struct {
 		name    string
@@ -186,6 +187,9 @@ func TestMatchBindingPrefix(t *testing.T) {
 		{name: "bare seed, list ahead", result: tdxResult(teetypes.PlatformTDX, atK(0)), claimed: claimed, want: 0},
 		{name: "middle prefix", result: tdxResult(teetypes.PlatformTDX, atK(2)), claimed: claimed, want: 2},
 		{name: "whole list", result: tdxResult(teetypes.PlatformAzTDX, atK(3)), claimed: claimed, want: 3},
+		{name: "extended, empty list", result: tdxResult(teetypes.PlatformTDX, atK(1)), claimed: []string{}, wantErr: true},
+		{name: "duplicate extended twice", result: tdxResult(teetypes.PlatformTDX, twice[:]), claimed: []string{claimed[0], claimed[0]}, want: 2},
+		{name: "duplicate extended once", result: tdxResult(teetypes.PlatformTDX, atK(1)), claimed: []string{claimed[0], claimed[0]}, want: 1},
 		{name: "extended past the list", result: tdxResult(teetypes.PlatformTDX, atK(3)), claimed: claimed[:2], wantErr: true},
 		{name: "reordered list", result: tdxResult(teetypes.PlatformTDX, atK(2)), claimed: []string{claimed[1], claimed[0]}, wantErr: true},
 		{name: "wrong anchor", result: tdxResult(teetypes.PlatformTDX, Zero[:]), claimed: claimed, wantErr: true},

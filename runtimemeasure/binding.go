@@ -141,6 +141,9 @@ func bindingName(p teetypes.PlatformType) string {
 // On SEV-SNP the binding is HOSTDATA, which no runtime extend reaches: k is
 // always 0, and a non-empty list is ignored rather than refused, leaving that
 // decision to the caller. az-snp is refused as by [VerifyBinding].
+//
+// The cost is one SHA-384 per entry, and the list usually comes from the peer,
+// so bound it before calling; armtls caps it at 512.
 func MatchBindingPrefix(r *teetypes.VerificationResult, anchor []byte, claimed []string) (int, error) {
 	for i, d := range claimed {
 		if c, err := CanonicalDigest(d); err != nil || c != d {
@@ -161,8 +164,8 @@ func MatchBindingPrefix(r *teetypes.VerificationResult, anchor []byte, claimed [
 	if !r.Platform.HasRegisters() {
 		return 0, bindingMismatch(r.Platform, got, want)
 	}
-	// SHA-384 chaining makes every prefix fold to a distinct value, so the
-	// first match is the longest.
+	// SHA-384 chaining makes every prefix fold to a distinct value, so at most
+	// one prefix matches and the first hit is the only one.
 	reg := [Size]byte(want)
 	for i, d := range claimed {
 		reg = Extend(reg, Event(d))
