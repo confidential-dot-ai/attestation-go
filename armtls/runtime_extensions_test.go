@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
 	"github.com/confidential-dot-ai/attestation-go/remote"
 	"github.com/confidential-dot-ai/attestation-go/remote/mockapi"
 	"github.com/confidential-dot-ai/attestation-go/runtimemeasure"
@@ -69,6 +70,16 @@ func TestRuntimeExtensionsRoundTrip(t *testing.T) {
 				t.Fatalf("RuntimeExtensions = %q, want %q", got.RuntimeExtensions, want)
 			}
 
+			if len(tc.list) == 0 {
+				legacy, err := asn1.Marshal(legacyASN1{TEEType: wireTDX, Report: []byte(tdxEnvelope)})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !slices.Equal(ext.Value, legacy) {
+					t.Fatal("an extension without a list differs from the legacy encoding")
+				}
+			}
+
 			// A verifier predating the field reads the rest unchanged.
 			var legacy legacyASN1
 			rest, err := asn1.Unmarshal(ext.Value, &legacy)
@@ -82,19 +93,11 @@ func TestRuntimeExtensionsRoundTrip(t *testing.T) {
 	}
 }
 
-// Without a list the encoding is byte-identical to the legacy one, and a
-// legacy extension decodes to a nil list.
-func TestRuntimeExtensionsLegacyEncoding(t *testing.T) {
+// A legacy extension decodes to a nil list.
+func TestRuntimeExtensionsLegacyDecoding(t *testing.T) {
 	legacy, err := asn1.Marshal(legacyASN1{TEEType: wireTDX, Report: []byte(tdxEnvelope)})
 	if err != nil {
 		t.Fatal(err)
-	}
-	ext, err := tdxAttestation(t, nil).MarshalExtension(testOID)
-	if err != nil {
-		t.Fatalf("MarshalExtension: %v", err)
-	}
-	if !slices.Equal(ext.Value, legacy) {
-		t.Fatal("an extension without a list differs from the legacy encoding")
 	}
 	att, err := UnmarshalExtension(legacy)
 	if err != nil {
@@ -106,21 +109,29 @@ func TestRuntimeExtensionsLegacyEncoding(t *testing.T) {
 }
 
 func TestUnmarshalExtensionRejectsRuntimeExtensions(t *testing.T) {
+	snpReport := mockapi.FakeSNPReport([]byte{})
 	for _, tc := range []struct {
-		name string
-		list []string
+		name   string
+		family teetypes.Family
+		report []byte
+		list   []string
 	}{
-		{"over the cap", digests(MaxRuntimeExtensions + 1)},
-		{"digest-pinned reference", []string{"img@" + digests(1)[0]}},
-		{"uppercase hex", []string{strings.ToUpper(digests(1)[0])}},
-		{"tag", []string{"img:latest"}},
+		{"over the cap", teetypes.FamilyTDX, []byte(tdxEnvelope), digests(MaxRuntimeExtensions + 1)},
+		{"digest-pinned reference", teetypes.FamilyTDX, []byte(tdxEnvelope), []string{"img@" + digests(1)[0]}},
+		{"uppercase hex", teetypes.FamilyTDX, []byte(tdxEnvelope), []string{strings.ToUpper(digests(1)[0])}},
+		{"tag", teetypes.FamilyTDX, []byte(tdxEnvelope), []string{"img:latest"}},
+		{"list on SEV-SNP", teetypes.FamilySNP, snpReport, digests(1)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			der := marshalASN1(t, attestationASN1{TEEType: wireTDX, Report: []byte(tdxEnvelope), RuntimeExtensions: tc.list})
+			wire, err := wireTEEType(tc.family)
+			if err != nil {
+				t.Fatal(err)
+			}
+			der := marshalASN1(t, attestationASN1{TEEType: wire, Report: tc.report, RuntimeExtensions: tc.list})
 			if _, err := UnmarshalExtension(der); !errors.Is(err, ErrInvalidReport) {
 				t.Fatalf("UnmarshalExtension() = _, %v, want ErrInvalidReport", err)
 			}
-			att := tdxAttestation(t, tc.list)
+			att := &Attestation{Family: tc.family, Report: tc.report, RuntimeExtensions: tc.list}
 			if _, err := att.MarshalExtension(testOID); !errors.Is(err, ErrInvalidReport) {
 				t.Fatalf("MarshalExtension() = _, %v, want ErrInvalidReport", err)
 			}

@@ -88,8 +88,8 @@ type Attestation struct {
 	// [MaxRuntimeExtensions]. It is unattested on its own; a verifier replays
 	// it against the quoted register and trusts only the prefix that matches
 	// (see [remote.EnforceImagesWithRuntimeLog]). Nil for a guest that does
-	// not measure at runtime, and always on SEV-SNP, which has no register to
-	// extend. Set it after [NewAttestation].
+	// not measure at runtime. SEV-SNP has no register to extend, so a list
+	// there is refused on marshal and on parse. Set it after [NewAttestation].
 	RuntimeExtensions []string
 
 	// embedded is the parsed envelope when Report carries one; nil when Report
@@ -135,15 +135,15 @@ func (a *Attestation) MarshalExtension(oid asn1.ObjectIdentifier) (pkix.Extensio
 	if err != nil {
 		return pkix.Extension{}, err
 	}
-	if err := checkRuntimeExtensions(a.RuntimeExtensions); err != nil {
+	if err := checkRuntimeExtensions(a.Family, a.RuntimeExtensions); err != nil {
 		return pkix.Extension{}, err
 	}
-	value, err := asn1.Marshal(attestationASN1{
-		TEEType:           teeType,
-		Report:            a.Report,
-		CertChain:         a.CertChain,
-		RuntimeExtensions: a.RuntimeExtensions,
-	})
+	raw := attestationASN1{TEEType: teeType, Report: a.Report, CertChain: a.CertChain}
+	// encoding/asn1 omits an optional slice only when it is nil.
+	if len(a.RuntimeExtensions) > 0 {
+		raw.RuntimeExtensions = a.RuntimeExtensions
+	}
+	value, err := asn1.Marshal(raw)
 	if err != nil {
 		return pkix.Extension{}, fmt.Errorf("armtls: marshal attestation: %w", err)
 	}
@@ -169,7 +169,7 @@ func UnmarshalExtension(der []byte) (*Attestation, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := checkRuntimeExtensions(raw.RuntimeExtensions); err != nil {
+	if err := checkRuntimeExtensions(family, raw.RuntimeExtensions); err != nil {
 		return nil, err
 	}
 	att, err := newAttestation(family, raw.Report, raw.CertChain, nil)
@@ -184,7 +184,11 @@ func UnmarshalExtension(der []byte) (*Attestation, error) {
 
 // checkRuntimeExtensions refuses a list no measuring guest produces, so a
 // malformed one fails at parse rather than as a binding mismatch later.
-func checkRuntimeExtensions(list []string) error {
+// SEV-SNP has no register to extend, so any list there is refused.
+func checkRuntimeExtensions(family teetypes.Family, list []string) error {
+	if len(list) > 0 && family != teetypes.FamilyTDX {
+		return fmt.Errorf("%w: %s evidence carries %d runtime extension(s), but only TDX extends at runtime", ErrInvalidReport, family, len(list))
+	}
 	if len(list) > MaxRuntimeExtensions {
 		return fmt.Errorf("%w: %d runtime extensions, at most %d allowed", ErrInvalidReport, len(list), MaxRuntimeExtensions)
 	}

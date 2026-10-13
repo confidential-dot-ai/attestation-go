@@ -377,7 +377,8 @@ field, omitted when empty, so verifiers predating it decode the extension
 unchanged. `VerifyWithService` replays the list against each image pin's
 `Anchor` and passes only the proven prefix to `ImagePin.AcceptExtension`, the
 hook for an allowlist; entries beyond the prefix were not quoted and are not
-judged. Lists over 512 entries or holding non-canonical digests are refused.
+judged. A list over 512 entries, holding a non-canonical digest, or on SEV-SNP
+is refused.
 
 Certificate lifecycle — issuance, rotation, TLS configs — is the caller's.
 
