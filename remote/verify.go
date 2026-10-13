@@ -209,6 +209,12 @@ func enforceExpectedMeasurements(params VerifyParams, resp VerifyResponse) error
 // selects the rules, and a tag with no rules here fails closed with
 // [ErrUnsupportedPlatform] rather than being approved under another platform's.
 func (c Client) VerifyEvidence(ctx context.Context, evidence teetypes.AttestationEvidence, policy Policy) (VerifyResponse, error) {
+	return c.VerifyEvidenceWithRuntimeLog(ctx, evidence, policy, nil)
+}
+
+// VerifyEvidenceWithRuntimeLog is [Client.VerifyEvidence] for a peer that
+// claims a runtime extension list; see [EnforcePinsWithRuntimeLog].
+func (c Client) VerifyEvidenceWithRuntimeLog(ctx context.Context, evidence teetypes.AttestationEvidence, policy Policy, claimed []string) (VerifyResponse, error) {
 	family := evidence.Platform.Family()
 	if family == teetypes.FamilyUnknown {
 		return VerifyResponse{}, fmt.Errorf("%w: %q", ErrUnsupportedPlatform, evidence.Platform)
@@ -229,7 +235,7 @@ func (c Client) VerifyEvidence(ctx context.Context, evidence teetypes.Attestatio
 	if err != nil {
 		return VerifyResponse{}, err
 	}
-	if err := EnforcePins(resp, policy, evidence); err != nil {
+	if err := EnforcePinsWithRuntimeLog(resp, policy, evidence, claimed); err != nil {
 		return VerifyResponse{}, err
 	}
 	return resp, nil
@@ -242,6 +248,15 @@ func (c Client) VerifyEvidence(ctx context.Context, evidence teetypes.Attestatio
 // Images are matched whole; the flat measurement/RTMR pair keeps its own path,
 // so an operator who set only that sees exactly the decisions it always made.
 func EnforcePins(resp VerifyResponse, policy Policy, evidence teetypes.AttestationEvidence) error {
+	return EnforcePinsWithRuntimeLog(resp, policy, evidence, nil)
+}
+
+// EnforcePinsWithRuntimeLog is [EnforcePins] for a peer that claims a runtime
+// extension list. Only image pins with an anchor read claimed, through
+// [EnforceImagesWithRuntimeLog]; the flat measurement and register pins ignore
+// it. The list is per-peer evidence, not policy, so it is a parameter rather
+// than a [Policy] field.
+func EnforcePinsWithRuntimeLog(resp VerifyResponse, policy Policy, evidence teetypes.AttestationEvidence, claimed []string) error {
 	platform := evidence.Platform
 	// Every pin below reads claims out of the verified result and judges them
 	// against the platform the evidence was submitted for. If the verifier
@@ -262,7 +277,7 @@ func EnforcePins(resp VerifyResponse, policy Policy, evidence teetypes.Attestati
 		return err
 	}
 	if len(policy.Images) > 0 {
-		return EnforceImages(resp, policy.Images, platform)
+		return EnforceImagesWithRuntimeLog(resp, policy.Images, platform, claimed)
 	}
 	if err := EnforceLaunchMeasurement(resp, policy.Measurements); err != nil {
 		return err
