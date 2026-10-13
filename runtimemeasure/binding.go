@@ -139,8 +139,8 @@ func bindingName(p teetypes.PlatformType) string {
 // guest never extends anything else, so one that is not fails the whole list.
 //
 // On SEV-SNP the binding is HOSTDATA, which no runtime extend reaches: k is
-// always 0, and a non-empty list is ignored rather than refused, leaving that
-// decision to the caller. az-snp is refused as by [VerifyBinding].
+// always 0: a well-formed non-empty list yields k = 0, while a non-canonical
+// entry still fails. az-snp is refused as by [VerifyBinding].
 //
 // The cost is one SHA-384 per entry, and the list usually comes from the peer,
 // so bound it before calling; armtls caps it at 256.

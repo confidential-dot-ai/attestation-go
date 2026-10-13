@@ -221,15 +221,12 @@ func TestVerifyCertWithServiceReplaysRuntimeExtensions(t *testing.T) {
 // before its list reaches the service.
 func TestVerifyWithServiceRejectsRuntimeExtensions(t *testing.T) {
 	key := testKey(t)
-	snp := &Attestation{Family: teetypes.FamilySNP, Report: mockapi.FakeSNPReport([]byte{})}
-	snp.RuntimeExtensions = digests(1)
 	for _, tc := range []struct {
 		name string
 		att  *Attestation
 	}{
 		{"over the cap", tdxAttestation(t, digests(MaxRuntimeExtensions+1))},
 		{"non-canonical entry", tdxAttestation(t, []string{"img:latest"})},
-		{"list on SEV-SNP", snp},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			spy := &verifySpy{result: passingVerdict(nil)}
@@ -238,5 +235,18 @@ func TestVerifyWithServiceRejectsRuntimeExtensions(t *testing.T) {
 				t.Fatalf("VerifyWithService() = _, %v, want ErrInvalidReport", err)
 			}
 		})
+	}
+}
+
+// SEV-SNP has no register to extend, so VerifyWithService ignores a list there,
+// as MarshalExtension omits it.
+func TestVerifyWithServiceIgnoresRuntimeExtensionsOnSNP(t *testing.T) {
+	key := testKey(t)
+	for _, list := range [][]string{digests(1), {"img:latest"}} {
+		att := &Attestation{Family: teetypes.FamilySNP, Report: mockapi.FakeSNPReport([]byte{}), RuntimeExtensions: list}
+		spy := &verifySpy{result: passingVerdict(nil)}
+		if _, err := VerifyWithService(context.Background(), spy.service(t), att, &key.PublicKey, nil, remote.Policy{}); err != nil {
+			t.Fatalf("VerifyWithService(snp, %q) = _, %v, want nil", list, err)
+		}
 	}
 }

@@ -88,9 +88,10 @@ type Attestation struct {
 	// [MaxRuntimeExtensions]. It is unattested on its own; a verifier replays
 	// it against the quoted register and trusts only the prefix that matches
 	// (see [remote.EnforceImagesWithRuntimeLog]). Nil for a guest that does
-	// not measure at runtime. SEV-SNP has no register to extend, so
-	// [Attestation.MarshalExtension] omits a list there and
-	// [UnmarshalExtension] refuses one. Set it after [NewAttestation].
+	// not measure at runtime. SEV-SNP has no register to extend, so a producer
+	// may set it unconditionally: [Attestation.MarshalExtension] omits it and
+	// [VerifyWithService] ignores it there, while [UnmarshalExtension] refuses
+	// a list a peer encoded for SEV-SNP. Set it after [NewAttestation].
 	RuntimeExtensions []string
 
 	// embedded is the parsed envelope when Report carries one; nil when Report

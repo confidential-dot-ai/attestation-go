@@ -531,6 +531,10 @@ func TestEnforceImagesWithRuntimeLogOnSNP(t *testing.T) {
 			t.Fatalf("EnforceImagesWithRuntimeLog(snp, %q) = %v, want nil", claimed, err)
 		}
 	}
+	claimed := []string{"img:latest"}
+	if err := EnforceImagesWithRuntimeLog(r, images, teetypes.PlatformSNP, claimed); !errors.Is(err, ErrAnchorNotAllowed) {
+		t.Fatalf("EnforceImagesWithRuntimeLog(snp, %q) = %v, want ErrAnchorNotAllowed", claimed, err)
+	}
 }
 
 // AcceptExtension judges exactly the proven prefix, in extend order.
@@ -583,5 +587,10 @@ func TestEnforcePinsWithRuntimeLog(t *testing.T) {
 	}
 	if err := EnforcePins(r, policy, tdx); !errors.Is(err, ErrAnchorNotAllowed) {
 		t.Fatalf("EnforcePins(no list) = %v, want ErrAnchorNotAllowed", err)
+	}
+	measured := Policy{Measurements: [][]byte{mustHex(t, digestA)}}
+	bogus := []string{"img:latest"}
+	if err := EnforcePinsWithRuntimeLog(r, measured, tdx, bogus); err != nil {
+		t.Fatalf("EnforcePinsWithRuntimeLog(measurements only, %q) = %v, want nil", bogus, err)
 	}
 }
