@@ -378,10 +378,12 @@ unchanged. `VerifyWithService` replays the list against each image pin's
 `Anchor` and passes only the proven prefix to `ImagePin.AcceptExtension`, the
 hook for an allowlist; entries beyond the prefix were not quoted and are not
 judged. A pin without `AcceptExtension` still requires the bare anchor seed;
-`func(string) error { return nil }` accepts any list that replays. A list
-over 256 entries or holding a non-canonical digest is refused. SEV-SNP has no
-runtime extends: marshaling omits a list there, and parsing refuses one. `VerifyOffline` does not replay the list; a caller pinning an
-anchor passes `att.RuntimeExtensions` to `remote.EnforceImagesWithRuntimeLog`.
+`func(string) error { return nil }` accepts any list that replays. A list over
+256 entries or holding a non-canonical digest is refused. SEV-SNP has no
+runtime extends: marshaling omits a list there, parsing refuses one, and
+`VerifyWithService` ignores one. `VerifyOffline` does not replay the list; a
+caller pinning an anchor passes `att.RuntimeExtensions` to
+`remote.EnforceImagesWithRuntimeLog`.
 
 Certificate lifecycle — issuance, rotation, TLS configs — is the caller's.
 

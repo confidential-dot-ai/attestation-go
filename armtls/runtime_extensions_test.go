@@ -239,13 +239,25 @@ func TestVerifyWithServiceRejectsRuntimeExtensions(t *testing.T) {
 }
 
 // SEV-SNP has no register to extend, so VerifyWithService ignores a list there,
-// as MarshalExtension omits it.
+// as MarshalExtension omits it; replayed against an anchor pin, a non-canonical
+// entry would fail.
 func TestVerifyWithServiceIgnoresRuntimeExtensionsOnSNP(t *testing.T) {
 	key := testKey(t)
+	anchor := []byte("operator")
+	launch := make([]byte, 48)
+	hostData := runtimemeasure.HostData(anchor)
+	policy := remote.Policy{Images: []remote.ImagePin{{
+		Name:            "node",
+		Digest:          launch,
+		Anchor:          anchor,
+		AcceptExtension: func(string) error { return nil },
+	}}}
 	for _, list := range [][]string{digests(1), {"img:latest"}} {
 		att := &Attestation{Family: teetypes.FamilySNP, Report: mockapi.FakeSNPReport([]byte{}), RuntimeExtensions: list}
-		spy := &verifySpy{result: passingVerdict(nil)}
-		if _, err := VerifyWithService(context.Background(), spy.service(t), att, &key.PublicKey, nil, remote.Policy{}); err != nil {
+		verdict := passingVerdict(launch)
+		verdict.Claims.InitData = hostData[:]
+		spy := &verifySpy{result: verdict}
+		if _, err := VerifyWithService(context.Background(), spy.service(t), att, &key.PublicKey, nil, policy); err != nil {
 			t.Fatalf("VerifyWithService(snp, %q) = _, %v, want nil", list, err)
 		}
 	}

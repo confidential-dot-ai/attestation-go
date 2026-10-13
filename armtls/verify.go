@@ -86,9 +86,10 @@ func VerifyCertOffline(cert *x509.Certificate, oid asn1.ObjectIdentifier, nonce 
 // closed on the verdict and then on the policy's pins, and refuses a platform
 // tag it has no rules for. On TDX, att.RuntimeExtensions is the claimed list
 // replayed against image anchor pins, refused first when too long or holding a
-// non-canonical digest; on SEV-SNP it is ignored. Its sentinels (remote.ErrSignatureInvalid,
-// remote.ErrReportDataMismatch, remote.ErrMeasurementNotAllowed, …) reach
-// the caller unchanged, so errors.Is reaches them.
+// non-canonical digest; on SEV-SNP it is ignored. Its sentinels
+// (remote.ErrSignatureInvalid, remote.ErrReportDataMismatch,
+// remote.ErrMeasurementNotAllowed, …) reach the caller unchanged, so errors.Is
+// reaches them.
 //
 // The response is only as trustworthy as the service: it is not signed, so the
 // service must sit inside the same trust boundary as the caller — a node-local

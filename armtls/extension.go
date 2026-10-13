@@ -129,10 +129,11 @@ type attestationASN1 struct {
 
 // MarshalExtension encodes the attestation as a non-critical X.509 extension
 // under oid, which the caller assigns from its own arc; this package claims no
-// identifier. A runtime extension list is encoded for TDX only and refused
-// when too long or holding a non-canonical digest. Non-critical so a TLS stack that does not know the OID still
+// identifier. Non-critical so a TLS stack that does not know the OID still
 // parses the certificate: the binding is enforced by whoever verifies the
-// evidence, not by certificate parsing.
+// evidence, not by certificate parsing. On TDX a runtime extension list is
+// encoded, and refused when too long or holding a non-canonical digest; on
+// SEV-SNP it is omitted.
 func (a *Attestation) MarshalExtension(oid asn1.ObjectIdentifier) (pkix.Extension, error) {
 	if len(oid) == 0 {
 		return pkix.Extension{}, errors.New("armtls: no extension OID")

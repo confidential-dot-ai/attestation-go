@@ -138,9 +138,9 @@ func bindingName(p teetypes.PlatformType) string {
 // past k prove nothing. Every entry must be canonical ([CanonicalDigest]): the
 // guest never extends anything else, so one that is not fails the whole list.
 //
-// On SEV-SNP the binding is HOSTDATA, which no runtime extend reaches: k is
-// always 0: a well-formed non-empty list yields k = 0, while a non-canonical
-// entry still fails. az-snp is refused as by [VerifyBinding].
+// On SEV-SNP the binding is HOSTDATA, which no runtime extend reaches, so a
+// well-formed list yields k = 0; a non-canonical entry still fails. az-snp is
+// refused as by [VerifyBinding].
 //
 // The cost is one SHA-384 per entry, and the list usually comes from the peer,
 // so bound it before calling; armtls caps it at 256.
