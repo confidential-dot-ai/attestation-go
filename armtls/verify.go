@@ -78,9 +78,10 @@ func VerifyCertOffline(cert *x509.Certificate, oid asn1.ObjectIdentifier, nonce 
 // report data comes from [ReportDataForKey], and a policy.ExpectedReportData
 // that disagrees is refused.
 //
-// It goes through [remote.Client.VerifyEvidence], which fails closed on the
-// verdict and then on the policy's pins, and refuses a platform tag it has no
-// rules for. Its sentinels (remote.ErrSignatureInvalid,
+// It goes through [remote.Client.VerifyEvidenceWithRuntimeLog], which fails
+// closed on the verdict and then on the policy's pins, and refuses a platform
+// tag it has no rules for. att.RuntimeExtensions is the claimed list replayed
+// against image anchor pins. Its sentinels (remote.ErrSignatureInvalid,
 // remote.ErrReportDataMismatch, remote.ErrMeasurementNotAllowed, …) reach
 // the caller unchanged, so errors.Is reaches them.
 //
@@ -97,7 +98,7 @@ func VerifyWithService(ctx context.Context, svc remote.Client, att *Attestation,
 		return remote.VerifyResponse{}, err
 	}
 	policy.ExpectedReportData = anchor
-	return svc.VerifyEvidence(ctx, env, policy)
+	return svc.VerifyEvidenceWithRuntimeLog(ctx, env, policy, att.RuntimeExtensions)
 }
 
 // VerifyCertWithService verifies the ARmTLS extension cert carries under oid

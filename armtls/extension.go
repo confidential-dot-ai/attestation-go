@@ -17,6 +17,7 @@ import (
 
 	"github.com/confidential-dot-ai/attestation-go/attestation/snp"
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
+	"github.com/confidential-dot-ai/attestation-go/runtimemeasure"
 )
 
 // SNPReportSize is the exact size of an AMD SEV-SNP attestation report. The
@@ -82,23 +83,43 @@ type Attestation struct {
 	// VCEK.
 	CertChain []byte
 
+	// RuntimeExtensions is the guest's claimed RTMR[3] runtime extension list:
+	// canonical "sha256:<hex>" digests in extend order, at most
+	// [MaxRuntimeExtensions]. It is unattested on its own; a verifier replays
+	// it against the quoted register and trusts only the prefix that matches
+	// (see [remote.EnforceImagesWithRuntimeLog]). Nil for a guest that does
+	// not measure at runtime, and always on SEV-SNP, which has no register to
+	// extend. Set it after [NewAttestation].
+	RuntimeExtensions []string
+
 	// embedded is the parsed envelope when Report carries one; nil when Report
 	// holds a raw SEV-SNP report. Set on every construction path so producer
 	// and consumer agree on the shape.
 	embedded *teetypes.AttestationEvidence
 }
 
+// MaxRuntimeExtensions caps [Attestation.RuntimeExtensions], bounding what a
+// peer can make a verifier hash.
+const MaxRuntimeExtensions = 512
+
 // attestationASN1 is the DER encoding:
 //
 //	TEEAttestation ::= SEQUENCE {
-//	    teeType     INTEGER,
-//	    report      OCTET STRING,
-//	    certChain   OCTET STRING
+//	    teeType            INTEGER,
+//	    report             OCTET STRING,
+//	    certChain          OCTET STRING,
+//	    runtimeExtensions  [0] EXPLICIT SEQUENCE OF PrintableString OPTIONAL
 //	}
+//
+// runtimeExtensions is omitted when empty, so an extension without it is
+// byte-identical to one from before it existed. A verifier predating it
+// ignores it: encoding/asn1 skips trailing SEQUENCE elements a struct does not
+// declare.
 type attestationASN1 struct {
-	TEEType   int
-	Report    []byte
-	CertChain []byte
+	TEEType           int
+	Report            []byte
+	CertChain         []byte
+	RuntimeExtensions []string `asn1:"optional,explicit,tag:0"`
 }
 
 // MarshalExtension encodes the attestation as a non-critical X.509 extension
@@ -114,10 +135,14 @@ func (a *Attestation) MarshalExtension(oid asn1.ObjectIdentifier) (pkix.Extensio
 	if err != nil {
 		return pkix.Extension{}, err
 	}
+	if err := checkRuntimeExtensions(a.RuntimeExtensions); err != nil {
+		return pkix.Extension{}, err
+	}
 	value, err := asn1.Marshal(attestationASN1{
-		TEEType:   teeType,
-		Report:    a.Report,
-		CertChain: a.CertChain,
+		TEEType:           teeType,
+		Report:            a.Report,
+		CertChain:         a.CertChain,
+		RuntimeExtensions: a.RuntimeExtensions,
 	})
 	if err != nil {
 		return pkix.Extension{}, fmt.Errorf("armtls: marshal attestation: %w", err)
@@ -129,6 +154,8 @@ func (a *Attestation) MarshalExtension(oid asn1.ObjectIdentifier) (pkix.Extensio
 // carries: an SEV-SNP report is unwrapped from its HCL envelope if it has one,
 // and an embedded JSON envelope is parsed. Trailing bytes after the SEQUENCE
 // are rejected, so a payload smuggled past the DER structure cannot ride along.
+// A runtime extension list that is too long or holds a non-canonical digest
+// is refused.
 func UnmarshalExtension(der []byte) (*Attestation, error) {
 	var raw attestationASN1
 	rest, err := asn1.Unmarshal(der, &raw)
@@ -142,7 +169,31 @@ func UnmarshalExtension(der []byte) (*Attestation, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newAttestation(family, raw.Report, raw.CertChain, nil)
+	if err := checkRuntimeExtensions(raw.RuntimeExtensions); err != nil {
+		return nil, err
+	}
+	att, err := newAttestation(family, raw.Report, raw.CertChain, nil)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw.RuntimeExtensions) > 0 {
+		att.RuntimeExtensions = raw.RuntimeExtensions
+	}
+	return att, nil
+}
+
+// checkRuntimeExtensions refuses a list no measuring guest produces, so a
+// malformed one fails at parse rather than as a binding mismatch later.
+func checkRuntimeExtensions(list []string) error {
+	if len(list) > MaxRuntimeExtensions {
+		return fmt.Errorf("%w: %d runtime extensions, at most %d allowed", ErrInvalidReport, len(list), MaxRuntimeExtensions)
+	}
+	for i, d := range list {
+		if c, err := runtimemeasure.CanonicalDigest(d); err != nil || c != d {
+			return fmt.Errorf("%w: runtime extension %d (%q) is not a canonical sha256 digest", ErrInvalidReport, i, d)
+		}
+	}
+	return nil
 }
 
 // newAttestation decides the evidence shape for both directions, so the
