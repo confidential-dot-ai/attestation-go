@@ -30,6 +30,10 @@ import (
 // The result is returned only when the hardware signature verified and the
 // binding matched. A verdict that reports neither a match nor a mismatch
 // counts as a failure.
+//
+// It does not replay att.RuntimeExtensions. A caller pinning an image anchor
+// passes the list to [remote.EnforceImagesWithRuntimeLog] or
+// [runtimemeasure.MatchBindingPrefix] along with the result.
 func VerifyOffline(att *Attestation, pub crypto.PublicKey, nonce []byte, params teetypes.VerifyParams, opts teeverify.Options) (*teetypes.VerificationResult, error) {
 	env, err := att.Envelope()
 	if err != nil {
@@ -81,7 +85,7 @@ func VerifyCertOffline(cert *x509.Certificate, oid asn1.ObjectIdentifier, nonce 
 // It goes through [remote.Client.VerifyEvidenceWithRuntimeLog], which fails
 // closed on the verdict and then on the policy's pins, and refuses a platform
 // tag it has no rules for. att.RuntimeExtensions is the claimed list replayed
-// against image anchor pins. Its sentinels (remote.ErrSignatureInvalid,
+// against image anchor pins, refused first as [UnmarshalExtension] refuses it. Its sentinels (remote.ErrSignatureInvalid,
 // remote.ErrReportDataMismatch, remote.ErrMeasurementNotAllowed, …) reach
 // the caller unchanged, so errors.Is reaches them.
 //
@@ -95,6 +99,9 @@ func VerifyWithService(ctx context.Context, svc remote.Client, att *Attestation,
 	}
 	anchor, err := bindingAnchor(pub, nonce, policy.ExpectedReportData)
 	if err != nil {
+		return remote.VerifyResponse{}, err
+	}
+	if err := checkRuntimeExtensions(att.Family, att.RuntimeExtensions); err != nil {
 		return remote.VerifyResponse{}, err
 	}
 	policy.ExpectedReportData = anchor

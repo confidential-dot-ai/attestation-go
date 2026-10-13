@@ -36,12 +36,14 @@ type ImagePin struct {
 	// [EnforceImagesWithRuntimeLog].
 	Anchor []byte
 
-	// AcceptExtension, when set, judges each runtime extension the quote
-	// proves on top of Anchor; an error refuses the image. Nil accepts any
-	// replayed list, which still proves the anchor. Unused without Anchor,
-	// and never called on SEV-SNP, where no extension is provable: a
-	// well-formed list there is ignored, though a non-canonical entry still
-	// fails.
+	// AcceptExtension judges each runtime extension the quote proves on top
+	// of Anchor. A refusal fails with [ErrAnchorNotAllowed] wrapping the
+	// returned error, so errors.Is reaches the hook's own sentinel. Nil
+	// refuses any proven extension, requiring the bare anchor seed as
+	// [EnforceImages] does; func(string) error { return nil } accepts any
+	// list that replays. Unused without Anchor, and never called on
+	// SEV-SNP, where no extension is provable: a well-formed list there is
+	// ignored, though a non-canonical entry still fails.
 	AcceptExtension func(digest string) error
 }
 
@@ -68,13 +70,14 @@ func EnforceImages(resp VerifyResponse, images []ImagePin, platform teetypes.Pla
 //
 // For an image pinning Anchor, the binding must equal the anchor seed
 // extended with some prefix claimed[:k] ([runtimemeasure.MatchBindingPrefix]),
-// and AcceptExtension must accept each of claimed[:k]. The guest records
+// and AcceptExtension must accept each of claimed[:k]; an image without
+// AcceptExtension requires k = 0. The guest records
 // before it extends, so the list may run ahead of the quote; entries past k
 // were not measured into it, prove nothing, and are not judged. On SEV-SNP
 // k is always 0. A nil claimed requires the bare seed.
 //
 // Each anchored image replays claimed at one SHA-384 per entry, so bound a
-// list taken from a peer before passing it; armtls caps it at 512.
+// list taken from a peer before passing it; armtls caps it at 256.
 func EnforceImagesWithRuntimeLog(resp VerifyResponse, images []ImagePin, platform teetypes.PlatformType, claimed []string) error {
 	if len(images) == 0 {
 		return nil
@@ -125,8 +128,11 @@ func enforceAnchor(r *teetypes.VerificationResult, img ImagePin, claimed []strin
 	if err != nil {
 		return err
 	}
-	if img.AcceptExtension == nil {
+	if k == 0 {
 		return nil
+	}
+	if img.AcceptExtension == nil {
+		return fmt.Errorf("RTMR[3] proves %d runtime extension(s), but the pin sets no AcceptExtension", k)
 	}
 	for _, d := range claimed[:k] {
 		if err := img.AcceptExtension(d); err != nil {

@@ -213,3 +213,13 @@ func TestMatchBindingPrefix(t *testing.T) {
 		})
 	}
 }
+
+// Without a claimed list, a mismatch reads as VerifyBinding's does.
+func TestMatchBindingPrefixNoListMismatch(t *testing.T) {
+	r := tdxResult(teetypes.PlatformTDX, Zero[:])
+	_, got := MatchBindingPrefix(r, anchor, nil)
+	want := VerifyBinding(r, anchor, nil)
+	if got == nil || want == nil || got.Error() != want.Error() {
+		t.Fatalf("MatchBindingPrefix(nil) = %v, want %v", got, want)
+	}
+}

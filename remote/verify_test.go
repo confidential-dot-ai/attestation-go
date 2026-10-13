@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -455,6 +456,7 @@ func TestEnforceImagesWithRuntimeLog(t *testing.T) {
 	anchor := []byte("operator")
 	d := func(b string) string { return "sha256:" + strings.Repeat(b, 32) }
 	log := []string{d("01"), d("02"), d("03")}
+	acceptAll := func(string) error { return nil }
 	refuse := func(bad string) func(string) error {
 		return func(digest string) error {
 			if digest == bad {
@@ -471,8 +473,10 @@ func TestEnforceImagesWithRuntimeLog(t *testing.T) {
 		wantErr  bool
 	}{
 		{name: "bare seed, nil list", extended: nil, claimed: nil},
-		{name: "exact list", extended: log, claimed: log},
-		{name: "list ahead of the quote", extended: log[:2], claimed: log},
+		{name: "bare seed, list without hook", extended: nil, claimed: log},
+		{name: "exact list", extended: log, claimed: log, accept: acceptAll},
+		{name: "list ahead of the quote", extended: log[:2], claimed: log, accept: acceptAll},
+		{name: "extended without hook", extended: log[:2], claimed: log, wantErr: true},
 		{name: "tail mismatch", extended: log[:2], claimed: []string{log[0], d("ff")}, wantErr: true},
 		{name: "extended but nil list", extended: log[:1], claimed: nil, wantErr: true},
 		{name: "refused inside the prefix", extended: log[:2], claimed: log, accept: refuse(log[1]), wantErr: true},
@@ -522,9 +526,43 @@ func TestEnforceImagesWithRuntimeLogOnSNP(t *testing.T) {
 		Name: "image", Digest: mustHex(t, digestA), Anchor: anchor,
 		AcceptExtension: func(string) error { return errors.New("refuse everything") },
 	}}
-	claimed := []string{"sha256:" + strings.Repeat("01", 32)}
-	if err := EnforceImagesWithRuntimeLog(r, images, teetypes.PlatformSNP, claimed); err != nil {
-		t.Fatalf("EnforceImagesWithRuntimeLog(snp) = %v, want nil", err)
+	for _, claimed := range [][]string{nil, {}, {"sha256:" + strings.Repeat("01", 32)}} {
+		if err := EnforceImagesWithRuntimeLog(r, images, teetypes.PlatformSNP, claimed); err != nil {
+			t.Fatalf("EnforceImagesWithRuntimeLog(snp, %q) = %v, want nil", claimed, err)
+		}
+	}
+}
+
+// AcceptExtension judges exactly the proven prefix, in extend order.
+func TestEnforceImagesAcceptsProvenPrefixOnly(t *testing.T) {
+	anchor := []byte("operator")
+	log := []string{"sha256:" + strings.Repeat("01", 32), "sha256:" + strings.Repeat("02", 32), "sha256:" + strings.Repeat("03", 32)}
+	var judged []string
+	images := []ImagePin{{
+		Name: "image", Digest: mustHex(t, digestA), Anchor: anchor,
+		AcceptExtension: func(d string) error { judged = append(judged, d); return nil },
+	}}
+	if err := EnforceImagesWithRuntimeLog(tdxBoundTo(t, anchor, log[:2]), images, teetypes.PlatformTDX, log); err != nil {
+		t.Fatalf("EnforceImagesWithRuntimeLog() = %v, want nil", err)
+	}
+	if !slices.Equal(judged, log[:2]) {
+		t.Fatalf("AcceptExtension called with %q, want %q", judged, log[:2])
+	}
+}
+
+// A refusal carries the hook's own error, so a caller tells a disallowed
+// extension from a wrong anchor.
+func TestEnforceImagesWrapsAcceptExtensionError(t *testing.T) {
+	anchor := []byte("operator")
+	log := []string{"sha256:" + strings.Repeat("01", 32)}
+	errDenied := errors.New("not allowlisted")
+	images := []ImagePin{{
+		Name: "image", Digest: mustHex(t, digestA), Anchor: anchor,
+		AcceptExtension: func(string) error { return errDenied },
+	}}
+	err := EnforceImagesWithRuntimeLog(tdxBoundTo(t, anchor, log), images, teetypes.PlatformTDX, log)
+	if !errors.Is(err, ErrAnchorNotAllowed) || !errors.Is(err, errDenied) {
+		t.Fatalf("EnforceImagesWithRuntimeLog() = %v, want ErrAnchorNotAllowed wrapping the hook's error", err)
 	}
 }
 
@@ -532,8 +570,14 @@ func TestEnforcePinsWithRuntimeLog(t *testing.T) {
 	anchor := []byte("operator")
 	log := []string{"sha256:" + strings.Repeat("01", 32), "sha256:" + strings.Repeat("02", 32)}
 	r := tdxBoundTo(t, anchor, log)
-	policy := Policy{Images: []ImagePin{{Name: "image", Digest: mustHex(t, digestA), Anchor: anchor}}}
+	pin := ImagePin{Name: "image", Digest: mustHex(t, digestA), Anchor: anchor}
+	policy := Policy{Images: []ImagePin{pin}}
 	tdx := teetypes.AttestationEvidence{Platform: teetypes.PlatformTDX}
+	if err := EnforcePinsWithRuntimeLog(r, policy, tdx, log); !errors.Is(err, ErrAnchorNotAllowed) {
+		t.Fatalf("EnforcePinsWithRuntimeLog(no hook) = %v, want ErrAnchorNotAllowed", err)
+	}
+	pin.AcceptExtension = func(string) error { return nil }
+	policy.Images = []ImagePin{pin}
 	if err := EnforcePinsWithRuntimeLog(r, policy, tdx, log); err != nil {
 		t.Fatalf("EnforcePinsWithRuntimeLog(full list) = %v, want nil", err)
 	}

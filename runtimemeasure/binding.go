@@ -143,7 +143,7 @@ func bindingName(p teetypes.PlatformType) string {
 // decision to the caller. az-snp is refused as by [VerifyBinding].
 //
 // The cost is one SHA-384 per entry, and the list usually comes from the peer,
-// so bound it before calling; armtls caps it at 512.
+// so bound it before calling; armtls caps it at 256.
 func MatchBindingPrefix(r *teetypes.VerificationResult, anchor []byte, claimed []string) (int, error) {
 	for i, d := range claimed {
 		if c, err := CanonicalDigest(d); err != nil || c != d {
@@ -161,7 +161,7 @@ func MatchBindingPrefix(r *teetypes.VerificationResult, anchor []byte, claimed [
 	if bytes.Equal(got, want) {
 		return 0, nil
 	}
-	if !r.Platform.HasRegisters() {
+	if !r.Platform.HasRegisters() || len(claimed) == 0 {
 		return 0, bindingMismatch(r.Platform, got, want)
 	}
 	// SHA-384 chaining makes every prefix fold to a distinct value, so at most

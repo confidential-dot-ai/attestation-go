@@ -131,11 +131,46 @@ func TestUnmarshalExtensionRejectsRuntimeExtensions(t *testing.T) {
 			if _, err := UnmarshalExtension(der); !errors.Is(err, ErrInvalidReport) {
 				t.Fatalf("UnmarshalExtension() = _, %v, want ErrInvalidReport", err)
 			}
+			if tc.family != teetypes.FamilyTDX {
+				return
+			}
 			att := &Attestation{Family: tc.family, Report: tc.report, RuntimeExtensions: tc.list}
 			if _, err := att.MarshalExtension(testOID); !errors.Is(err, ErrInvalidReport) {
 				t.Fatalf("MarshalExtension() = _, %v, want ErrInvalidReport", err)
 			}
 		})
+	}
+}
+
+// SEV-SNP has no runtime extends, so a producer setting the list
+// unconditionally issues the same extension as one that never set it.
+func TestMarshalExtensionOmitsListOnSNP(t *testing.T) {
+	report := mockapi.FakeSNPReport([]byte{})
+	bare, err := (&Attestation{Family: teetypes.FamilySNP, Report: report}).MarshalExtension(testOID)
+	if err != nil {
+		t.Fatalf("MarshalExtension(no list) = _, %v", err)
+	}
+	for _, list := range [][]string{digests(1), {"not a digest"}} {
+		ext, err := (&Attestation{Family: teetypes.FamilySNP, Report: report, RuntimeExtensions: list}).MarshalExtension(testOID)
+		if err != nil {
+			t.Fatalf("MarshalExtension(%q) = _, %v", list, err)
+		}
+		if !slices.Equal(ext.Value, bare.Value) {
+			t.Fatalf("MarshalExtension(%q) encodes the list on SEV-SNP", list)
+		}
+	}
+}
+
+// A full list keeps the extension well under the 64 KiB handshake message
+// limit, leaving room for the evidence.
+func TestRuntimeExtensionsSizeAtCap(t *testing.T) {
+	ext, err := tdxAttestation(t, digests(MaxRuntimeExtensions)).MarshalExtension(testOID)
+	if err != nil {
+		t.Fatalf("MarshalExtension: %v", err)
+	}
+	const budget = 20 << 10
+	if len(ext.Value) > budget {
+		t.Fatalf("extension at the cap = %d bytes, want at most %d", len(ext.Value), budget)
 	}
 }
 
@@ -152,18 +187,21 @@ func TestVerifyCertWithServiceReplaysRuntimeExtensions(t *testing.T) {
 	verdict := mockapi.PassingVerdict(launch)
 	verdict.Claims.PlatformData = map[string]any{"rtmr_3": hex.EncodeToString(reg[:])}
 	stub.SetVerdict(verdict)
-	policy := remote.Policy{Images: []remote.ImagePin{{Name: "node", Digest: make([]byte, 48), Anchor: anchor}}}
+	acceptAll := func(string) error { return nil }
 
 	for _, tc := range []struct {
 		name    string
 		list    []string
+		accept  func(string) error
 		wantErr bool
 	}{
-		{"list ahead of the quote", list, false},
-		{"not a prefix", []string{list[1], list[0], list[2]}, true},
-		{"no list", nil, true},
+		{"list ahead of the quote", list, acceptAll, false},
+		{"pin without AcceptExtension", list, nil, true},
+		{"not a prefix", []string{list[1], list[0], list[2]}, acceptAll, true},
+		{"no list", nil, acceptAll, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			policy := remote.Policy{Images: []remote.ImagePin{{Name: "node", Digest: make([]byte, 48), Anchor: anchor, AcceptExtension: tc.accept}}}
 			cert, _ := certWithExtension(t, tdxAttestation(t, tc.list))
 			_, err := VerifyCertWithService(context.Background(), remote.NewClient(stub.URL()), cert, testOID, nil, policy)
 			if tc.wantErr {
@@ -174,6 +212,30 @@ func TestVerifyCertWithServiceReplaysRuntimeExtensions(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatalf("VerifyCertWithService() = _, %v", err)
+			}
+		})
+	}
+}
+
+// An in-process Attestation is held to the rules UnmarshalExtension applies
+// before its list reaches the service.
+func TestVerifyWithServiceRejectsRuntimeExtensions(t *testing.T) {
+	key := testKey(t)
+	snp := &Attestation{Family: teetypes.FamilySNP, Report: mockapi.FakeSNPReport([]byte{})}
+	snp.RuntimeExtensions = digests(1)
+	for _, tc := range []struct {
+		name string
+		att  *Attestation
+	}{
+		{"over the cap", tdxAttestation(t, digests(MaxRuntimeExtensions+1))},
+		{"non-canonical entry", tdxAttestation(t, []string{"img:latest"})},
+		{"list on SEV-SNP", snp},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spy := &verifySpy{result: passingVerdict(nil)}
+			_, err := VerifyWithService(context.Background(), spy.service(t), tc.att, &key.PublicKey, nil, remote.Policy{})
+			if !errors.Is(err, ErrInvalidReport) {
+				t.Fatalf("VerifyWithService() = _, %v, want ErrInvalidReport", err)
 			}
 		})
 	}
