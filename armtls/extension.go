@@ -154,8 +154,8 @@ func (a *Attestation) MarshalExtension(oid asn1.ObjectIdentifier) (pkix.Extensio
 // carries: an SEV-SNP report is unwrapped from its HCL envelope if it has one,
 // and an embedded JSON envelope is parsed. Trailing bytes after the SEQUENCE
 // are rejected, so a payload smuggled past the DER structure cannot ride along.
-// A runtime extension list that is too long or holds a non-canonical digest
-// is refused.
+// A runtime extension list that is too long, holds a non-canonical digest, or
+// accompanies SEV-SNP evidence is refused.
 func UnmarshalExtension(der []byte) (*Attestation, error) {
 	var raw attestationASN1
 	rest, err := asn1.Unmarshal(der, &raw)

@@ -39,8 +39,9 @@ type ImagePin struct {
 	// AcceptExtension, when set, judges each runtime extension the quote
 	// proves on top of Anchor; an error refuses the image. Nil accepts any
 	// replayed list, which still proves the anchor. Unused without Anchor,
-	// and never called on SEV-SNP, where no extension is provable: a peer's
-	// list there is ignored, not refused.
+	// and never called on SEV-SNP, where no extension is provable: a
+	// well-formed list there is ignored, though a non-canonical entry still
+	// fails.
 	AcceptExtension func(digest string) error
 }
 
