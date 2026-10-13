@@ -38,7 +38,9 @@ type ImagePin struct {
 
 	// AcceptExtension, when set, judges each runtime extension the quote
 	// proves on top of Anchor; an error refuses the image. Nil accepts any
-	// replayed list, which still proves the anchor. Unused without Anchor.
+	// replayed list, which still proves the anchor. Unused without Anchor,
+	// and never called on SEV-SNP, where no extension is provable: a peer's
+	// list there is ignored, not refused.
 	AcceptExtension func(digest string) error
 }
 
@@ -69,6 +71,9 @@ func EnforceImages(resp VerifyResponse, images []ImagePin, platform teetypes.Pla
 // before it extends, so the list may run ahead of the quote; entries past k
 // were not measured into it, prove nothing, and are not judged. On SEV-SNP
 // k is always 0. A nil claimed requires the bare seed.
+//
+// Each anchored image replays claimed at one SHA-384 per entry, so bound a
+// list taken from a peer before passing it; armtls caps it at 512.
 func EnforceImagesWithRuntimeLog(resp VerifyResponse, images []ImagePin, platform teetypes.PlatformType, claimed []string) error {
 	if len(images) == 0 {
 		return nil
