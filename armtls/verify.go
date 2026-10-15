@@ -30,6 +30,10 @@ import (
 // The result is returned only when the hardware signature verified and the
 // binding matched. A verdict that reports neither a match nor a mismatch
 // counts as a failure.
+//
+// It does not replay att.RuntimeExtensions. A caller pinning an image anchor
+// passes the list to [remote.EnforceImagesWithRuntimeLog] or
+// [runtimemeasure.MatchBindingPrefix] along with the result.
 func VerifyOffline(att *Attestation, pub crypto.PublicKey, nonce []byte, params teetypes.VerifyParams, opts teeverify.Options) (*teetypes.VerificationResult, error) {
 	env, err := att.Envelope()
 	if err != nil {
@@ -78,11 +82,14 @@ func VerifyCertOffline(cert *x509.Certificate, oid asn1.ObjectIdentifier, nonce 
 // report data comes from [ReportDataForKey], and a policy.ExpectedReportData
 // that disagrees is refused.
 //
-// It goes through [remote.Client.VerifyEvidence], which fails closed on the
-// verdict and then on the policy's pins, and refuses a platform tag it has no
-// rules for. Its sentinels (remote.ErrSignatureInvalid,
-// remote.ErrReportDataMismatch, remote.ErrMeasurementNotAllowed, …) reach
-// the caller unchanged, so errors.Is reaches them.
+// It goes through [remote.Client.VerifyEvidenceWithRuntimeLog], which fails
+// closed on the verdict and then on the policy's pins, and refuses a platform
+// tag it has no rules for. On TDX, att.RuntimeExtensions is the claimed list
+// replayed against image anchor pins, refused first when too long or holding a
+// non-canonical digest; on SEV-SNP it is ignored. Its sentinels
+// (remote.ErrSignatureInvalid, remote.ErrReportDataMismatch,
+// remote.ErrMeasurementNotAllowed, …) reach the caller unchanged, so errors.Is
+// reaches them.
 //
 // The response is only as trustworthy as the service: it is not signed, so the
 // service must sit inside the same trust boundary as the caller — a node-local
@@ -96,8 +103,15 @@ func VerifyWithService(ctx context.Context, svc remote.Client, att *Attestation,
 	if err != nil {
 		return remote.VerifyResponse{}, err
 	}
+	var claimed []string
+	if att.Family == teetypes.FamilyTDX {
+		if err := checkRuntimeExtensions(att.Family, att.RuntimeExtensions); err != nil {
+			return remote.VerifyResponse{}, err
+		}
+		claimed = att.RuntimeExtensions
+	}
 	policy.ExpectedReportData = anchor
-	return svc.VerifyEvidence(ctx, env, policy)
+	return svc.VerifyEvidenceWithRuntimeLog(ctx, env, policy, claimed)
 }
 
 // VerifyCertWithService verifies the ARmTLS extension cert carries under oid

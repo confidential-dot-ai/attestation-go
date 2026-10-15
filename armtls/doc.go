@@ -25,6 +25,12 @@
 // Bare-metal TDX event logs are ~85 KB and would push the certificate past a
 // TLS record, so [EvidenceForExtension] strips them.
 //
+// A guest that extends RTMR[3] after launch carries its claimed extension list
+// in the same extension ([Attestation.RuntimeExtensions]), as an optional
+// trailing field older verifiers skip. The list is not trusted: a verifier
+// replays it against the quoted register and judges only the prefix that
+// matches.
+//
 // Verification comes in two forms with the same key binding:
 // [VerifyOffline] runs the verifiers in-process, and [VerifyWithService]
 // forwards the envelope to an attestation service. Both refuse a platform tag

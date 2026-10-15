@@ -114,6 +114,18 @@ j, err := runtimemeasure.OpenJournal("/run/measured", reg)
 extended, err := j.MeasureOnce("sha256:...") // false when already journaled
 ```
 
+A verifier of a measuring guest needs the guest's list to interpret RTMR[3].
+`ReadJournal` reads it without touching the register, and
+`MatchBindingPrefix` replays it: it returns the `k` for which RTMR[3] equals
+the anchor seed extended with the first `k` digests. The journal records
+before it extends, so the list may run ahead of the quote; only that prefix is
+proven. SEV-SNP has no extends, so `k` is always 0 there.
+
+```go
+list, err := runtimemeasure.ReadJournal("/run/measured")
+k, err := runtimemeasure.MatchBindingPrefix(res, anchor, list) // list[:k] is proven
+```
+
 A verifier checking a whole node pins the image with the manifest its build
 published and the anchor with `VerifyBinding`. The manifest's shape names the
 family, so the caller loads it without knowing which, and reads the pinned
@@ -358,6 +370,20 @@ ext, err := att.MarshalExtension(myOID)
 res, err := armtls.VerifyCertOffline(cert, myOID, nonce, teetypes.VerifyParams{}, teeverify.Options{})
 resp, err := armtls.VerifyCertWithService(ctx, client, cert, myOID, nonce, policy)
 ```
+
+A guest that extends RTMR[3] at runtime sets `Attestation.RuntimeExtensions`
+to its journal before marshaling. The list travels as an optional trailing
+field, omitted when empty, so verifiers predating it decode the extension
+unchanged. `VerifyWithService` replays the list against each image pin's
+`Anchor` and passes only the proven prefix to `ImagePin.AcceptExtension`, the
+hook for an allowlist; entries beyond the prefix were not quoted and are not
+judged. A pin without `AcceptExtension` still requires the bare anchor seed;
+`func(string) error { return nil }` accepts any list that replays. A list over
+256 entries or holding a non-canonical digest is refused. SEV-SNP has no
+runtime extends: marshaling omits a list there, parsing refuses one, and
+`VerifyWithService` ignores one. `VerifyOffline` does not replay the list; a
+caller pinning an anchor passes `att.RuntimeExtensions` to
+`remote.EnforceImagesWithRuntimeLog`.
 
 Certificate lifecycle — issuance, rotation, TLS configs — is the caller's.
 

@@ -107,11 +107,17 @@ func VerifyBinding(r *teetypes.VerificationResult, anchor []byte, workloadDigest
 		return err
 	}
 	if !bytes.Equal(got, want) {
-		return fmt.Errorf(
-			"guest is not bound to the expected anchor: %s carries %s, anchor implies %s",
-			bindingName(r.Platform), hex.EncodeToString(got), hex.EncodeToString(want))
+		return bindingMismatch(r.Platform, got, want)
 	}
 	return nil
+}
+
+// bindingMismatch names both values of a failed comparison. They are digests,
+// not the anchor itself, so the error may be logged.
+func bindingMismatch(p teetypes.PlatformType, got, want []byte) error {
+	return fmt.Errorf(
+		"guest is not bound to the expected anchor: %s carries %s, anchor implies %s",
+		bindingName(p), hex.EncodeToString(got), hex.EncodeToString(want))
 }
 
 // bindingName names the field the binding lives in, so a mismatch error tells
@@ -121,4 +127,52 @@ func bindingName(p teetypes.PlatformType) string {
 		return "RTMR[3]"
 	}
 	return "HOSTDATA"
+}
+
+// MatchBindingPrefix returns the k for which the binding r carries equals the
+// anchor's seed extended with claimed[:k], or an error when no prefix matches.
+//
+// claimed is the guest's own account of what it extended, in order. A
+// [Journal] records before it extends and may be read after the quote, so the
+// list can run ahead of the register; only claimed[:k] is proven, and entries
+// past k prove nothing. Every entry must be canonical ([CanonicalDigest]): the
+// guest never extends anything else, so one that is not fails the whole list.
+//
+// On SEV-SNP the binding is HOSTDATA, which no runtime extend reaches, so a
+// well-formed list yields k = 0; a non-canonical entry still fails. az-snp is
+// refused as by [VerifyBinding].
+//
+// The cost is one SHA-384 per entry, and the list usually comes from the peer,
+// so bound it before calling; armtls caps it at 256.
+func MatchBindingPrefix(r *teetypes.VerificationResult, anchor []byte, claimed []string) (int, error) {
+	for i, d := range claimed {
+		if c, err := CanonicalDigest(d); err != nil || c != d {
+			return 0, fmt.Errorf("claimed extension %d (%q) is not a canonical sha256 digest", i, d)
+		}
+	}
+	got, err := Binding(r)
+	if err != nil {
+		return 0, err
+	}
+	want, err := expectedBinding(r.Platform, anchor, nil)
+	if err != nil {
+		return 0, err
+	}
+	if bytes.Equal(got, want) {
+		return 0, nil
+	}
+	if !r.Platform.HasRegisters() || len(claimed) == 0 {
+		return 0, bindingMismatch(r.Platform, got, want)
+	}
+	// SHA-384 chaining makes every prefix fold to a distinct value, so at most
+	// one prefix matches and the first hit is the only one.
+	reg := [Size]byte(want)
+	for i, d := range claimed {
+		reg = Extend(reg, Event(d))
+		if bytes.Equal(got, reg[:]) {
+			return i + 1, nil
+		}
+	}
+	return 0, fmt.Errorf("guest is not bound to the expected anchor: RTMR[3] carries %s, which is neither the anchor seed %s nor that seed extended with a prefix of the %d claimed digest(s)",
+		hex.EncodeToString(got), hex.EncodeToString(want), len(claimed))
 }

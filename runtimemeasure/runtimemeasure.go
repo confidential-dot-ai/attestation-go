@@ -32,6 +32,9 @@
 // A verifier cannot interpret a TDX register without knowing its seed, so a
 // guest launched with an anchor must be verified with
 // FromDigestsSeeded(Seed(anchor), ...) rather than FromDigests.
+// A verifier holding the guest's own extension list, which may run ahead of
+// the quote, uses [MatchBindingPrefix] to find the prefix the register
+// proves.
 package runtimemeasure
 
 import (

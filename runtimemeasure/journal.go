@@ -88,34 +88,19 @@ func OpenJournalSeeded(path string, reg Register, seed [Size]byte) (*Journal, er
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create journal dir: %w", err)
 	}
-	j := &Journal{path: path, reg: reg, seed: seed, measured: map[string]struct{}{}}
 	b, err := os.ReadFile(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		b = nil // first start this boot; the register is still cross-checked
-	} else if err != nil {
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return nil, fmt.Errorf("read journal %s: %w", path, err)
+	}
+	// A missing file is the first start this boot; the register is still
+	// cross-checked.
+	order, skipped := parseJournal(b)
+	j := &Journal{path: path, reg: reg, seed: seed, measured: make(map[string]struct{}, len(order)), order: order}
+	for _, d := range order {
+		j.measured[d] = struct{}{}
 	}
 
 	var problems []error
-	var skipped []string
-	for line := range strings.SplitSeq(string(b), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		// Canonicalize rather than pattern-match, so the journal admits
-		// exactly the strings Event hashes.
-		d, err := CanonicalDigest(line)
-		if err != nil || d != line {
-			skipped = append(skipped, line)
-			continue
-		}
-		if _, dup := j.measured[d]; dup {
-			continue
-		}
-		j.measured[d] = struct{}{}
-		j.order = append(j.order, d)
-	}
 	if len(skipped) > 0 {
 		problems = append(problems, fmt.Errorf("journal %s: %w: skipped %d line(s), first %q", path, ErrMalformedEntry, len(skipped), skipped[0]))
 	}
@@ -124,6 +109,46 @@ func OpenJournalSeeded(path string, reg Register, seed [Size]byte) (*Journal, er
 		return nil, err
 	}
 	return j, errors.Join(problems...)
+}
+
+// ReadJournal returns the digests the journal at path records, in extend
+// order, without opening a register or repairing anything: it is for a reader
+// beside the measurer, such as one publishing the list to verifiers. A missing
+// file is an empty journal. Malformed lines, including a partial last line
+// from an append in progress, are skipped.
+func ReadJournal(path string) ([]string, error) {
+	b, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read journal %s: %w", path, err)
+	}
+	order, _ := parseJournal(b)
+	return order, nil
+}
+
+// parseJournal returns the canonical digests in b, deduplicated and in order,
+// and the lines it skipped as malformed. It canonicalizes rather than
+// pattern-matches, so the journal admits exactly the strings [Event] hashes.
+func parseJournal(b []byte) (order, skipped []string) {
+	seen := map[string]struct{}{}
+	for line := range strings.SplitSeq(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if d, err := CanonicalDigest(line); err != nil || d != line {
+			skipped = append(skipped, line)
+			continue
+		}
+		if _, dup := seen[line]; dup {
+			continue
+		}
+		seen[line] = struct{}{}
+		order = append(order, line)
+	}
+	return order, skipped
 }
 
 // reconcile compares the register against the journal and repairs the one
