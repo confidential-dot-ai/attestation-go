@@ -79,7 +79,13 @@ func VerifyEnvelope(ctx context.Context, env teetypes.AttestationEvidence, param
 	// Route on the canonicalized tag so the dispatcher accepts exactly what
 	// teetypes.NormalizePlatform/Family say a tag means; the result carries the
 	// canonical constant, never the attester's spelling.
-	switch teetypes.NormalizePlatform(string(env.Platform)) {
+	platform := teetypes.NormalizePlatform(string(env.Platform))
+	// Only a bare-metal SEV-SNP kernel commits its measurement registers to
+	// the report; elsewhere the pin would verify nothing.
+	if params.MeasurementRegisters != nil && !platform.HasMeasurementRegisters() {
+		return nil, fmt.Errorf("measurement registers pinned but platform %q has no kernel measurement registers", env.Platform)
+	}
+	switch platform {
 	case teetypes.PlatformSNP:
 		return verifySNP(ctx, env.Evidence, params, opts.SNP, teetypes.PlatformSNP)
 	case teetypes.PlatformGcpSNP:

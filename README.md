@@ -38,6 +38,21 @@ res, err := teeverify.Verify(evidenceJSON, teetypes.VerifyParams{
 Packages: `teeverify` (dispatcher) · `snp`, `tdx` (bare-metal) · `azsnp`, `aztdx`
 (Azure vTPM) · `tpmcommon` (HCL/vTPM layer) · `teetypes` (shared types).
 
+A bare-metal SEV-SNP guest kernel with the measurement-register provider commits
+its registers to the report: `REPORT_DATA` is a commitment to the kernel's event
+log and the requester's 64 bytes, not the bytes themselves (see
+`snp/registers.go`). `VerifyParams.MeasurementRegisters` selects that mode in
+the in-process verifier as `Policy.MeasurementRegisters` does for the service
+client: the expected final register values in index order, at most 16, the rest
+zero, so an empty non-nil slice pins a kernel that extended nothing. The
+evidence's `event_log` is replayed and the commitment checked in place of the
+raw `REPORT_DATA` comparison; a mismatch is an error, as every other pin's is.
+Evidence without a log, a bare armTLS report included, verifies as a kernel
+that extended nothing. The mode needs `ExpectedReportData` and
+`ExpectedLaunchDigest`: on an image without the provider, guest root chooses
+`REPORT_DATA` and can forge any register, so only the launch pin tells the two
+apart. Bare-metal `snp` only; refused elsewhere.
+
 Bare SNP reports can fetch their missing VCEK with a caller-supplied getter.
 To reuse certificates across processes, opt into the disk cache with a directory
 your application owns:

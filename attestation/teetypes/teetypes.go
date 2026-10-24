@@ -91,6 +91,16 @@ type VerifyParams struct {
 	// non-nil must equal RTMR[i]; nil entries are not checked. Each non-nil
 	// entry must be 48 bytes. TDX-only; ignored for SNP.
 	ExpectedRTMRs [][]byte
+	// MeasurementRegisters, if non-nil, selects SEV-SNP register mode: the
+	// guest kernel's measurement registers (see the snp package) must replay
+	// from the evidence's event log to these values in index order, at most
+	// sixteen, with every register past the list zero, so an empty non-nil
+	// slice pins a kernel that extended nothing. REPORT_DATA is then a
+	// commitment to the log and to ExpectedReportData (1 to 64 bytes,
+	// zero-extended), not the bytes themselves. Needs ExpectedLaunchDigest:
+	// on an image without the provider the guest chooses REPORT_DATA and can
+	// forge any register. Bare-metal snp only; refused elsewhere.
+	MeasurementRegisters [][]byte
 }
 
 // VerificationResult is the outcome of verification. The caller decides
