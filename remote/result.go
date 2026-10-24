@@ -121,6 +121,9 @@ func (r *VerifyResponse) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	res := w.Result
+	if res.Platform == "" {
+		return fmt.Errorf("remote: /verify result names no platform")
+	}
 	out := VerifyResponse{
 		Passed: w.Passed,
 		Token:  w.Token,
@@ -132,9 +135,9 @@ func (r *VerifyResponse) UnmarshalJSON(data []byte) error {
 			Claims:          res.Claims,
 			ReportDataMatch: res.ReportDataMatch,
 			TCBStatus:       res.TCBStatus,
-			// As for the in-process verifiers: whether revocation was
-			// checked. The service reports crl_ok whenever it was.
-			CollateralVerified:        res.CRLOK != nil,
+			// As for the in-process verifiers: revocation was checked and
+			// passed. The service reports crl_ok whenever it checked.
+			CollateralVerified:        affirmed(res.CRLOK),
 			MeasurementRegisters:      res.MeasurementRegisters,
 			MeasurementRegistersMatch: res.MeasurementRegistersMatch,
 		},

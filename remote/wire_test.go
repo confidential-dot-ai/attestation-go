@@ -115,32 +115,40 @@ func TestPoliciesForBindings(t *testing.T) {
 	}
 }
 
-// Launch measurements from both pin forms reach the service as one set under
-// the platform's name; flat register pins become single-value sets.
+// Launch measurements reach the service as one set under the platform's name;
+// flat register pins become single-value sets. Images replace the flat pins,
+// as EnforcePins applies them.
 func TestPoliciesForMeasurementSets(t *testing.T) {
 	a, b, c := measurement(0x0a), measurement(0x0b), measurement(0x0c)
-	policy := Policy{
-		Images:       []ImagePin{{Name: "x", Digest: a}, {Name: "y", Digest: b, Registers: map[int][]byte{1: c}}},
-		Measurements: [][]byte{b, c},
-		Registers:    map[int][]byte{2: c},
-	}
-	snp, err := PoliciesFor(teetypes.PlatformGcpSNP, Policy{Images: policy.Images, Measurements: policy.Measurements})
+	flat := Policy{Measurements: [][]byte{b, c, b}, Registers: map[int][]byte{2: c}}
+	tdx, err := PoliciesFor(teetypes.PlatformTDX, flat)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := [][]byte{a, b, c}; !slices.EqualFunc(snp.GcpSNP.LaunchDigest, want, bytes.Equal) {
-		t.Fatalf("launch_digest = %x, want %x", snp.GcpSNP.LaunchDigest, want)
+	if !slices.EqualFunc(tdx.TDX.MRTD, [][]byte{b, c}, bytes.Equal) {
+		t.Fatalf("mrtd = %x, want [%x %x]", tdx.TDX.MRTD, b, c)
 	}
-	tdx, err := PoliciesFor(teetypes.PlatformTDX, policy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !slices.EqualFunc(tdx.TDX.MRTD, [][]byte{a, b, c}, bytes.Equal) {
-		t.Fatalf("mrtd = %x", tdx.TDX.MRTD)
-	}
-	// Image registers stay a client-side, per-image check; only flat pins go.
 	if tdx.TDX.RTMR1 != nil || !slices.EqualFunc(tdx.TDX.RTMR2, [][]byte{c}, bytes.Equal) {
 		t.Fatalf("rtmr1 = %x, rtmr2 = %x, want only rtmr2 = [%x]", tdx.TDX.RTMR1, tdx.TDX.RTMR2, c)
+	}
+
+	images := flat
+	images.Images = []ImagePin{{Name: "x", Digest: a}, {Name: "y", Digest: b, Registers: map[int][]byte{1: c}}, {Name: "z", Digest: a}}
+	snp, err := PoliciesFor(teetypes.PlatformGcpSNP, images)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := [][]byte{a, b}; !slices.EqualFunc(snp.GcpSNP.LaunchDigest, want, bytes.Equal) {
+		t.Fatalf("launch_digest = %x, want the image digests %x", snp.GcpSNP.LaunchDigest, want)
+	}
+	tdx, err = PoliciesFor(teetypes.PlatformTDX, images)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Image registers stay a client-side, per-image check, and the flat
+	// register pin is superseded with the flat measurements.
+	if !slices.EqualFunc(tdx.TDX.MRTD, [][]byte{a, b}, bytes.Equal) || tdx.TDX.RTMR1 != nil || tdx.TDX.RTMR2 != nil {
+		t.Fatalf("mrtd = %x, rtmr1 = %x, rtmr2 = %x, want the image digests and no register pin", tdx.TDX.MRTD, tdx.TDX.RTMR1, tdx.TDX.RTMR2)
 	}
 
 	body, err := json.Marshal(snp)

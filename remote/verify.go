@@ -200,7 +200,12 @@ func EnforceVerdict(req VerifyRequest, resp VerifyResponse) error {
 	if err := resp.Result.Check(); err != nil {
 		return ErrSignatureInvalid
 	}
-	asked, _ := req.Policies.Pins(req.Platform)
+	asked, ok := req.Policies.Pins(req.Platform)
+	if !ok {
+		// The service answers 422 platform_not_allowed; a stub that did not
+		// must not pass on resp.Passed alone.
+		return fmt.Errorf("%w: the request carries no policies for %q", ErrUnsupportedPlatform, req.Platform)
+	}
 	if len(asked.ReportData) > 0 && !affirmed(resp.Result.ReportDataMatch) {
 		return ErrReportDataMismatch
 	}

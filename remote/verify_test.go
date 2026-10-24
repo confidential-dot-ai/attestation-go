@@ -748,3 +748,17 @@ func TestEnforcePinsWithRuntimeLog(t *testing.T) {
 		t.Fatalf("EnforcePinsWithRuntimeLog(measurements only, %q) = %v, want nil", bogus, err)
 	}
 }
+
+// A request whose policies name no entry for its platform asks for nothing;
+// the service refuses it, and so must enforcement of a stub's 200.
+func TestEnforceVerdictRequiresAPoliciesEntry(t *testing.T) {
+	resp := VerifyResponse{Passed: true, Result: teetypes.VerificationResult{SignatureValid: true, Platform: teetypes.PlatformSNP}}
+	for _, req := range []VerifyRequest{
+		{Platform: teetypes.PlatformSNP},
+		{Platform: teetypes.PlatformSNP, Policies: Policies{TDX: &TDXParams{}}},
+	} {
+		if err := EnforceVerdict(req, resp); !errors.Is(err, ErrUnsupportedPlatform) {
+			t.Fatalf("EnforceVerdict(%+v) = %v, want ErrUnsupportedPlatform", req.Policies, err)
+		}
+	}
+}

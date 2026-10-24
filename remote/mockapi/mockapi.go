@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -22,6 +23,10 @@ import (
 // not verify, carried in [remote.ErrorResponse].Error.
 const ErrorCodeVerificationFailed = "verification_failed"
 
+// ErrorCodePlatformNotAllowed is the service's error code for evidence from a
+// platform the request's policies name no entry for.
+const ErrorCodePlatformNotAllowed = "platform_not_allowed"
+
 // SNPReportSize is the byte length of an AMD SEV-SNP attestation report, the
 // size of the report [FakeSNPReport] builds.
 const SNPReportSize = snp.ReportSize
@@ -37,8 +42,8 @@ type Verdict struct {
 	InitDataMatch   *bool
 	Claims          teetypes.Claims
 	// MeasurementRegisters is what the stub reports as the SEV-SNP kernel
-	// measurement registers when a request pins them; nil means the evidence
-	// carries none, which fails such a pin.
+	// measurement registers when a request pins them; nil means REPORT_DATA
+	// does not commit to the evidence's event log, which fails such a pin.
 	MeasurementRegisters *teetypes.MeasurementRegisters
 }
 
@@ -261,6 +266,16 @@ func (s *Stub) handleVerify(w http.ResponseWriter, r *http.Request) {
 		writeError(w, VerificationFailed("hardware signature verification failed"))
 		return
 	}
+	// Evidence from a platform the policies name no entry for is refused, as
+	// the service refuses it, rather than verified under no pins.
+	if _, ok := req.Policies.Pins(req.Platform); !ok {
+		writeError(w, ErrorReply{
+			Status:  http.StatusUnprocessableEntity,
+			Code:    ErrorCodePlatformNotAllowed,
+			Message: fmt.Sprintf("platform %q is not allowed by the request's policies", req.Platform),
+		})
+		return
+	}
 	writeJSON(w, verdict.response(req))
 }
 
@@ -285,7 +300,9 @@ func (v Verdict) response(req remote.VerifyRequest) remote.VerifyResponse {
 		}
 	}
 	asked, _ := req.Policies.Pins(req.Platform)
-	if len(asked.ReportData) > 0 {
+	// In register mode the service replaces report_data_match with the
+	// commitment check, answered below.
+	if len(asked.ReportData) > 0 && asked.MeasurementRegisters == nil {
 		answer(&resp.Result.ReportDataMatch, v.ReportDataMatch)
 	}
 	if len(asked.InitData) > 0 {
@@ -307,11 +324,18 @@ func (v Verdict) response(req remote.VerifyRequest) remote.VerifyResponse {
 		answer(&match, teetypes.Ptr(err == nil && remote.MeasurementAllowed(got, pins)))
 		resp.Result.SetRTMRMatch(i, match)
 	}
+	// Register mode follows the service's check_measurement_registers: the
+	// commitment counts only under a matched launch digest (without the
+	// provider image it means nothing), report_data_match is whether it held,
+	// and the registers are exposed only on a result that passed.
+	var registers *teetypes.MeasurementRegisters
 	if asked.MeasurementRegisters != nil {
-		match := v.MeasurementRegisters != nil && remote.MeasurementRegistersMatch(v.MeasurementRegisters.Registers, *asked.MeasurementRegisters)
+		committed := v.MeasurementRegisters != nil && affirmed(resp.Result.LaunchDigestMatch)
+		answer(&resp.Result.ReportDataMatch, &committed)
+		match := committed && remote.MeasurementRegistersMatch(v.MeasurementRegisters.Registers, *asked.MeasurementRegisters)
 		answer(&resp.Result.MeasurementRegistersMatch, &match)
-		if match {
-			resp.Result.MeasurementRegisters = v.MeasurementRegisters
+		if committed {
+			registers = v.MeasurementRegisters
 		}
 	}
 	if len(asked.PCRs) > 0 {
@@ -324,8 +348,13 @@ func (v Verdict) response(req remote.VerifyRequest) remote.VerifyResponse {
 		}
 		answer(&resp.Checks.PCRsMatch, &match)
 	}
+	if resp.Passed {
+		resp.Result.MeasurementRegisters = registers
+	}
 	return resp
 }
+
+func affirmed(v *bool) bool { return v != nil && *v }
 
 // undecodableBody mirrors the service's JSON rejection: 400 for a body that is
 // not valid JSON, 422 for one that does not fit the handler's type; both
