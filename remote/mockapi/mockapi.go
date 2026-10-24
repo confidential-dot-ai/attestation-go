@@ -1,6 +1,7 @@
 package mockapi
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -29,10 +30,16 @@ const SNPReportSize = snp.ReportSize
 // [teetypes.VerificationResult]; the match fields are pointers so the
 // no-check wire shape — the service's explicit null — stays expressible.
 type Verdict struct {
+	// SignatureValid false makes the stub answer 422 verification_failed, as
+	// the service does for a signature that does not verify.
 	SignatureValid  bool
 	ReportDataMatch *bool
 	InitDataMatch   *bool
 	Claims          teetypes.Claims
+	// MeasurementRegisters is what the stub reports as the SEV-SNP kernel
+	// measurement registers when a request pins them; nil means the evidence
+	// carries none, which fails such a pin.
+	MeasurementRegisters *teetypes.MeasurementRegisters
 }
 
 // PassingVerdict is the verdict for evidence that verified: signature valid,
@@ -247,15 +254,122 @@ func (s *Stub) handleVerify(w http.ResponseWriter, r *http.Request) {
 		writeError(w, verifyErr)
 		return
 	}
-	writeJSON(w, remote.VerifyResponse{
+	// The service answers a signature that does not verify with 422, never
+	// with a 200 whose result says so.
+	if !verdict.SignatureValid {
+		writeError(w, VerificationFailed("hardware signature verification failed"))
+		return
+	}
+	writeJSON(w, verdict.response(req))
+}
+
+// response is the verdict in the service's shape for req: the stub answers
+// the checks req asked for from the verdict and from its claims, and reports
+// passed when every one of them held.
+func (v Verdict) response(req remote.VerifyRequest) remote.VerifyResponse {
+	resp := remote.VerifyResponse{
 		Result: teetypes.VerificationResult{
 			Platform:        req.Platform,
-			SignatureValid:  verdict.SignatureValid,
-			ReportDataMatch: verdict.ReportDataMatch,
-			InitDataMatch:   verdict.InitDataMatch,
-			Claims:          verdict.Claims,
+			SignatureValid:  true,
+			ReportDataMatch: v.ReportDataMatch,
+			InitDataMatch:   v.InitDataMatch,
+			Claims:          v.Claims,
 		},
-	})
+		Passed: true,
+	}
+	hold := func(v *bool) {
+		if v != nil && !*v {
+			resp.Passed = false
+		}
+	}
+	hold(v.ReportDataMatch)
+	hold(v.InitDataMatch)
+
+	// The launch measurement and register pins are answered from the claims,
+	// as the service answers them from the report.
+	var launch [][]byte
+	var rtmrs [4][][]byte
+	var registers *[][]byte
+	var pcrs map[int][]byte
+	switch p := req.Policies; teetypes.NormalizePlatform(string(req.Platform)) {
+	case teetypes.PlatformSNP:
+		if p.SNP != nil {
+			launch, registers = p.SNP.LaunchDigest, p.SNP.MeasurementRegisters
+		}
+	case teetypes.PlatformGcpSNP:
+		if p.GcpSNP != nil {
+			launch = p.GcpSNP.LaunchDigest
+		}
+	case teetypes.PlatformAzSNP:
+		if p.AzSNP != nil {
+			launch, pcrs = p.AzSNP.LaunchDigest, p.AzSNP.PCRs
+		}
+	case teetypes.PlatformTDX, teetypes.PlatformGcpTDX, teetypes.PlatformAzTDX:
+		t := p.TDX
+		if req.Platform == teetypes.PlatformGcpTDX {
+			t = p.GcpTDX
+		}
+		if req.Platform == teetypes.PlatformAzTDX && p.AzTDX != nil {
+			t, pcrs = &p.AzTDX.TDXParams, p.AzTDX.PCRs
+		}
+		if t != nil {
+			launch = t.MRTD
+			rtmrs = [4][][]byte{t.RTMR0, t.RTMR1, t.RTMR2, t.RTMR3}
+		}
+	}
+	if len(launch) > 0 {
+		digest, err := v.Claims.LaunchMeasurement()
+		match := err == nil && remote.MeasurementAllowed(digest, launch)
+		resp.Result.LaunchDigestMatch = &match
+		hold(&match)
+	}
+	for i, pins := range rtmrs {
+		if len(pins) == 0 {
+			continue
+		}
+		got, err := v.Claims.RTMR(i)
+		match := err == nil && remote.MeasurementAllowed(got, pins)
+		*[]**bool{&resp.Result.RTMR0Match, &resp.Result.RTMR1Match, &resp.Result.RTMR2Match, &resp.Result.RTMR3Match}[i] = &match
+		hold(&match)
+	}
+	if registers != nil {
+		match := v.MeasurementRegisters != nil && registersEqual(v.MeasurementRegisters.Registers, *registers)
+		resp.Result.MeasurementRegistersMatch = &match
+		if match {
+			resp.Result.MeasurementRegisters = v.MeasurementRegisters
+		}
+		hold(&match)
+	}
+	if len(pcrs) > 0 {
+		match := true
+		for idx, want := range pcrs {
+			got, err := v.Claims.PCR(idx)
+			if err != nil || !bytes.Equal(got, want) {
+				match = false
+			}
+		}
+		resp.Checks.PCRsMatch = &match
+		hold(&match)
+	}
+	return resp
+}
+
+// registersEqual is whether the sixteen replayed registers equal the pinned
+// list, with every register past the list zero.
+func registersEqual(got, pinned [][]byte) bool {
+	if len(got) != teetypes.MeasurementRegisterCount {
+		return false
+	}
+	for i, r := range got {
+		want := make([]byte, 48)
+		if i < len(pinned) {
+			want = pinned[i]
+		}
+		if !bytes.Equal(r, want) {
+			return false
+		}
+	}
+	return true
 }
 
 // undecodableBody mirrors the service's JSON rejection: 400 for a body that is

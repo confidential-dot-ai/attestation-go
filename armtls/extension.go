@@ -265,6 +265,9 @@ func parseEmbeddedEvidence(raw []byte) (*teetypes.AttestationEvidence, error) {
 		return nil, fmt.Errorf("%w: embedded evidence has no platform or no payload", ErrInvalidReport)
 	}
 	envelope.Platform = teetypes.NormalizePlatform(string(envelope.Platform))
+	// A peer's certificate is not a source of collateral: the verifier fetches
+	// or holds its own, so whatever the peer attached never reaches it.
+	envelope.Collateral = nil
 	return &envelope, nil
 }
 

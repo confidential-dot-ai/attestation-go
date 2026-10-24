@@ -125,12 +125,41 @@ func (s *verifySpy) service(t *testing.T) remote.Client {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if err := json.NewEncoder(w).Encode(remote.VerifyResponse{Result: s.result}); err != nil {
+		// The service answers an unverifiable signature with 422, and reports
+		// passed only when every check it answered held.
+		if !s.result.SignatureValid {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_ = json.NewEncoder(w).Encode(remote.ErrorResponse{Error: "verification_failed", Message: "hardware signature verification failed"})
+			return
+		}
+		result := s.result
+		passed := result.ReportDataMatch == nil || *result.ReportDataMatch
+		// A launch pin is answered from the claims, as the service answers it
+		// from the report.
+		if p := s.request.Policies.SNP; p != nil && len(p.LaunchDigest) > 0 {
+			launch, _ := hex.DecodeString(result.Claims.LaunchDigest)
+			match := false
+			for _, want := range p.LaunchDigest {
+				match = match || bytes.Equal(want, launch)
+			}
+			result.LaunchDigestMatch = teetypes.Ptr(match)
+			passed = passed && match
+		}
+		if err := json.NewEncoder(w).Encode(remote.VerifyResponse{Result: result, Passed: passed}); err != nil {
 			t.Errorf("encode verify response: %v", err)
 		}
 	}))
 	t.Cleanup(srv.Close)
 	return remote.NewClient(srv.URL)
+}
+
+// sentReportData is the report-data pin the recorded SEV-SNP request carried.
+func (s *verifySpy) sentReportData() []byte {
+	if s.request.Policies.SNP == nil {
+		return nil
+	}
+	return s.request.Policies.SNP.ReportData
 }
 
 // passingVerdict is what a service returns for evidence it accepted, bound to
@@ -166,8 +195,8 @@ func TestVerifyWithServiceSendsKeyAnchor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReportDataForKey: %v", err)
 	}
-	if spy.request.Params == nil || !bytes.Equal(spy.request.Params.ExpectedReportData, anchor[:sha512.Size384]) {
-		t.Fatalf("expected_report_data = %x, want the key anchor %x", spy.request.Params.ExpectedReportData, anchor[:sha512.Size384])
+	if !bytes.Equal(spy.sentReportData(), anchor[:sha512.Size384]) {
+		t.Fatalf("report_data = %x, want the key anchor %x", spy.sentReportData(), anchor[:sha512.Size384])
 	}
 	if spy.request.Platform != teetypes.PlatformSNP {
 		t.Fatalf("platform = %q, want snp", spy.request.Platform)
@@ -188,7 +217,7 @@ func TestVerifyWithServiceNonceChangesAnchor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReportDataForKey: %v", err)
 	}
-	if bytes.Equal(spy.request.Params.ExpectedReportData, bare[:sha512.Size384]) {
+	if bytes.Equal(spy.sentReportData(), bare[:sha512.Size384]) {
 		t.Fatal("the nonce did not reach the anchor the service was asked to check")
 	}
 }
@@ -207,9 +236,11 @@ func TestVerifyWithServiceFailsClosed(t *testing.T) {
 		wantErr error
 	}{
 		{
+			// The service refuses an unverifiable signature with 422, which
+			// reaches the caller as the API error, not a verdict sentinel.
 			name:    "invalid signature",
 			result:  teetypes.VerificationResult{SignatureValid: false},
-			wantErr: remote.ErrSignatureInvalid,
+			wantErr: &remote.APIError{},
 		},
 		{
 			name:    "no report-data verdict",
@@ -233,6 +264,12 @@ func TestVerifyWithServiceFailsClosed(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			spy := &verifySpy{result: tc.result}
 			_, err := VerifyWithService(context.Background(), spy.service(t), att, &key.PublicKey, nil, tc.policy)
+			if apiErr, ok := tc.wantErr.(*remote.APIError); ok {
+				if !errors.As(err, &apiErr) || apiErr.Status != http.StatusUnprocessableEntity {
+					t.Fatalf("err = %v, want a 422 *remote.APIError", err)
+				}
+				return
+			}
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("err = %v, want %v", err, tc.wantErr)
 			}
@@ -250,7 +287,7 @@ func TestVerifyWithServiceRefusesConflictingReportData(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "does not bind the key") {
 		t.Fatalf("err = %v, want a refusal of the caller-set report data", err)
 	}
-	if spy.request.Params != nil {
+	if spy.request.Platform != "" {
 		t.Fatal("the request reached the service despite the refusal")
 	}
 }
@@ -269,9 +306,9 @@ func TestVerifyCertWithServiceBindsCertKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReportDataForKey: %v", err)
 	}
-	if !bytes.Equal(spy.request.Params.ExpectedReportData, anchor[:sha512.Size384]) {
+	if !bytes.Equal(spy.sentReportData(), anchor[:sha512.Size384]) {
 		t.Fatalf("expected_report_data = %x, want the certificate key's anchor %x",
-			spy.request.Params.ExpectedReportData, anchor[:sha512.Size384])
+			spy.sentReportData(), anchor[:sha512.Size384])
 	}
 }
 
