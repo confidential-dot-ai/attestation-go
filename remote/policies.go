@@ -40,18 +40,18 @@ func PoliciesFor(platform teetypes.PlatformType, policy Policy) (Policies, error
 		return Policies{}, fmt.Errorf("%w: platform %q has no SEV-SNP TCB", ErrMinTcbNotAllowed, platform)
 	}
 	if len(policy.Registers) > 0 && !platform.HasRegisters() {
-		return Policies{}, fmt.Errorf("%w: %d register(s) pinned but platform %q has none",
-			ErrRegistersNotAllowed, len(policy.Registers), platform)
+		return Policies{}, errRegistersOffPlatform(len(policy.Registers), platform)
 	}
 	if len(policy.PCRs) > 0 && !platform.HasVTPMQuote() {
-		return Policies{}, fmt.Errorf("%w: %d register(s) pinned but platform %q carries no vTPM quote",
-			ErrPCRNotAllowed, len(policy.PCRs), platform)
+		return Policies{}, errPCRsOffPlatform(len(policy.PCRs), platform)
 	}
-	// Only a bare-metal SEV-SNP kernel commits its measurement registers to
-	// the report; everywhere else the pin would silently verify nothing.
-	if policy.MeasurementRegisters != nil && platform != teetypes.PlatformSNP {
-		return Policies{}, fmt.Errorf("%w: measurement registers pinned but platform %q has no kernel measurement registers",
-			ErrRegistersNotAllowed, platform)
+	if policy.MeasurementRegisters != nil {
+		if !platform.HasMeasurementRegisters() {
+			return Policies{}, errMeasurementRegistersOffPlatform(platform)
+		}
+		if err := checkMeasurementRegisterPins(policy.MeasurementRegisters); err != nil {
+			return Policies{}, err
+		}
 	}
 	launch, err := launchMeasurements(policy)
 	if err != nil {
@@ -69,10 +69,6 @@ func PoliciesFor(platform teetypes.PlatformType, policy Policy) (Policies, error
 			MinTcb:       policy.MinTcb,
 		}
 		if policy.MeasurementRegisters != nil {
-			registers, err := measurementRegisterPins(policy.MeasurementRegisters)
-			if err != nil {
-				return Policies{}, err
-			}
 			if len(launch) == 0 {
 				return Policies{}, fmt.Errorf("%w: measurement registers need a launch measurement pin (Images or Measurements)", ErrRegistersNotAllowed)
 			}
@@ -84,11 +80,13 @@ func PoliciesFor(platform teetypes.PlatformType, policy Policy) (Policies, error
 			// requester's bytes zero-extended, as /attest extends them.
 			params.ReportData = make([]byte, reportDataSize)
 			copy(params.ReportData, policy.ExpectedReportData)
+			// Non-nil, so an all-zero pin travels as an empty list.
+			registers := policy.MeasurementRegisters
 			params.MeasurementRegisters = &registers
 		}
 		switch platform {
 		case teetypes.PlatformAzSNP:
-			out.AzSNP = &AzSNPParams{SNPParams: params, PCRs: pcrPins(policy.PCRs)}
+			out.AzSNP = &AzSNPParams{SNPParams: params, PCRs: policy.PCRs}
 		case teetypes.PlatformGcpSNP:
 			out.GcpSNP = &params
 		default:
@@ -106,22 +104,18 @@ func PoliciesFor(platform teetypes.PlatformType, policy Policy) (Policies, error
 			if idx < 0 || idx >= len(rtmrs) {
 				return Policies{}, fmt.Errorf("%w: RTMR index %d out of range 0..%d", ErrRegistersNotAllowed, idx, len(rtmrs)-1)
 			}
-			if err := checkMeasurementWidth(fmt.Sprintf("RTMR[%d] pin", idx), policy.Registers[idx]); err != nil {
-				return Policies{}, fmt.Errorf("%w: %w", ErrRegistersNotAllowed, err)
+			if n := len(policy.Registers[idx]); n != measurementSize {
+				return Policies{}, fmt.Errorf("%w: RTMR[%d] pin is %d bytes, want %d", ErrRegistersNotAllowed, idx, n, measurementSize)
 			}
 			*rtmrs[idx] = DigestSet{policy.Registers[idx]}
 		}
 		switch platform {
 		case teetypes.PlatformAzTDX:
-			out.AzTDX = &AzTDXParams{TDXParams: params, PCRs: pcrPins(policy.PCRs)}
+			out.AzTDX = &AzTDXParams{TDXParams: params, PCRs: policy.PCRs}
 		case teetypes.PlatformGcpTDX:
 			out.GcpTDX = &params
-		case teetypes.PlatformTDX:
-			out.TDX = &params
 		default:
-			// dstack routes to the TDX family for the in-process verifiers but
-			// has no entry at the service.
-			return Policies{}, fmt.Errorf("%w: the service has no policy for %q", ErrUnsupportedPlatform, platform)
+			out.TDX = &params
 		}
 	}
 	return out, nil
@@ -132,120 +126,138 @@ func PoliciesFor(platform teetypes.PlatformType, policy Policy) (Policies, error
 // duplicates. Empty when the policy pins no launch measurement.
 func launchMeasurements(policy Policy) ([][]byte, error) {
 	var out [][]byte
-	add := func(what string, m []byte) error {
+	for _, img := range policy.Images {
+		if n := len(img.Digest); n != measurementSize {
+			return nil, fmt.Errorf("%w: image %q digest is %d bytes, want %d", ErrMeasurementNotAllowed, img.Name, n, measurementSize)
+		}
+		if !MeasurementAllowed(img.Digest, out) {
+			out = append(out, img.Digest)
+		}
+	}
+	for i, m := range policy.Measurements {
 		if n := len(m); n != measurementSize {
-			return fmt.Errorf("%w: %s is %d bytes, want %d", ErrMeasurementNotAllowed, what, n, measurementSize)
+			return nil, fmt.Errorf("%w: measurement %d is %d bytes, want %d", ErrMeasurementNotAllowed, i, n, measurementSize)
 		}
 		if !MeasurementAllowed(m, out) {
 			out = append(out, m)
 		}
-		return nil
-	}
-	for _, img := range policy.Images {
-		if err := add(fmt.Sprintf("image %q digest", img.Name), img.Digest); err != nil {
-			return nil, err
-		}
-	}
-	for i, m := range policy.Measurements {
-		if err := add(fmt.Sprintf("measurement %d", i), m); err != nil {
-			return nil, err
-		}
 	}
 	return out, nil
 }
 
-// measurementRegisterPins validates a [Policy.MeasurementRegisters] value and
-// returns it as the list the service takes: never nil, so an all-zero pin is
-// sent as an empty list rather than left out.
-func measurementRegisterPins(pins [][]byte) ([][]byte, error) {
+// checkMeasurementRegisterPins rejects a [Policy.MeasurementRegisters] value
+// with more entries than registers or an entry that is not SHA-384 wide.
+func checkMeasurementRegisterPins(pins [][]byte) error {
 	if len(pins) > teetypes.MeasurementRegisterCount {
-		return nil, fmt.Errorf("%w: %d measurement registers pinned, at most %d exist",
+		return fmt.Errorf("%w: %d measurement registers pinned, at most %d exist",
 			ErrRegistersNotAllowed, len(pins), teetypes.MeasurementRegisterCount)
 	}
-	out := make([][]byte, 0, len(pins))
 	for i, r := range pins {
 		if n := len(r); n != measurementSize {
-			return nil, fmt.Errorf("%w: measurement register %d pin is %d bytes, want %d",
+			return fmt.Errorf("%w: measurement register %d pin is %d bytes, want %d",
 				ErrRegistersNotAllowed, i, n, measurementSize)
 		}
-		out = append(out, r)
-	}
-	return out, nil
-}
-
-// checkMeasurementWidth rejects a non-empty measurement that is not SHA-384
-// sized; empty means unpinned.
-func checkMeasurementWidth(name string, b []byte) error {
-	if n := len(b); n > 0 && n != measurementSize {
-		return fmt.Errorf("%s is %d bytes, want %d", name, n, measurementSize)
 	}
 	return nil
 }
 
-// pcrPins copies the PCR pins for the wire; nil when there are none, so the
-// field is left out.
-func pcrPins(pins map[int][]byte) map[int][]byte {
-	if len(pins) == 0 {
-		return nil
-	}
-	return maps.Clone(pins)
+// The refusals shared by PoliciesFor and the exported Enforce entry points,
+// which skip it, so both paths name a policy error the same way.
+func errRegistersOffPlatform(n int, platform teetypes.PlatformType) error {
+	return fmt.Errorf("%w: %d register(s) pinned but platform %q has none", ErrRegistersNotAllowed, n, platform)
 }
 
-// asked records which checks a request's policies asked the service for, so
-// [EnforceVerdict] can require an affirmative answer to each.
-type askedChecks struct {
-	reportData, initData, launch bool
-	rtmrs                        [4]bool
-	measurementRegisters, pcrs   bool
+func errPCRsOffPlatform(n int, platform teetypes.PlatformType) error {
+	return fmt.Errorf("%w: %d register(s) pinned but platform %q carries no vTPM quote", ErrPCRNotAllowed, n, platform)
 }
 
-// asked reads the checks requested for platform. A request that carries no
-// entry for the platform asked for nothing; the service refuses it anyway.
-func (p Policies) asked(platform teetypes.PlatformType) askedChecks {
-	var a askedChecks
-	snp := func(s *SNPParams) {
-		a.reportData = len(s.ReportData) > 0
-		a.initData = len(s.HostData) > 0
-		a.launch = len(s.LaunchDigest) > 0
-		a.measurementRegisters = s.MeasurementRegisters != nil
-	}
-	tdx := func(t *TDXParams) {
-		a.reportData = len(t.ReportData) > 0
-		a.initData = len(t.InitData) > 0
-		a.launch = len(t.MRTD) > 0
-		for i, r := range []DigestSet{t.RTMR0, t.RTMR1, t.RTMR2, t.RTMR3} {
-			a.rtmrs[i] = len(r) > 0
-		}
-	}
+func errMeasurementRegistersOffPlatform(platform teetypes.PlatformType) error {
+	return fmt.Errorf("%w: measurement registers pinned but platform %q has no kernel measurement registers", ErrRegistersNotAllowed, platform)
+}
+
+// Pins is the platform-neutral view of what one [Policies] entry asks the
+// service to check: the entry's bindings and allowed sets, whichever platform
+// tag named the entry. It is how a verdict is read back against the request
+// ([EnforceVerdict]) and how a stub answers one.
+type Pins struct {
+	ReportData []byte
+	// InitData is SEV-SNP HOST_DATA or TDX MRCONFIGID (vTPM PCR[8] on Azure).
+	InitData []byte
+	// Launch is the allowed launch measurement set: launch_digest or mrtd.
+	Launch DigestSet
+	// RTMRs are the allowed sets for RTMR[0..3]; empty when unpinned.
+	RTMRs [4]DigestSet
+	// MeasurementRegisters is the SEV-SNP register-mode pin, nil when off.
+	MeasurementRegisters *[][]byte
+	// PCRs are the vTPM PCR pins of an Azure entry.
+	PCRs map[int][]byte
+}
+
+// Pins returns the checks the entry for platform asks for, and whether the
+// policies carry one. A request without an entry for its platform asked for
+// nothing; the service refuses it anyway.
+func (p Policies) Pins(platform teetypes.PlatformType) (Pins, bool) {
+	var snp *SNPParams
+	var tdx *TDXParams
+	var pcrs map[int][]byte
 	switch teetypes.NormalizePlatform(string(platform)) {
 	case teetypes.PlatformSNP:
-		if p.SNP != nil {
-			snp(p.SNP)
-		}
+		snp = p.SNP
 	case teetypes.PlatformGcpSNP:
-		if p.GcpSNP != nil {
-			snp(p.GcpSNP)
-		}
+		snp = p.GcpSNP
 	case teetypes.PlatformAzSNP:
 		if p.AzSNP != nil {
-			snp(&p.AzSNP.SNPParams)
-			a.pcrs = len(p.AzSNP.PCRs) > 0
+			snp, pcrs = &p.AzSNP.SNPParams, p.AzSNP.PCRs
 		}
 	case teetypes.PlatformTDX:
-		if p.TDX != nil {
-			tdx(p.TDX)
-		}
+		tdx = p.TDX
 	case teetypes.PlatformGcpTDX:
-		if p.GcpTDX != nil {
-			tdx(p.GcpTDX)
-		}
+		tdx = p.GcpTDX
 	case teetypes.PlatformAzTDX:
 		if p.AzTDX != nil {
-			tdx(&p.AzTDX.TDXParams)
-			a.pcrs = len(p.AzTDX.PCRs) > 0
+			tdx, pcrs = &p.AzTDX.TDXParams, p.AzTDX.PCRs
 		}
 	}
-	return a
+	switch {
+	case snp != nil:
+		return Pins{
+			ReportData:           snp.ReportData,
+			InitData:             snp.HostData,
+			Launch:               snp.LaunchDigest,
+			MeasurementRegisters: snp.MeasurementRegisters,
+			PCRs:                 pcrs,
+		}, true
+	case tdx != nil:
+		return Pins{
+			ReportData: tdx.ReportData,
+			InitData:   tdx.InitData,
+			Launch:     tdx.MRTD,
+			RTMRs:      [4]DigestSet{tdx.RTMR0, tdx.RTMR1, tdx.RTMR2, tdx.RTMR3},
+			PCRs:       pcrs,
+		}, true
+	}
+	return Pins{}, false
+}
+
+// MeasurementRegistersMatch is whether got, a kernel's sixteen replayed
+// measurement registers, equals the pinned list, with every register past the
+// list zero. It is the register-mode rule the service applies; the client
+// re-applies it to the registers the service reports.
+func MeasurementRegistersMatch(got, pinned [][]byte) bool {
+	if len(got) != teetypes.MeasurementRegisterCount {
+		return false
+	}
+	var zero [measurementSize]byte
+	for i, r := range got {
+		want := zero[:]
+		if i < len(pinned) {
+			want = pinned[i]
+		}
+		if !bytes.Equal(r, want) {
+			return false
+		}
+	}
+	return true
 }
 
 // EnforceMeasurementRegisters requires, when pinned is non-nil, that the
@@ -261,29 +273,18 @@ func EnforceMeasurementRegisters(resp VerifyResponse, platform teetypes.Platform
 	if pinned == nil {
 		return nil
 	}
-	if teetypes.NormalizePlatform(string(platform)) != teetypes.PlatformSNP {
-		return fmt.Errorf("%w: measurement registers pinned but platform %q has no kernel measurement registers",
-			ErrRegistersNotAllowed, platform)
+	if !platform.HasMeasurementRegisters() {
+		return errMeasurementRegistersOffPlatform(platform)
 	}
-	expected, err := measurementRegisterPins(pinned)
-	if err != nil {
+	if err := checkMeasurementRegisterPins(pinned); err != nil {
 		return err
 	}
 	if !affirmed(resp.Result.MeasurementRegistersMatch) {
 		return fmt.Errorf("%w: the service did not verify the measurement registers", ErrRegistersNotAllowed)
 	}
 	got := resp.Result.MeasurementRegisters
-	if got == nil || len(got.Registers) != teetypes.MeasurementRegisterCount {
-		return fmt.Errorf("%w: the result carries no complete measurement registers", ErrRegistersNotAllowed)
-	}
-	for i, r := range got.Registers {
-		want := make([]byte, measurementSize)
-		if i < len(expected) {
-			want = expected[i]
-		}
-		if !bytes.Equal(r, want) {
-			return fmt.Errorf("%w: measurement register %d does not match", ErrRegistersNotAllowed, i)
-		}
+	if got == nil || !MeasurementRegistersMatch(got.Registers, pinned) {
+		return fmt.Errorf("%w: the reported measurement registers do not match the pinned values", ErrRegistersNotAllowed)
 	}
 	return nil
 }

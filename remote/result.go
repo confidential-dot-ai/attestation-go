@@ -103,7 +103,6 @@ type resultWire struct {
 	MigrateMA                 *bool                            `json:"migrate_ma,omitempty"`
 	VMPL                      *uint32                          `json:"vmpl,omitempty"`
 	MaxVMPL                   *uint32                          `json:"max_vmpl,omitempty"`
-	ReportedTcb               *teetypes.SnpTcb                 `json:"reported_tcb,omitempty"`
 	MinTcbMet                 *bool                            `json:"min_tcb_met,omitempty"`
 	CRLOK                     *bool                            `json:"crl_ok"`
 	TCBStatus                 *teetypes.DcapVerificationStatus `json:"tcb_status,omitempty"`
@@ -133,9 +132,9 @@ func (r *VerifyResponse) UnmarshalJSON(data []byte) error {
 			Claims:          res.Claims,
 			ReportDataMatch: res.ReportDataMatch,
 			TCBStatus:       res.TCBStatus,
-			// Collateral currency is part of the service's verdict, which is
-			// the only check this field can report here.
-			CollateralVerified:        w.Passed,
+			// As for the in-process verifiers: whether revocation was
+			// checked. The service reports crl_ok whenever it was.
+			CollateralVerified:        res.CRLOK != nil,
 			MeasurementRegisters:      res.MeasurementRegisters,
 			MeasurementRegistersMatch: res.MeasurementRegistersMatch,
 		},
@@ -171,14 +170,12 @@ func (r *VerifyResponse) UnmarshalJSON(data []byte) error {
 		out.Result.LaunchDigestMatch = res.LaunchDigestMatch
 	case res.MRTDMatch != nil:
 		out.Result.LaunchDigestMatch = res.MRTDMatch
-		out.Result.MRTDMatch = res.MRTDMatch
 	}
 	if len(res.RTMRMatch) > 4 {
 		return fmt.Errorf("remote: /verify result carries %d rtmr_match entries, want at most 4", len(res.RTMRMatch))
 	}
-	rtmrs := []**bool{&out.Result.RTMR0Match, &out.Result.RTMR1Match, &out.Result.RTMR2Match, &out.Result.RTMR3Match}
 	for i, m := range res.RTMRMatch {
-		*rtmrs[i] = m
+		out.Result.SetRTMRMatch(i, m)
 	}
 	*r = out
 	return nil
@@ -186,8 +183,7 @@ func (r *VerifyResponse) UnmarshalJSON(data []byte) error {
 
 // MarshalJSON writes the service's {result, passed, token} from the mapped
 // fields, so stubs and tests answer in the shape a client decodes. The
-// platform family picks the field names; a result with no family writes both
-// spellings of the shared checks.
+// platform family picks the field names, so Result.Platform must be set.
 func (r VerifyResponse) MarshalJSON() ([]byte, error) {
 	res := r.Result
 	w := verifyWire{
@@ -212,23 +208,20 @@ func (r VerifyResponse) MarshalJSON() ([]byte, error) {
 	if w.Result.Collateral == nil {
 		w.Result.Collateral = []CollateralUsed{}
 	}
-	family := res.Platform.Family()
-	if family != teetypes.FamilyTDX {
+	switch res.Platform.Family() {
+	case teetypes.FamilySNP:
 		w.Result.HostDataMatch = res.InitDataMatch
 		w.Result.LaunchDigestMatch = res.LaunchDigestMatch
 		w.Result.MigrateMA = teetypes.Ptr(r.Checks.MigrateMA)
 		w.Result.VMPL = teetypes.Ptr(r.Checks.VMPL)
 		w.Result.MaxVMPL = teetypes.Ptr(r.Checks.MaxVMPL)
 		w.Result.MinTcbMet = r.Checks.MinTcbMet
-	}
-	if family != teetypes.FamilySNP {
+	case teetypes.FamilyTDX:
 		w.Result.InitDataMatch = res.InitDataMatch
-		mrtd := res.MRTDMatch
-		if mrtd == nil {
-			mrtd = res.LaunchDigestMatch
-		}
-		w.Result.MRTDMatch = mrtd
+		w.Result.MRTDMatch = res.LaunchDigestMatch
 		w.Result.RTMRMatch = []*bool{res.RTMR0Match, res.RTMR1Match, res.RTMR2Match, res.RTMR3Match}
+	default:
+		return nil, fmt.Errorf("remote: a VerifyResponse needs a platform to pick its field names, got %q", res.Platform)
 	}
 	return json.Marshal(w)
 }

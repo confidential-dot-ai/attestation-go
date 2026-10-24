@@ -46,10 +46,15 @@ func okResult(platform teetypes.PlatformType, launchDigest string) VerifyRespons
 	}}
 }
 
+// sent is the platform-neutral view of the pins a recorded request carried.
+func sent(req VerifyRequest) Pins {
+	pins, _ := req.Policies.Pins(req.Platform)
+	return pins
+}
+
 // sentSNP and sentTDX return the params a recorded request carried for its
 // platform, whichever tag it used.
-func sentSNP(t *testing.T, req VerifyRequest) *SNPParams {
-	t.Helper()
+func sentSNP(req VerifyRequest) *SNPParams {
 	switch p := req.Policies; req.Platform {
 	case teetypes.PlatformSNP:
 		return p.SNP
@@ -63,8 +68,7 @@ func sentSNP(t *testing.T, req VerifyRequest) *SNPParams {
 	return nil
 }
 
-func sentTDX(t *testing.T, req VerifyRequest) *TDXParams {
-	t.Helper()
+func sentTDX(req VerifyRequest) *TDXParams {
 	switch p := req.Policies; req.Platform {
 	case teetypes.PlatformTDX:
 		return p.TDX
@@ -74,18 +78,6 @@ func sentTDX(t *testing.T, req VerifyRequest) *TDXParams {
 		if p.AzTDX != nil {
 			return &p.AzTDX.TDXParams
 		}
-	}
-	return nil
-}
-
-// sentReportData is the report-data pin a recorded request carried.
-func sentReportData(t *testing.T, req VerifyRequest) []byte {
-	t.Helper()
-	if s := sentSNP(t, req); s != nil {
-		return s.ReportData
-	}
-	if x := sentTDX(t, req); x != nil {
-		return x.ReportData
 	}
 	return nil
 }
@@ -113,7 +105,7 @@ func TestVerifyEvidenceSendsReportDataVerbatim(t *testing.T) {
 			if _, err := c.VerifyEvidence(context.Background(), ev, Policy{ExpectedReportData: digest}); err != nil {
 				t.Fatalf("VerifyEvidence: %v", err)
 			}
-			if got := sentReportData(t, s.got); !bytes.Equal(got, digest) {
+			if got := sent(s.got).ReportData; !bytes.Equal(got, digest) {
 				t.Errorf("report_data = %x, want %x", got, digest)
 			}
 
@@ -121,7 +113,7 @@ func TestVerifyEvidenceSendsReportDataVerbatim(t *testing.T) {
 			if _, err := c.VerifyEvidence(context.Background(), ev, Policy{}); err != nil {
 				t.Fatalf("VerifyEvidence(zero policy): %v", err)
 			}
-			if got := sentReportData(t, s.got); got != nil {
+			if got := sent(s.got).ReportData; got != nil {
 				t.Errorf("zero policy sent report_data %x, want none", got)
 			}
 		})
@@ -150,7 +142,7 @@ func TestVerifyEvidenceRefusesMinTcbOffSNP(t *testing.T) {
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("VerifyEvidence(MinTcb) = %v, want %v", err, tc.want)
 			}
-			if tc.want == nil && (sentSNP(t, s.got) == nil || sentSNP(t, s.got).MinTcb == nil) {
+			if tc.want == nil && (sentSNP(s.got) == nil || sentSNP(s.got).MinTcb == nil) {
 				t.Error("min_tcb was not sent")
 			}
 			if tc.want != nil && s.got.Platform != "" {
@@ -276,7 +268,7 @@ func TestVerifyEvidenceSendsPinsAndRechecksClaims(t *testing.T) {
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("VerifyEvidence() = %v, want %v", err, tc.want)
 			}
-			sent := sentTDX(t, s.got)
+			sent := sentTDX(s.got)
 			if sent == nil || !slices.EqualFunc(sent.MRTD, tc.policy.Measurements, bytes.Equal) {
 				t.Fatalf("mrtd sent = %+v, want %x", sent, tc.policy.Measurements)
 			}
@@ -319,7 +311,7 @@ func TestVerifyEvidenceMeasurementRegisters(t *testing.T) {
 	if _, err := c.VerifyEvidence(context.Background(), ev, policy); err != nil {
 		t.Fatalf("VerifyEvidence: %v", err)
 	}
-	sent := sentSNP(t, s.got)
+	sent := sentSNP(s.got)
 	if sent == nil || sent.MeasurementRegisters == nil || len(*sent.MeasurementRegisters) != 1 || len(sent.ReportData) != reportDataSize {
 		t.Fatalf("sent = %+v", sent)
 	}

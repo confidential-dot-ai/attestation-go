@@ -50,11 +50,7 @@ func evidenceForExtension(env teetypes.AttestationEvidence) ([]byte, *teetypes.A
 		}
 		env.Evidence = stripped
 	}
-	env.Platform = platform
-	// Collateral is for a verifier working offline, not for a certificate: it
-	// runs to hundreds of kilobytes, and the relying party fetches its own.
-	env.Collateral = nil
-	evidence, err := json.Marshal(env)
+	evidence, err := json.Marshal(certificateEnvelope{Platform: platform, Evidence: env.Evidence})
 	if err != nil {
 		return nil, nil, fmt.Errorf("armtls: marshal %q evidence envelope: %w", platform, err)
 	}

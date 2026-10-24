@@ -281,12 +281,8 @@ func TestVerifyResponseRoundTrip(t *testing.T) {
 			if bytes.Contains(body, []byte("signature_valid")) {
 				t.Fatalf("signature_valid on the wire: %s", body)
 			}
-			resp.Result.CollateralVerified = resp.Passed
 			if resp.Checks.Collateral == nil {
 				resp.Checks.Collateral = []CollateralUsed{}
-			}
-			if resp.Result.Platform.Family() == teetypes.FamilyTDX {
-				resp.Result.MRTDMatch = resp.Result.LaunchDigestMatch
 			}
 			got, _ := json.Marshal(back)
 			want, _ := json.Marshal(resp)
