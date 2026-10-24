@@ -187,12 +187,23 @@ resp, err := c.Attest(ctx, remote.AttestRequest{
 evidence := resp.Envelope() // teetypes.AttestationEvidence
 ```
 
+`/attest` also attaches the vendor collateral a verifier needs (certificate
+chains, CRLs, TCB info), as `Collateral`. `Envelope()` keeps it and
+`VerifyEvidence` forwards it to `/verify`, so a verifier that cannot reach the
+vendors still checks the chain. `armtls` certificate extensions carry the
+evidence alone; the verifier fetches collateral itself.
+
 ### Verifying evidence
 
-**`/verify` returns a report, not a decision.** It says what the evidence
-contained — including that the signature did not check out. A caller that reads
-the report without gating on it accepts anything the service could parse. Use
-`VerifyEvidence`, which enforces the verdict and then your reference values:
+**A 200 from `/verify` means the evidence is genuine, not that it passed.**
+The service answers evidence whose hardware signature and certificate chain
+verify with `{result, passed, token}`: `result` carries the verified claims and
+the outcome of every check the request asked for, `passed` whether all of them
+held. A signature that does not check out is a 422 `verification_failed`
+(`*APIError`), never a 200. A caller that reads `result` without gating on
+`passed` accepts any genuine guest. Use `VerifyEvidence`, which sends the
+policy's pins to the service, requires it to affirm each of them and `passed`,
+and then re-checks the returned claims against the same reference values:
 
 ```go
 resp, err := c.VerifyEvidence(ctx, evidence, remote.Policy{
@@ -211,31 +222,59 @@ as `ErrAnchorNotAllowed`.
 Azure SNP refuses this binding because its paravisor owns HOSTDATA.
 
 `Client.Verify` is the raw endpoint, for callers enforcing the verdict
-themselves; `Client.VerifyEnforced` is the middle ground (verdict gated,
-reference values not).
+themselves; `Client.VerifyEnforced` is the middle ground (`passed` and every
+asked check gated, reference values not re-read).
 
-### Letting the service enforce measurements
+### Policies: what the service checks
 
-`VerifyParams` can carry the expected measurements, in which case the service
-refuses rather than reporting. It fails closed on both a mismatch and a pin the
-evidence cannot answer — a register pin against SEV-SNP evidence, say — and
-returns an `*APIError`.
-
-The service names one concept twice, `expected_mrtd` on TDX and
-`expected_launch_digest` on SEV-SNP. `SetExpectedMeasurements` picks the field
-so callers do not:
+`/verify` takes `policies`, an object keyed by platform tag (`snp`, `tdx`,
+`az-snp`, `az-tdx`, `gcp-snp`, `gcp-tdx`). The service applies the entry for
+the platform it detected in the evidence and refuses evidence with no entry
+(`platform_not_allowed`). `PoliciesFor` builds it from a `Policy`: the launch
+set (`Images` and `Measurements`) becomes `launch_digest` on SEV-SNP or `mrtd`
+on TDX, `Registers` become `rtmr0`..`rtmr3`, `PCRs` go into the Azure entries,
+`MinTcb` only into SEV-SNP. Every set accepts one or many values, so a policy
+that allows several images is expressed server-side. A pin the platform cannot
+answer is refused before any request is made.
 
 ```go
-var params remote.VerifyParams
-err := params.SetExpectedMeasurements(platform, launchMeasurement, map[int][]byte{
-    1: rtmr1, // bootloader and UKI image
-    2: rtmr2, // UKI sections, command line and initrd
-})
+policies, err := remote.PoliciesFor(evidence.Platform, policy)
+resp, err := c.VerifyEnforced(ctx, remote.NewVerifyRequest(evidence, policies, false))
 ```
 
-This pins **one** measurement. A policy that accepts any of several images
-cannot be expressed server-side; use `Policy.Measurements` or `Policy.Images`
-with `VerifyEvidence`, which checks the returned report instead.
+A check the request did not ask for comes back `nil`, and `EnforceVerdict`
+treats an unanswered pin as a failure, so a policy is never reported as
+enforced when nothing checked it. Rules the service applies on its own (debug,
+VMPL, TCB floor, revocation, collateral currency) come back in
+`VerifyResponse.Checks`; when one fails, `passed` is false and the enforced
+paths return `ErrRejected` naming it.
+
+### SEV-SNP measurement registers
+
+A bare-metal SEV-SNP guest kernel with the measurement-register provider
+commits its registers to the report: `REPORT_DATA` is a commitment to the
+replayed event log and the requester's 64 bytes, not the bytes themselves. Setting
+`Policy.MeasurementRegisters` selects that mode: the expected final values in
+index order, at most 16, registers past the list zero, so
+`AllZeroMeasurementRegisters()` pins a kernel that extended nothing. It needs
+`ExpectedReportData` (1 to 64 bytes; the service zero-extends them as `/attest`
+did), a launch pin, and evidence that carries the `event_log`. The service
+replays the log, checks the commitment, and returns the registers with
+`measurement_registers_match`; `EnforceMeasurementRegisters` re-checks them
+client-side. Only `snp` accepts it.
+
+Every pinned launch digest must be an image whose kernel has the provider: on
+an image without it, guest root chooses `REPORT_DATA` and can forge any
+registers. With debug allowed, or without `MinTcb`, the host can do the same.
+
+```go
+resp, err := c.VerifyEvidence(ctx, evidence, remote.Policy{
+    ExpectedReportData:   nonce[:],
+    Images:               providerImages,
+    MinTcb:               &floor,
+    MeasurementRegisters: remote.AllZeroMeasurementRegisters(),
+})
+```
 
 ### Pinning Azure vTPM PCRs
 

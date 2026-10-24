@@ -1,0 +1,1 @@
+{"error":"verification_failed","message":"verification failed: hardware signature verification failed: VEK does not sign the attestation report: signature::Error { source: None }"}

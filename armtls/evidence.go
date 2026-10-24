@@ -50,8 +50,7 @@ func evidenceForExtension(env teetypes.AttestationEvidence) ([]byte, *teetypes.A
 		}
 		env.Evidence = stripped
 	}
-	env.Platform = platform
-	evidence, err := json.Marshal(env)
+	evidence, err := json.Marshal(certificateEnvelope{Platform: platform, Evidence: env.Evidence})
 	if err != nil {
 		return nil, nil, fmt.Errorf("armtls: marshal %q evidence envelope: %w", platform, err)
 	}

@@ -96,8 +96,7 @@ func EnforceImagesWithRuntimeLog(resp VerifyResponse, images []ImagePin, platfor
 		}
 		if len(img.Registers) > 0 {
 			if !platform.HasRegisters() {
-				lastErr = fmt.Errorf("%s: %w: %d register(s) pinned but platform %q has none",
-					img.Name, ErrRegistersNotAllowed, len(img.Registers), platform)
+				lastErr = fmt.Errorf("%s: %w", img.Name, errRegistersOffPlatform(len(img.Registers), platform))
 				continue
 			}
 			if err := enforceRTMRsAgainst(resp.Result.Claims, img.Registers); err != nil {

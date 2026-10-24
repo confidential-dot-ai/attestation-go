@@ -44,6 +44,12 @@ const (
 type AttestationEvidence struct {
 	Platform PlatformType    `json:"platform"`
 	Evidence json.RawMessage `json:"evidence"`
+	// Collateral is what attestation-api's /attest attached next to the
+	// evidence (vendor certificates, CRLs, TCB info), as the service emits it.
+	// Forward it to /verify so verification can proceed offline; leave it out
+	// of anything size-bound such as a certificate extension. The in-process
+	// verifiers ignore it.
+	Collateral json.RawMessage `json:"collateral,omitempty"`
 }
 
 // MaxEvidenceFieldSize caps a single decoded evidence field (quote, report,
@@ -131,6 +137,57 @@ type VerificationResult struct {
 	RTMR3ReplayMatch *bool `json:"rtmr3_replay_match,omitempty"`
 	// TCBStatus carries platform-specific collateral/TCB details (TDX DCAP).
 	TCBStatus *DcapVerificationStatus `json:"tcb_status,omitempty"`
+	// MeasurementRegisters are the SEV-SNP guest kernel's measurement
+	// registers the report's REPORT_DATA committed to, replayed from the event
+	// log the evidence carried. Only a verifier asked to check them (register
+	// mode) reports them, and only on a result that passed; nil otherwise.
+	MeasurementRegisters *MeasurementRegisters `json:"measurement_registers,omitempty"`
+	// MeasurementRegistersMatch is nil outside register mode, else whether the
+	// replayed registers equal the expected ones.
+	MeasurementRegistersMatch *bool `json:"measurement_registers_match,omitempty"`
+}
+
+// MeasurementRegisterCount is how many SHA-384 measurement registers an
+// SEV-SNP guest kernel with the register provider holds.
+const MeasurementRegisterCount = 16
+
+// RTMRMatch is the RTMR[i] match verdict, nil when unpinned or i is not a
+// register index.
+func (r *VerificationResult) RTMRMatch(i int) *bool {
+	if p := r.rtmrMatch(i); p != nil {
+		return *p
+	}
+	return nil
+}
+
+// SetRTMRMatch records the RTMR[i] match verdict; an index outside 0..3 is
+// ignored.
+func (r *VerificationResult) SetRTMRMatch(i int, v *bool) {
+	if p := r.rtmrMatch(i); p != nil {
+		*p = v
+	}
+}
+
+func (r *VerificationResult) rtmrMatch(i int) **bool {
+	switch i {
+	case 0:
+		return &r.RTMR0Match
+	case 1:
+		return &r.RTMR1Match
+	case 2:
+		return &r.RTMR2Match
+	case 3:
+		return &r.RTMR3Match
+	}
+	return nil
+}
+
+// MeasurementRegisters is the state of the SEV-SNP kernel measurement registers
+// that a report committed to: the replay of the first EventCount entries of the
+// guest's event log. Registers holds the sixteen SHA-384 values in index order.
+type MeasurementRegisters struct {
+	EventCount uint32   `json:"event_count"`
+	Registers  [][]byte `json:"registers"`
 }
 
 // Check reports whether the result may be read as a verdict at all: a nil

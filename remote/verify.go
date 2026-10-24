@@ -18,9 +18,17 @@ import (
 // [errors.Is]. Transport and service failures keep their own typed errors
 // ([RequestError], [APIError], [UnexpectedError]).
 var (
-	// ErrSignatureInvalid: the service reported the hardware signature chain
-	// does not verify.
+	// ErrSignatureInvalid: the result does not carry a verified hardware
+	// signature. The service answers a bad signature with 422
+	// verification_failed, an [APIError], so from it this is unreachable; a
+	// stub or an in-process result can still produce it.
 	ErrSignatureInvalid = errors.New("remote: attestation signature invalid")
+
+	// ErrRejected: the service found the evidence genuine but it failed a
+	// rule of the policy that no more specific sentinel names: a debug guest,
+	// a VMPL above the limit, a TCB below the floor, revoked or outdated
+	// collateral, a migration agent allowed.
+	ErrRejected = errors.New("remote: evidence rejected by the verification policy")
 
 	// ErrReportDataMismatch: the evidence does not bind the expected
 	// report data (absent or false verdict).
@@ -124,12 +132,40 @@ type Policy struct {
 	// layout.
 	PCRs map[int][]byte
 
-	// ExpectedInitDataHash, when set, is sent as expected_init_data_hash and
-	// the verdict must come back affirmatively true. The platform decides what
-	// backs it: SEV-SNP HOST_DATA, TDX MRCONFIGID zero-padded, or vTPM PCR[8]
-	// on the Azure overlays.
+	// ExpectedInitDataHash, when set, is sent as the platform's init-data pin
+	// (host_data on SEV-SNP, init_data on TDX) and the verdict must come back
+	// affirmatively true. The platform decides what backs it: SEV-SNP
+	// HOST_DATA, TDX MRCONFIGID zero-padded, or vTPM PCR[8] on the Azure
+	// overlays.
 	ExpectedInitDataHash []byte
+
+	// MeasurementRegisters pins the SEV-SNP guest kernel's measurement
+	// registers: the expected final values in index order, at most sixteen,
+	// each SHA-384. Registers past the list must be zero, so
+	// [AllZeroMeasurementRegisters] pins a kernel that has measured nothing.
+	// nil pins none and leaves register mode off.
+	//
+	// Setting it selects the service's register mode: the report's
+	// REPORT_DATA must commit to the evidence's event log and to the
+	// requester's bytes, and the replayed registers must equal these values.
+	// The mode exists only on bare-metal snp, so a pin on any other platform
+	// is refused with [ErrRegistersNotAllowed]. It also needs
+	// ExpectedReportData (the bytes sent to /attest; the client zero-extends
+	// them to the 64-byte field the kernel committed to) and a launch
+	// measurement pin, Images or Measurements: without one, an image without
+	// the register provider could forge any register values.
+	//
+	// Every pinned image must carry the register provider, and the reference
+	// values must come from the operator's own build, never from a presented
+	// log. With AllowDebug, or without MinTcb, the host can forge the
+	// registers as well: a debug guest's memory is host-writable, and firmware
+	// with known bugs may be.
+	MeasurementRegisters [][]byte
 }
+
+// AllZeroMeasurementRegisters is the [Policy.MeasurementRegisters] pin for a
+// guest kernel whose registers were never extended: all sixteen zero.
+func AllZeroMeasurementRegisters() [][]byte { return [][]byte{} }
 
 // VerifyEnforced posts req to /verify and fails closed on the verdict
 // ([EnforceVerdict]). Every caller that trusts a response must gate on the
@@ -146,60 +182,86 @@ func (c Client) VerifyEnforced(ctx context.Context, req VerifyRequest) (VerifyRe
 	return resp, nil
 }
 
-// EnforceVerdict fails closed on a /verify response: the hardware signature
-// must be valid, where req asked for a report-data or init-data match the
-// verdict must be affirmatively true, and every expected measurement req
-// carried must equal the claim the service returned. For callers holding a
-// response from a fakeable interface; callers with a concrete [Client] use
-// [Client.VerifyEnforced].
+// EnforceVerdict fails closed on a /verify response: the result must carry a
+// verified signature, the service must report the evidence as passed, and
+// where req asked for a check its verdict must be affirmatively true, not
+// merely absent. For callers holding a response from a fakeable interface;
+// callers with a concrete [Client] use [Client.VerifyEnforced].
 //
-// Measurements are re-checked here rather than trusted to the service's
-// verdict: a service predating those request fields ignores them and returns
-// a clean report, so the only evidence that a pin was enforced is the claim
-// itself.
+// A failed check is named by its sentinel: report data, init data, launch
+// measurement, registers (TDX RTMRs or SEV-SNP measurement registers) and
+// vTPM PCRs each have one; everything else the service rejects on (debug,
+// VMPL, TCB floor, collateral, migration agent) is [ErrRejected].
+//
+// The measurements the request pinned server-side are re-checked against the
+// returned claims by [EnforcePins], not here: a verdict says a rule held, the
+// claim says what value it held for.
 func EnforceVerdict(req VerifyRequest, resp VerifyResponse) error {
 	if err := resp.Result.Check(); err != nil {
 		return ErrSignatureInvalid
 	}
-	if req.Params == nil {
-		return nil
+	asked, ok := req.Policies.Pins(req.Platform)
+	if !ok {
+		// The service answers 422 platform_not_allowed; a stub that did not
+		// must not pass on resp.Passed alone.
+		return fmt.Errorf("%w: the request carries no policies for %q", ErrUnsupportedPlatform, req.Platform)
 	}
-	if len(req.Params.ExpectedReportData) > 0 {
-		if resp.Result.ReportDataMatch == nil || !*resp.Result.ReportDataMatch {
-			return ErrReportDataMismatch
+	if len(asked.ReportData) > 0 && !affirmed(resp.Result.ReportDataMatch) {
+		return ErrReportDataMismatch
+	}
+	if len(asked.InitData) > 0 && !affirmed(resp.Result.InitDataMatch) {
+		return ErrInitDataMismatch
+	}
+	if len(asked.Launch) > 0 && !affirmed(resp.Result.LaunchDigestMatch) {
+		return fmt.Errorf("%w: launch measurement does not match any reference value", ErrMeasurementNotAllowed)
+	}
+	for idx, pinned := range asked.RTMRs {
+		if len(pinned) > 0 && !affirmed(resp.Result.RTMRMatch(idx)) {
+			return fmt.Errorf("%w: RTMR[%d] does not match", ErrRegistersNotAllowed, idx)
 		}
 	}
-	if len(req.Params.ExpectedInitDataHash) > 0 {
-		if resp.Result.InitDataMatch == nil || !*resp.Result.InitDataMatch {
-			return ErrInitDataMismatch
-		}
+	if asked.MeasurementRegisters != nil && !affirmed(resp.Result.MeasurementRegistersMatch) {
+		return fmt.Errorf("%w: measurement registers do not match", ErrRegistersNotAllowed)
 	}
-	return enforceExpectedMeasurements(*req.Params, resp)
+	if len(asked.PCRs) > 0 && !affirmed(resp.Checks.PCRsMatch) {
+		return fmt.Errorf("%w: a pinned PCR does not match", ErrPCRNotAllowed)
+	}
+	if !resp.Passed {
+		return fmt.Errorf("%w: %s", ErrRejected, resp.Checks.rejection())
+	}
+	return nil
 }
 
-// enforceExpectedMeasurements compares the request's expected measurements
-// with the returned claims. Both launch fields compare against the one
-// normalized launch digest, since the service maps MRTD and the SNP launch
-// measurement onto it.
-func enforceExpectedMeasurements(params VerifyParams, resp VerifyResponse) error {
-	var allowed [][]byte
-	for _, m := range [][]byte{params.ExpectedLaunchDigest, params.ExpectedMRTD} {
-		if len(m) > 0 {
-			allowed = append(allowed, m)
+// affirmed is a verdict that is present and true.
+func affirmed(v *bool) bool { return v != nil && *v }
+
+// rejection names the rule a not-passed result failed, for the error text.
+func (c ServiceChecks) rejection() string {
+	switch {
+	case c.Debug && !c.AllowDebug:
+		return "the guest allows debug"
+	case c.MigrateMA:
+		return "the guest policy allows a migration agent"
+	case c.VMPL > c.MaxVMPL:
+		return fmt.Sprintf("the report is from VMPL %d, above %d", c.VMPL, c.MaxVMPL)
+	case c.MinTcbMet != nil && !*c.MinTcbMet:
+		return "the TCB is below the floor"
+	case c.CRLOK != nil && !*c.CRLOK:
+		return "a certificate in the chain is revoked"
+	case c.TCBStatusAccepted != nil && !*c.TCBStatusAccepted:
+		return "the TCB status is not accepted"
+	case c.EndorsementMatch != nil && !*c.EndorsementMatch:
+		return "the firmware is not endorsed"
+	}
+	for _, used := range c.Collateral {
+		if !used.Current && !used.Stale {
+			return fmt.Sprintf("collateral %q is out of date", used.Name)
+		}
+		if used.Floor != nil && used.Version != nil && *used.Version < *used.Floor {
+			return fmt.Sprintf("collateral %q is below its version floor", used.Name)
 		}
 	}
-	if len(allowed) > 0 {
-		if err := EnforceLaunchMeasurement(resp, allowed); err != nil {
-			return err
-		}
-	}
-	pinned := map[int][]byte{}
-	for idx, m := range [][]byte{params.ExpectedRTMR0, params.ExpectedRTMR1, params.ExpectedRTMR2, params.ExpectedRTMR3} {
-		if len(m) > 0 {
-			pinned[idx] = m
-		}
-	}
-	return EnforceRTMRs(resp, pinned)
+	return "the service did not report the evidence as passed"
 }
 
 // VerifyEvidence verifies an evidence envelope against policy, enforcing the
@@ -215,23 +277,11 @@ func (c Client) VerifyEvidence(ctx context.Context, evidence teetypes.Attestatio
 // VerifyEvidenceWithRuntimeLog is [Client.VerifyEvidence] for a peer that
 // claims a runtime extension list; see [EnforcePinsWithRuntimeLog].
 func (c Client) VerifyEvidenceWithRuntimeLog(ctx context.Context, evidence teetypes.AttestationEvidence, policy Policy, claimed []string) (VerifyResponse, error) {
-	family := evidence.Platform.Family()
-	if family == teetypes.FamilyUnknown {
-		return VerifyResponse{}, fmt.Errorf("%w: %q", ErrUnsupportedPlatform, evidence.Platform)
+	policies, err := PoliciesFor(evidence.Platform, policy)
+	if err != nil {
+		return VerifyResponse{}, err
 	}
-
-	// MinTcb is SEV-SNP's alone. Dropping it for another family would verify
-	// under no floor while the caller believes one was applied.
-	if policy.MinTcb != nil && family != teetypes.FamilySNP {
-		return VerifyResponse{}, fmt.Errorf("%w: platform %q has no SEV-SNP TCB", ErrMinTcbNotAllowed, evidence.Platform)
-	}
-
-	resp, err := c.VerifyEnforced(ctx, NewVerifyRequest(evidence, &VerifyParams{
-		ExpectedReportData:   policy.ExpectedReportData,
-		ExpectedInitDataHash: policy.ExpectedInitDataHash,
-		AllowDebug:           teetypes.Ptr(policy.AllowDebug),
-		MinTcb:               policy.MinTcb,
-	}, false))
+	resp, err := c.VerifyEnforced(ctx, NewVerifyRequest(evidence, policies, false))
 	if err != nil {
 		return VerifyResponse{}, err
 	}
@@ -276,6 +326,11 @@ func EnforcePinsWithRuntimeLog(resp VerifyResponse, policy Policy, evidence teet
 	if err := EnforcePCRs(evidence, resp.Result.Claims, policy.PCRs); err != nil {
 		return err
 	}
+	// So are SEV-SNP measurement registers: the launch measurement identifies
+	// the image, the registers what its kernel measured after launch.
+	if err := EnforceMeasurementRegisters(resp, platform, policy.MeasurementRegisters); err != nil {
+		return err
+	}
 	if len(policy.Images) > 0 {
 		return EnforceImagesWithRuntimeLog(resp, policy.Images, platform, claimed)
 	}
@@ -288,8 +343,7 @@ func EnforcePinsWithRuntimeLog(resp VerifyResponse, policy Policy, evidence teet
 		return EnforceRTMRs(resp, policy.Registers)
 	}
 	if len(policy.Registers) > 0 {
-		return fmt.Errorf("%w: %d register(s) pinned but platform %q has none",
-			ErrRegistersNotAllowed, len(policy.Registers), platform)
+		return errRegistersOffPlatform(len(policy.Registers), platform)
 	}
 	return nil
 }
@@ -315,8 +369,7 @@ func EnforcePCRs(evidence teetypes.AttestationEvidence, claims teetypes.Claims, 
 		return nil
 	}
 	if !evidence.Platform.HasVTPMQuote() {
-		return fmt.Errorf("%w: %d register(s) pinned but platform %q carries no vTPM quote",
-			ErrPCRNotAllowed, len(pinned), evidence.Platform)
+		return errPCRsOffPlatform(len(pinned), evidence.Platform)
 	}
 	signed, err := signedPCRSelection(evidence.Evidence)
 	if err != nil {
