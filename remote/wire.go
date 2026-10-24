@@ -1,6 +1,7 @@
 package remote
 
 import (
+	"crypto/sha512"
 	"encoding/json"
 	"fmt"
 
@@ -9,7 +10,7 @@ import (
 
 // measurementSize is the width of every launch measurement and register the
 // service pins: SHA-384.
-const measurementSize = 48
+const measurementSize = sha512.Size384
 
 // reportDataSize is the width of the hardware report-data field on every
 // native platform. The service zero-extends a shorter value into it.
