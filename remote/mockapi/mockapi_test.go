@@ -157,7 +157,7 @@ func TestStubVerifyRecordsAndAnswersVerdict(t *testing.T) {
 	req := remote.NewVerifyRequest(teetypes.AttestationEvidence{
 		Platform: teetypes.PlatformGcpSNP,
 		Evidence: json.RawMessage(`{"quote":"x"}`),
-	}, &remote.VerifyParams{ExpectedReportData: expected}, false)
+	}, remote.Policies{GcpSNP: &remote.SNPParams{ReportData: expected}}, false)
 
 	resp, err := remote.NewClient(stub.URL()).VerifyEnforced(context.Background(), req)
 	if err != nil {
@@ -174,8 +174,8 @@ func TestStubVerifyRecordsAndAnswersVerdict(t *testing.T) {
 	if len(reqs) != 1 {
 		t.Fatalf("/verify calls = %d, want 1", len(reqs))
 	}
-	if reqs[0].Params == nil || !bytes.Equal(reqs[0].Params.ExpectedReportData, expected) {
-		t.Fatalf("recorded expected_report_data = %+v, want %x", reqs[0].Params, expected)
+	if reqs[0].Policies.GcpSNP == nil || !bytes.Equal(reqs[0].Policies.GcpSNP.ReportData, expected) {
+		t.Fatalf("recorded gcp-snp report_data = %+v, want %x", reqs[0].Policies.GcpSNP, expected)
 	}
 	if reqs[0].Platform != teetypes.PlatformGcpSNP {
 		t.Fatalf("recorded platform = %q, want gcp-snp", reqs[0].Platform)
@@ -192,7 +192,7 @@ func TestStubVerifyMismatchFailsEnforcement(t *testing.T) {
 
 	req := remote.NewVerifyRequest(
 		teetypes.AttestationEvidence{Platform: teetypes.PlatformSNP, Evidence: json.RawMessage(`{}`)},
-		&remote.VerifyParams{ExpectedReportData: []byte("expected-report-data")}, false)
+		remote.Policies{SNP: &remote.SNPParams{ReportData: []byte("expected-report-data")}}, false)
 	_, err := remote.NewClient(stub.URL()).VerifyEnforced(context.Background(), req)
 	if !errors.Is(err, remote.ErrReportDataMismatch) {
 		t.Fatalf("err = %v, want ErrReportDataMismatch", err)
@@ -209,7 +209,7 @@ func TestStubVerifyErrorAnswersTheRefusalShape(t *testing.T) {
 
 	req := remote.NewVerifyRequest(
 		teetypes.AttestationEvidence{Platform: teetypes.PlatformSNP, Evidence: json.RawMessage(`{}`)},
-		&remote.VerifyParams{ExpectedReportData: []byte("expected-report-data")}, false)
+		remote.Policies{SNP: &remote.SNPParams{ReportData: []byte("expected-report-data")}}, false)
 	_, err := c.VerifyEnforced(context.Background(), req)
 
 	var apiErr *remote.APIError
@@ -249,7 +249,7 @@ func TestStubVerifyErrorPlainTextBody(t *testing.T) {
 
 	req := remote.NewVerifyRequest(
 		teetypes.AttestationEvidence{Platform: teetypes.PlatformSNP, Evidence: json.RawMessage(`{}`)},
-		&remote.VerifyParams{ExpectedReportData: []byte("expected-report-data")}, false)
+		remote.Policies{SNP: &remote.SNPParams{ReportData: []byte("expected-report-data")}}, false)
 	_, err := remote.NewClient(stub.URL()).VerifyEnforced(context.Background(), req)
 
 	var unexpected *remote.UnexpectedError

@@ -38,12 +38,56 @@ func (s *verifyServer) start(t *testing.T) Client {
 
 func okResult(platform teetypes.PlatformType, launchDigest string) VerifyResponse {
 	match := true
-	return VerifyResponse{Result: teetypes.VerificationResult{
+	return VerifyResponse{Passed: true, Result: teetypes.VerificationResult{
 		SignatureValid:  true,
 		Platform:        platform,
 		ReportDataMatch: &match,
 		Claims:          teetypes.Claims{LaunchDigest: launchDigest},
 	}}
+}
+
+// sentSNP and sentTDX return the params a recorded request carried for its
+// platform, whichever tag it used.
+func sentSNP(t *testing.T, req VerifyRequest) *SNPParams {
+	t.Helper()
+	switch p := req.Policies; req.Platform {
+	case teetypes.PlatformSNP:
+		return p.SNP
+	case teetypes.PlatformGcpSNP:
+		return p.GcpSNP
+	case teetypes.PlatformAzSNP:
+		if p.AzSNP != nil {
+			return &p.AzSNP.SNPParams
+		}
+	}
+	return nil
+}
+
+func sentTDX(t *testing.T, req VerifyRequest) *TDXParams {
+	t.Helper()
+	switch p := req.Policies; req.Platform {
+	case teetypes.PlatformTDX:
+		return p.TDX
+	case teetypes.PlatformGcpTDX:
+		return p.GcpTDX
+	case teetypes.PlatformAzTDX:
+		if p.AzTDX != nil {
+			return &p.AzTDX.TDXParams
+		}
+	}
+	return nil
+}
+
+// sentReportData is the report-data pin a recorded request carried.
+func sentReportData(t *testing.T, req VerifyRequest) []byte {
+	t.Helper()
+	if s := sentSNP(t, req); s != nil {
+		return s.ReportData
+	}
+	if x := sentTDX(t, req); x != nil {
+		return x.ReportData
+	}
+	return nil
 }
 
 // A 48-byte SHA-384-shaped value, as hex.
@@ -69,16 +113,16 @@ func TestVerifyEvidenceSendsReportDataVerbatim(t *testing.T) {
 			if _, err := c.VerifyEvidence(context.Background(), ev, Policy{ExpectedReportData: digest}); err != nil {
 				t.Fatalf("VerifyEvidence: %v", err)
 			}
-			if got := s.got.Params.ExpectedReportData; !bytes.Equal(got, digest) {
-				t.Errorf("expected_report_data = %x, want %x", got, digest)
+			if got := sentReportData(t, s.got); !bytes.Equal(got, digest) {
+				t.Errorf("report_data = %x, want %x", got, digest)
 			}
 
 			s.got, s.resp.Result.ReportDataMatch = VerifyRequest{}, nil
 			if _, err := c.VerifyEvidence(context.Background(), ev, Policy{}); err != nil {
 				t.Fatalf("VerifyEvidence(zero policy): %v", err)
 			}
-			if got := s.got.Params.ExpectedReportData; got != nil {
-				t.Errorf("zero policy sent expected_report_data %x, want none", got)
+			if got := sentReportData(t, s.got); got != nil {
+				t.Errorf("zero policy sent report_data %x, want none", got)
 			}
 		})
 	}
@@ -106,7 +150,7 @@ func TestVerifyEvidenceRefusesMinTcbOffSNP(t *testing.T) {
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("VerifyEvidence(MinTcb) = %v, want %v", err, tc.want)
 			}
-			if tc.want == nil && s.got.Params.MinTcb == nil {
+			if tc.want == nil && (sentSNP(t, s.got) == nil || sentSNP(t, s.got).MinTcb == nil) {
 				t.Error("min_tcb was not sent")
 			}
 			if tc.want != nil && s.got.Platform != "" {
@@ -131,7 +175,19 @@ func TestVerifyEvidenceUnknownPlatformFailsClosed(t *testing.T) {
 
 func TestEnforceVerdict(t *testing.T) {
 	yes, no := true, false
-	withRD := VerifyRequest{Params: &VerifyParams{ExpectedReportData: []byte("x")}}
+	snpReq := func(p SNPParams) VerifyRequest {
+		return VerifyRequest{Platform: teetypes.PlatformSNP, Policies: Policies{SNP: &p}}
+	}
+	tdxReq := func(p TDXParams) VerifyRequest {
+		return VerifyRequest{Platform: teetypes.PlatformAzTDX, Policies: Policies{AzTDX: &AzTDXParams{TDXParams: p, PCRs: map[int][]byte{4: pcr(1)}}}}
+	}
+	withRD := snpReq(SNPParams{ReportData: []byte("x")})
+	genuine := func(mutate func(*VerifyResponse)) VerifyResponse {
+		resp := VerifyResponse{Passed: true, Result: teetypes.VerificationResult{SignatureValid: true}}
+		mutate(&resp)
+		return resp
+	}
+	none := func(*VerifyResponse) {}
 
 	for _, tc := range []struct {
 		name string
@@ -139,11 +195,29 @@ func TestEnforceVerdict(t *testing.T) {
 		resp VerifyResponse
 		want error
 	}{
-		{"bad signature", VerifyRequest{}, VerifyResponse{}, ErrSignatureInvalid},
-		{"no pins", VerifyRequest{}, VerifyResponse{Result: teetypes.VerificationResult{SignatureValid: true}}, nil},
-		{"report data absent", withRD, VerifyResponse{Result: teetypes.VerificationResult{SignatureValid: true}}, ErrReportDataMismatch},
-		{"report data false", withRD, VerifyResponse{Result: teetypes.VerificationResult{SignatureValid: true, ReportDataMatch: &no}}, ErrReportDataMismatch},
-		{"report data true", withRD, VerifyResponse{Result: teetypes.VerificationResult{SignatureValid: true, ReportDataMatch: &yes}}, nil},
+		{"bad signature", VerifyRequest{}, VerifyResponse{Passed: true}, ErrSignatureInvalid},
+		{"no pins", snpReq(SNPParams{}), genuine(none), nil},
+		{"not passed", snpReq(SNPParams{}), genuine(func(r *VerifyResponse) { r.Passed = false; r.Checks.Debug = true }), ErrRejected},
+		{"report data absent", withRD, genuine(none), ErrReportDataMismatch},
+		{"report data false", withRD, genuine(func(r *VerifyResponse) { r.Result.ReportDataMatch = &no; r.Passed = false }), ErrReportDataMismatch},
+		{"report data true", withRD, genuine(func(r *VerifyResponse) { r.Result.ReportDataMatch = &yes }), nil},
+		{"launch digest false", snpReq(SNPParams{LaunchDigest: [][]byte{measurement(1)}}),
+			genuine(func(r *VerifyResponse) { r.Result.LaunchDigestMatch = &no; r.Passed = false }), ErrMeasurementNotAllowed},
+		{"launch digest unanswered", snpReq(SNPParams{LaunchDigest: [][]byte{measurement(1)}}), genuine(none), ErrMeasurementNotAllowed},
+		{"measurement registers false", snpReq(SNPParams{MeasurementRegisters: &[][]byte{}}),
+			genuine(func(r *VerifyResponse) { r.Result.MeasurementRegistersMatch = &no; r.Passed = false }), ErrRegistersNotAllowed},
+		{"measurement registers unanswered", snpReq(SNPParams{MeasurementRegisters: &[][]byte{}}), genuine(none), ErrRegistersNotAllowed},
+		{"host data false", snpReq(SNPParams{HostData: []byte("x")}),
+			genuine(func(r *VerifyResponse) { r.Result.InitDataMatch = &no; r.Passed = false }), ErrInitDataMismatch},
+		{"rtmr false", tdxReq(TDXParams{RTMR2: [][]byte{measurement(1)}}),
+			genuine(func(r *VerifyResponse) { r.Result.RTMR2Match = &no; r.Checks.PCRsMatch = &yes; r.Passed = false }), ErrRegistersNotAllowed},
+		{"pcr false", tdxReq(TDXParams{}),
+			genuine(func(r *VerifyResponse) { r.Checks.PCRsMatch = &no; r.Passed = false }), ErrPCRNotAllowed},
+		{"pcr unanswered", tdxReq(TDXParams{}), genuine(none), ErrPCRNotAllowed},
+		{"tdx all held", tdxReq(TDXParams{ReportData: []byte("x"), MRTD: [][]byte{measurement(1)}, RTMR1: [][]byte{measurement(2)}}),
+			genuine(func(r *VerifyResponse) {
+				r.Result.ReportDataMatch, r.Result.LaunchDigestMatch, r.Result.RTMR1Match, r.Checks.PCRsMatch = &yes, &yes, &yes, &yes
+			}), nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := EnforceVerdict(tc.req, tc.resp)
@@ -160,48 +234,136 @@ func TestEnforceVerdict(t *testing.T) {
 // An init-data pin the caller asked for must be affirmatively matched, not
 // tolerated when the service omits the verdict.
 func TestEnforceVerdictInitDataFailsClosed(t *testing.T) {
-	req := VerifyRequest{Params: &VerifyParams{ExpectedInitDataHash: []byte("x")}}
-
-	resp := VerifyResponse{Result: teetypes.VerificationResult{SignatureValid: true}}
-	if err := EnforceVerdict(req, resp); !errors.Is(err, ErrInitDataMismatch) {
-		t.Fatalf("EnforceVerdict with an unanswered init-data pin = %v, want ErrInitDataMismatch", err)
+	for _, req := range []VerifyRequest{
+		{Platform: teetypes.PlatformSNP, Policies: Policies{SNP: &SNPParams{HostData: []byte("x")}}},
+		{Platform: teetypes.PlatformTDX, Policies: Policies{TDX: &TDXParams{InitData: []byte("x")}}},
+	} {
+		resp := VerifyResponse{Passed: true, Result: teetypes.VerificationResult{SignatureValid: true}}
+		if err := EnforceVerdict(req, resp); !errors.Is(err, ErrInitDataMismatch) {
+			t.Fatalf("EnforceVerdict(%s) with an unanswered init-data pin = %v, want ErrInitDataMismatch", req.Platform, err)
+		}
 	}
 }
 
-// A service that predates the expected-measurement request fields ignores
-// them and returns a clean report. The pins are enforced against the returned
-// claims, so a report for one image is refused when another was requested.
-func TestVerifyEnforcedChecksExpectedMeasurementsAgainstClaims(t *testing.T) {
+// The pins reach the service, which answers each; the client then re-checks
+// them against the returned claims, so a service that answered true for a
+// claim that does not match is still refused.
+func TestVerifyEvidenceSendsPinsAndRechecksClaims(t *testing.T) {
 	reported, _ := hex.DecodeString(digestHex)
 	other := measurement(0xbb)
+	yes := true
 	claims := teetypes.Claims{LaunchDigest: digestHex, PlatformData: map[string]any{"rtmr_1": digestHex}}
 
 	for _, tc := range []struct {
 		name   string
-		launch []byte
-		rtmrs  map[int][]byte
+		policy Policy
 		want   error
 	}{
-		{"launch digest differs", other, nil, ErrMeasurementNotAllowed},
-		{"register differs", reported, map[int][]byte{1: other}, ErrRegistersNotAllowed},
-		{"register not reported", reported, map[int][]byte{2: reported}, ErrRegistersNotAllowed},
-		{"both match", reported, map[int][]byte{1: reported}, nil},
+		{"launch digest differs", Policy{Measurements: [][]byte{other}}, ErrMeasurementNotAllowed},
+		{"register differs", Policy{Measurements: [][]byte{reported}, Registers: map[int][]byte{1: other}}, ErrRegistersNotAllowed},
+		{"register not reported", Policy{Measurements: [][]byte{reported}, Registers: map[int][]byte{2: reported}}, ErrRegistersNotAllowed},
+		{"both match", Policy{Measurements: [][]byte{reported}, Registers: map[int][]byte{1: reported}}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			// The server says every pin held, whatever the claims say.
 			s := &verifyServer{resp: okResult(teetypes.PlatformTDX, digestHex)}
 			s.resp.Result.Claims = claims
+			s.resp.Result.LaunchDigestMatch, s.resp.Result.RTMR1Match, s.resp.Result.RTMR2Match = &yes, &yes, &yes
 			c := s.start(t)
 
-			var params VerifyParams
-			if err := params.SetExpectedMeasurements(teetypes.PlatformTDX, tc.launch, tc.rtmrs); err != nil {
-				t.Fatal(err)
-			}
 			ev := teetypes.AttestationEvidence{Platform: teetypes.PlatformTDX, Evidence: json.RawMessage(`{}`)}
-			_, err := c.VerifyEnforced(context.Background(), NewVerifyRequest(ev, &params, false))
+			_, err := c.VerifyEvidence(context.Background(), ev, tc.policy)
 			if !errors.Is(err, tc.want) {
-				t.Fatalf("VerifyEnforced() = %v, want %v", err, tc.want)
+				t.Fatalf("VerifyEvidence() = %v, want %v", err, tc.want)
+			}
+			sent := sentTDX(t, s.got)
+			if sent == nil || !slices.EqualFunc(sent.MRTD, tc.policy.Measurements, bytes.Equal) {
+				t.Fatalf("mrtd sent = %+v, want %x", sent, tc.policy.Measurements)
+			}
+			for idx, pin := range tc.policy.Registers {
+				got := [][][]byte{sent.RTMR0, sent.RTMR1, sent.RTMR2, sent.RTMR3}[idx]
+				if len(got) != 1 || !bytes.Equal(got[0], pin) {
+					t.Fatalf("rtmr%d sent = %x, want [%x]", idx, got, pin)
+				}
 			}
 		})
+	}
+}
+
+// Register mode end to end: the pin travels as the service's list, the
+// service's verdict is required, and the registers it reports must be the
+// pinned ones.
+func TestVerifyEvidenceMeasurementRegisters(t *testing.T) {
+	reported, _ := hex.DecodeString(digestHex)
+	yes, no := true, false
+	zero := make([]byte, measurementSize)
+	registers := make([][]byte, teetypes.MeasurementRegisterCount)
+	for i := range registers {
+		registers[i] = zero
+	}
+	registers[0] = measurement(0x0a)
+	policy := Policy{
+		ExpectedReportData:   measurement(0x5a),
+		Images:               []ImagePin{{Name: "node", Digest: reported}},
+		MeasurementRegisters: [][]byte{measurement(0x0a)},
+	}
+	ev := teetypes.AttestationEvidence{Platform: teetypes.PlatformSNP, Evidence: json.RawMessage(`{}`)}
+
+	passing := okResult(teetypes.PlatformSNP, digestHex)
+	passing.Result.LaunchDigestMatch = &yes
+	passing.Result.MeasurementRegistersMatch = &yes
+	passing.Result.MeasurementRegisters = &teetypes.MeasurementRegisters{EventCount: 1, Registers: registers}
+
+	s := &verifyServer{resp: passing}
+	c := s.start(t)
+	if _, err := c.VerifyEvidence(context.Background(), ev, policy); err != nil {
+		t.Fatalf("VerifyEvidence: %v", err)
+	}
+	sent := sentSNP(t, s.got)
+	if sent == nil || sent.MeasurementRegisters == nil || len(*sent.MeasurementRegisters) != 1 || len(sent.ReportData) != reportDataSize {
+		t.Fatalf("sent = %+v", sent)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		mutate func(*VerifyResponse)
+		want   error
+	}{
+		{"service says mismatch", func(r *VerifyResponse) { r.Result.MeasurementRegistersMatch = &no; r.Passed = false }, ErrRegistersNotAllowed},
+		{"service did not check", func(r *VerifyResponse) { r.Result.MeasurementRegistersMatch = nil }, ErrRegistersNotAllowed},
+		{"registers withheld", func(r *VerifyResponse) { r.Result.MeasurementRegisters = nil }, ErrRegistersNotAllowed},
+		{"other registers", func(r *VerifyResponse) {
+			other := slices.Clone(registers)
+			other[0] = measurement(0x0b)
+			r.Result.MeasurementRegisters = &teetypes.MeasurementRegisters{EventCount: 1, Registers: other}
+		}, ErrRegistersNotAllowed},
+		{"register past the pin set", func(r *VerifyResponse) {
+			other := slices.Clone(registers)
+			other[5] = measurement(0x0b)
+			r.Result.MeasurementRegisters = &teetypes.MeasurementRegisters{EventCount: 2, Registers: other}
+		}, ErrRegistersNotAllowed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := passing
+			resp.Result.MeasurementRegisters = &teetypes.MeasurementRegisters{EventCount: 1, Registers: slices.Clone(registers)}
+			tc.mutate(&resp)
+			s := &verifyServer{resp: resp}
+			if _, err := s.start(t).VerifyEvidence(context.Background(), ev, policy); !errors.Is(err, tc.want) {
+				t.Fatalf("VerifyEvidence = %v, want %v", err, tc.want)
+			}
+		})
+	}
+
+	// Off bare-metal snp the pin is refused before any request.
+	for _, platform := range []teetypes.PlatformType{teetypes.PlatformAzSNP, teetypes.PlatformGcpSNP, teetypes.PlatformTDX} {
+		s := &verifyServer{resp: okResult(platform, digestHex)}
+		_, err := s.start(t).VerifyEvidence(context.Background(), teetypes.AttestationEvidence{Platform: platform, Evidence: json.RawMessage(`{}`)}, policy)
+		if !errors.Is(err, ErrRegistersNotAllowed) {
+			t.Fatalf("VerifyEvidence(%s) = %v, want ErrRegistersNotAllowed", platform, err)
+		}
+		if s.got.Platform != "" {
+			t.Fatalf("%s: evidence was sent despite the refused pin", platform)
+		}
 	}
 }
 
