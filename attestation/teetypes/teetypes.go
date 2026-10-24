@@ -151,6 +151,37 @@ type VerificationResult struct {
 // SEV-SNP guest kernel with the register provider holds.
 const MeasurementRegisterCount = 16
 
+// RTMRMatch is the RTMR[i] match verdict, nil when unpinned or i is not a
+// register index.
+func (r *VerificationResult) RTMRMatch(i int) *bool {
+	if p := r.rtmrMatch(i); p != nil {
+		return *p
+	}
+	return nil
+}
+
+// SetRTMRMatch records the RTMR[i] match verdict; an index outside 0..3 is
+// ignored.
+func (r *VerificationResult) SetRTMRMatch(i int, v *bool) {
+	if p := r.rtmrMatch(i); p != nil {
+		*p = v
+	}
+}
+
+func (r *VerificationResult) rtmrMatch(i int) **bool {
+	switch i {
+	case 0:
+		return &r.RTMR0Match
+	case 1:
+		return &r.RTMR1Match
+	case 2:
+		return &r.RTMR2Match
+	case 3:
+		return &r.RTMR3Match
+	}
+	return nil
+}
+
 // MeasurementRegisters is the state of the SEV-SNP kernel measurement registers
 // that a report committed to: the replay of the first EventCount entries of the
 // guest's event log. Registers holds the sixteen SHA-384 values in index order.

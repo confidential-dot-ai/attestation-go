@@ -257,18 +257,29 @@ func parseEmbeddedEvidence(raw []byte) (*teetypes.AttestationEvidence, error) {
 	if len(trimmed) == 0 || trimmed[0] != '{' {
 		return nil, nil
 	}
-	var envelope teetypes.AttestationEvidence
-	if err := json.Unmarshal(trimmed, &envelope); err != nil {
+	var carried certificateEnvelope
+	if err := json.Unmarshal(trimmed, &carried); err != nil {
 		return nil, fmt.Errorf("armtls: parse embedded attestation evidence: %w", err)
 	}
-	if envelope.Platform == "" || len(envelope.Evidence) == 0 {
+	if carried.Platform == "" || len(carried.Evidence) == 0 {
 		return nil, fmt.Errorf("%w: embedded evidence has no platform or no payload", ErrInvalidReport)
 	}
-	envelope.Platform = teetypes.NormalizePlatform(string(envelope.Platform))
-	// A peer's certificate is not a source of collateral: the verifier fetches
-	// or holds its own, so whatever the peer attached never reaches it.
-	envelope.Collateral = nil
-	return &envelope, nil
+	return &teetypes.AttestationEvidence{
+		Platform: teetypes.NormalizePlatform(string(carried.Platform)),
+		Evidence: carried.Evidence,
+	}, nil
+}
+
+// certificateEnvelope is the evidence envelope as a certificate carries it, in
+// both directions: the platform tag and the evidence, nothing else. Marshalling
+// and parsing through a declared struct, rather than through
+// [teetypes.AttestationEvidence], keeps a field added to the envelope schema
+// (collateral, say, which runs to hundreds of kilobytes and which a verifier
+// fetches or holds itself) from reaching a certificate, or from reaching the
+// verifier out of a peer's certificate, unnoticed.
+type certificateEnvelope struct {
+	Platform teetypes.PlatformType `json:"platform"`
+	Evidence json.RawMessage       `json:"evidence"`
 }
 
 // EmbeddedEvidence returns the evidence envelope the extension carries, and

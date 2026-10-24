@@ -200,25 +200,25 @@ func EnforceVerdict(req VerifyRequest, resp VerifyResponse) error {
 	if err := resp.Result.Check(); err != nil {
 		return ErrSignatureInvalid
 	}
-	asked := req.Policies.asked(req.Platform)
-	if asked.reportData && !affirmed(resp.Result.ReportDataMatch) {
+	asked, _ := req.Policies.Pins(req.Platform)
+	if len(asked.ReportData) > 0 && !affirmed(resp.Result.ReportDataMatch) {
 		return ErrReportDataMismatch
 	}
-	if asked.initData && !affirmed(resp.Result.InitDataMatch) {
+	if len(asked.InitData) > 0 && !affirmed(resp.Result.InitDataMatch) {
 		return ErrInitDataMismatch
 	}
-	if asked.launch && !affirmed(resp.Result.LaunchDigestMatch) {
+	if len(asked.Launch) > 0 && !affirmed(resp.Result.LaunchDigestMatch) {
 		return fmt.Errorf("%w: launch measurement does not match any reference value", ErrMeasurementNotAllowed)
 	}
-	for idx, pinned := range asked.rtmrs {
-		if pinned && !affirmed([]*bool{resp.Result.RTMR0Match, resp.Result.RTMR1Match, resp.Result.RTMR2Match, resp.Result.RTMR3Match}[idx]) {
+	for idx, pinned := range asked.RTMRs {
+		if len(pinned) > 0 && !affirmed(resp.Result.RTMRMatch(idx)) {
 			return fmt.Errorf("%w: RTMR[%d] does not match", ErrRegistersNotAllowed, idx)
 		}
 	}
-	if asked.measurementRegisters && !affirmed(resp.Result.MeasurementRegistersMatch) {
+	if asked.MeasurementRegisters != nil && !affirmed(resp.Result.MeasurementRegistersMatch) {
 		return fmt.Errorf("%w: measurement registers do not match", ErrRegistersNotAllowed)
 	}
-	if asked.pcrs && !affirmed(resp.Checks.PCRsMatch) {
+	if len(asked.PCRs) > 0 && !affirmed(resp.Checks.PCRsMatch) {
 		return fmt.Errorf("%w: a pinned PCR does not match", ErrPCRNotAllowed)
 	}
 	if !resp.Passed {
@@ -338,8 +338,7 @@ func EnforcePinsWithRuntimeLog(resp VerifyResponse, policy Policy, evidence teet
 		return EnforceRTMRs(resp, policy.Registers)
 	}
 	if len(policy.Registers) > 0 {
-		return fmt.Errorf("%w: %d register(s) pinned but platform %q has none",
-			ErrRegistersNotAllowed, len(policy.Registers), platform)
+		return errRegistersOffPlatform(len(policy.Registers), platform)
 	}
 	return nil
 }
@@ -365,8 +364,7 @@ func EnforcePCRs(evidence teetypes.AttestationEvidence, claims teetypes.Claims, 
 		return nil
 	}
 	if !evidence.Platform.HasVTPMQuote() {
-		return fmt.Errorf("%w: %d register(s) pinned but platform %q carries no vTPM quote",
-			ErrPCRNotAllowed, len(pinned), evidence.Platform)
+		return errPCRsOffPlatform(len(pinned), evidence.Platform)
 	}
 	signed, err := signedPCRSelection(evidence.Evidence)
 	if err != nil {

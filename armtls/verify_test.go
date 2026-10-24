@@ -6,10 +6,8 @@ import (
 	"crypto/sha512"
 	_ "embed"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -106,68 +104,40 @@ func TestVerifyCertOfflineWithoutExtension(t *testing.T) {
 	}
 }
 
-// verifySpy is an attestation service that records the request and answers with
-// a caller-supplied verdict.
-type verifySpy struct {
-	request remote.VerifyRequest
-	result  teetypes.VerificationResult
-}
+// verifySpy is a stub attestation service answering one verdict, with the
+// request it received.
+type verifySpy struct{ stub *mockapi.Stub }
 
-func (s *verifySpy) service(t *testing.T) remote.Client {
+func newSpy(t *testing.T, verdict mockapi.Verdict) *verifySpy {
 	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/verify" {
-			http.NotFound(w, r)
-			return
-		}
-		if err := json.NewDecoder(r.Body).Decode(&s.request); err != nil {
-			t.Errorf("decode verify request: %v", err)
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		// The service answers an unverifiable signature with 422, and reports
-		// passed only when every check it answered held.
-		if !s.result.SignatureValid {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnprocessableEntity)
-			_ = json.NewEncoder(w).Encode(remote.ErrorResponse{Error: "verification_failed", Message: "hardware signature verification failed"})
-			return
-		}
-		result := s.result
-		passed := result.ReportDataMatch == nil || *result.ReportDataMatch
-		// A launch pin is answered from the claims, as the service answers it
-		// from the report.
-		if p := s.request.Policies.SNP; p != nil && len(p.LaunchDigest) > 0 {
-			launch, _ := hex.DecodeString(result.Claims.LaunchDigest)
-			match := false
-			for _, want := range p.LaunchDigest {
-				match = match || bytes.Equal(want, launch)
-			}
-			result.LaunchDigestMatch = teetypes.Ptr(match)
-			passed = passed && match
-		}
-		if err := json.NewEncoder(w).Encode(remote.VerifyResponse{Result: result, Passed: passed}); err != nil {
-			t.Errorf("encode verify response: %v", err)
-		}
-	}))
-	t.Cleanup(srv.Close)
-	return remote.NewClient(srv.URL)
+	stub := mockapi.New(t)
+	stub.SetVerdict(verdict)
+	return &verifySpy{stub: stub}
 }
 
-// sentReportData is the report-data pin the recorded SEV-SNP request carried.
-func (s *verifySpy) sentReportData() []byte {
-	if s.request.Policies.SNP == nil {
-		return nil
+func (s *verifySpy) service() remote.Client { return remote.NewClient(s.stub.URL()) }
+
+// request is the last /verify request the stub saw; zero when none reached it.
+func (s *verifySpy) request() remote.VerifyRequest {
+	reqs := s.stub.VerifyRequests()
+	if len(reqs) == 0 {
+		return remote.VerifyRequest{}
 	}
-	return s.request.Policies.SNP.ReportData
+	return reqs[len(reqs)-1]
+}
+
+// sentReportData is the report-data pin the recorded request carried.
+func (s *verifySpy) sentReportData() []byte {
+	req := s.request()
+	pins, _ := req.Policies.Pins(req.Platform)
+	return pins.ReportData
 }
 
 // passingVerdict is what a service returns for evidence it accepted, bound to
 // the anchor and reporting measurement as the launch digest.
-func passingVerdict(measurement []byte) teetypes.VerificationResult {
-	return teetypes.VerificationResult{
+func passingVerdict(measurement []byte) mockapi.Verdict {
+	return mockapi.Verdict{
 		SignatureValid:  true,
-		Platform:        teetypes.PlatformSNP,
 		ReportDataMatch: teetypes.Ptr(true),
 		Claims:          teetypes.Claims{LaunchDigest: hex.EncodeToString(measurement)},
 	}
@@ -179,10 +149,10 @@ func passingVerdict(measurement []byte) teetypes.VerificationResult {
 func TestVerifyWithServiceSendsKeyAnchor(t *testing.T) {
 	key := testKey(t)
 	measurement := bytes.Repeat([]byte{0x42}, sha512.Size384)
-	spy := &verifySpy{result: passingVerdict(measurement)}
+	spy := newSpy(t, passingVerdict(measurement))
 	att := &Attestation{Family: teetypes.FamilySNP, Report: mockapi.FakeSNPReport([]byte{})}
 
-	resp, err := VerifyWithService(context.Background(), spy.service(t), att, &key.PublicKey, nil,
+	resp, err := VerifyWithService(context.Background(), spy.service(), att, &key.PublicKey, nil,
 		remote.Policy{Measurements: [][]byte{measurement}})
 	if err != nil {
 		t.Fatalf("VerifyWithService: %v", err)
@@ -198,8 +168,8 @@ func TestVerifyWithServiceSendsKeyAnchor(t *testing.T) {
 	if !bytes.Equal(spy.sentReportData(), anchor[:sha512.Size384]) {
 		t.Fatalf("report_data = %x, want the key anchor %x", spy.sentReportData(), anchor[:sha512.Size384])
 	}
-	if spy.request.Platform != teetypes.PlatformSNP {
-		t.Fatalf("platform = %q, want snp", spy.request.Platform)
+	if spy.request().Platform != teetypes.PlatformSNP {
+		t.Fatalf("platform = %q, want snp", spy.request().Platform)
 	}
 }
 
@@ -207,10 +177,10 @@ func TestVerifyWithServiceSendsKeyAnchor(t *testing.T) {
 // longer satisfies the request.
 func TestVerifyWithServiceNonceChangesAnchor(t *testing.T) {
 	key := testKey(t)
-	spy := &verifySpy{result: passingVerdict(nil)}
+	spy := newSpy(t, passingVerdict(nil))
 	att := &Attestation{Family: teetypes.FamilySNP, Report: mockapi.FakeSNPReport([]byte{})}
 
-	if _, err := VerifyWithService(context.Background(), spy.service(t), att, &key.PublicKey, []byte("nonce"), remote.Policy{}); err != nil {
+	if _, err := VerifyWithService(context.Background(), spy.service(), att, &key.PublicKey, []byte("nonce"), remote.Policy{}); err != nil {
 		t.Fatalf("VerifyWithService: %v", err)
 	}
 	bare, err := ReportDataForKey(&key.PublicKey, nil)
@@ -231,7 +201,7 @@ func TestVerifyWithServiceFailsClosed(t *testing.T) {
 
 	cases := []struct {
 		name    string
-		result  teetypes.VerificationResult
+		verdict mockapi.Verdict
 		policy  remote.Policy
 		wantErr error
 	}{
@@ -239,31 +209,31 @@ func TestVerifyWithServiceFailsClosed(t *testing.T) {
 			// The service refuses an unverifiable signature with 422, which
 			// reaches the caller as the API error, not a verdict sentinel.
 			name:    "invalid signature",
-			result:  teetypes.VerificationResult{SignatureValid: false},
+			verdict: mockapi.Verdict{SignatureValid: false},
 			wantErr: &remote.APIError{},
 		},
 		{
 			name:    "no report-data verdict",
-			result:  teetypes.VerificationResult{SignatureValid: true},
+			verdict: mockapi.Verdict{SignatureValid: true},
 			wantErr: remote.ErrReportDataMismatch,
 		},
 		{
 			name:    "measurement outside the pin",
-			result:  passingVerdict(bytes.Repeat([]byte{0x43}, sha512.Size384)),
+			verdict: passingVerdict(bytes.Repeat([]byte{0x43}, sha512.Size384)),
 			policy:  remote.Policy{Measurements: [][]byte{measurement}},
 			wantErr: remote.ErrMeasurementNotAllowed,
 		},
 		{
 			name:    "register pinned on a platform without registers",
-			result:  passingVerdict(measurement),
+			verdict: passingVerdict(measurement),
 			policy:  remote.Policy{Registers: map[int][]byte{1: measurement}},
 			wantErr: remote.ErrRegistersNotAllowed,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			spy := &verifySpy{result: tc.result}
-			_, err := VerifyWithService(context.Background(), spy.service(t), att, &key.PublicKey, nil, tc.policy)
+			spy := newSpy(t, tc.verdict)
+			_, err := VerifyWithService(context.Background(), spy.service(), att, &key.PublicKey, nil, tc.policy)
 			if apiErr, ok := tc.wantErr.(*remote.APIError); ok {
 				if !errors.As(err, &apiErr) || apiErr.Status != http.StatusUnprocessableEntity {
 					t.Fatalf("err = %v, want a 422 *remote.APIError", err)
@@ -279,15 +249,15 @@ func TestVerifyWithServiceFailsClosed(t *testing.T) {
 
 func TestVerifyWithServiceRefusesConflictingReportData(t *testing.T) {
 	key := testKey(t)
-	spy := &verifySpy{result: passingVerdict(nil)}
+	spy := newSpy(t, passingVerdict(nil))
 	att := &Attestation{Family: teetypes.FamilySNP, Report: mockapi.FakeSNPReport([]byte{})}
 
-	_, err := VerifyWithService(context.Background(), spy.service(t), att, &key.PublicKey, nil,
+	_, err := VerifyWithService(context.Background(), spy.service(), att, &key.PublicKey, nil,
 		remote.Policy{ExpectedReportData: bytes.Repeat([]byte{0xAA}, sha512.Size384)})
 	if err == nil || !strings.Contains(err.Error(), "does not bind the key") {
 		t.Fatalf("err = %v, want a refusal of the caller-set report data", err)
 	}
-	if spy.request.Platform != "" {
+	if spy.request().Platform != "" {
 		t.Fatal("the request reached the service despite the refusal")
 	}
 }
@@ -297,9 +267,9 @@ func TestVerifyWithServiceRefusesConflictingReportData(t *testing.T) {
 func TestVerifyCertWithServiceBindsCertKey(t *testing.T) {
 	att := &Attestation{Family: teetypes.FamilySNP, Report: mockapi.FakeSNPReport([]byte{})}
 	cert, key := certWithExtension(t, att)
-	spy := &verifySpy{result: passingVerdict(nil)}
+	spy := newSpy(t, passingVerdict(nil))
 
-	if _, err := VerifyCertWithService(context.Background(), spy.service(t), cert, testOID, nil, remote.Policy{}); err != nil {
+	if _, err := VerifyCertWithService(context.Background(), spy.service(), cert, testOID, nil, remote.Policy{}); err != nil {
 		t.Fatalf("VerifyCertWithService: %v", err)
 	}
 	anchor, err := ReportDataForKey(&key.PublicKey, nil)
@@ -314,8 +284,8 @@ func TestVerifyCertWithServiceBindsCertKey(t *testing.T) {
 
 func TestVerifyCertWithServiceWithoutExtension(t *testing.T) {
 	cert, _ := certWithExtension(t, nil)
-	spy := &verifySpy{result: passingVerdict(nil)}
-	_, err := VerifyCertWithService(context.Background(), spy.service(t), cert, testOID, nil, remote.Policy{})
+	spy := newSpy(t, passingVerdict(nil))
+	_, err := VerifyCertWithService(context.Background(), spy.service(), cert, testOID, nil, remote.Policy{})
 	if !errors.Is(err, ErrNoAttestation) {
 		t.Fatalf("err = %v, want ErrNoAttestation", err)
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -30,13 +31,7 @@ func sentKeys(t *testing.T, p Policies) []string {
 	if err := json.Unmarshal(body, &m); err != nil {
 		t.Fatal(err)
 	}
-	keys := slices.Sorted(func(yield func(string) bool) {
-		for k := range m {
-			if !yield(k) {
-				return
-			}
-		}
-	})
+	keys := slices.Sorted(maps.Keys(m))
 	for _, k := range keys {
 		if !slices.Contains(policyKeys, k) {
 			t.Fatalf("Policies marshalled an unknown key %q: %s", k, body)
@@ -273,13 +268,7 @@ func TestNewVerifyRequestShape(t *testing.T) {
 	if err := json.Unmarshal(body, &got); err != nil {
 		t.Fatal(err)
 	}
-	keys := slices.Sorted(func(yield func(string) bool) {
-		for k := range got {
-			if !yield(k) {
-				return
-			}
-		}
-	})
+	keys := slices.Sorted(maps.Keys(got))
 	if want := []string{"collateral", "evidence", "platform", "policies"}; !slices.Equal(keys, want) {
 		t.Fatalf("request keys = %v, want %v", keys, want)
 	}
@@ -292,5 +281,63 @@ func TestNewVerifyRequestShape(t *testing.T) {
 	body, _ = json.Marshal(NewVerifyRequest(teetypes.AttestationEvidence{Platform: "tdx", Evidence: json.RawMessage(`{}`)}, policies, true))
 	if !strings.Contains(string(body), `"issue_token":true`) || strings.Contains(string(body), "collateral") {
 		t.Fatalf("request = %s", body)
+	}
+}
+
+// Pins reads back exactly what PoliciesFor placed, for every platform tag, so
+// the verdict is enforced against the pins the request really carried.
+func TestPinsRoundTrip(t *testing.T) {
+	policy := Policy{
+		ExpectedReportData:   measurement(0x11),
+		ExpectedInitDataHash: bytes.Repeat([]byte{0x22}, 32),
+		Measurements:         [][]byte{measurement(0x33)},
+	}
+	for _, platform := range []teetypes.PlatformType{
+		teetypes.PlatformSNP, teetypes.PlatformGcpSNP, teetypes.PlatformAzSNP,
+		teetypes.PlatformTDX, teetypes.PlatformGcpTDX, teetypes.PlatformAzTDX,
+	} {
+		t.Run(string(platform), func(t *testing.T) {
+			p := policy
+			if platform.HasRegisters() {
+				p.Registers = map[int][]byte{2: measurement(0x44)}
+			}
+			if platform.HasVTPMQuote() {
+				p.PCRs = map[int][]byte{4: pcr(0x55)}
+			}
+			if platform.HasMeasurementRegisters() {
+				p.MeasurementRegisters = [][]byte{measurement(0x66)}
+			}
+			policies, err := PoliciesFor(platform, p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pins, ok := policies.Pins(platform)
+			if !ok {
+				t.Fatal("no entry for the platform the policies were built for")
+			}
+			if !bytes.Equal(pins.InitData, p.ExpectedInitDataHash) || len(pins.Launch) != 1 || !bytes.Equal(pins.Launch[0], measurement(0x33)) {
+				t.Fatalf("pins = %+v", pins)
+			}
+			if platform.HasMeasurementRegisters() {
+				if pins.MeasurementRegisters == nil || !bytes.Equal(pins.ReportData, append(measurement(0x11), make([]byte, 16)...)) {
+					t.Fatalf("register mode pins = %+v", pins)
+				}
+			} else if !bytes.Equal(pins.ReportData, p.ExpectedReportData) || pins.MeasurementRegisters != nil {
+				t.Fatalf("pins = %+v", pins)
+			}
+			if got := len(pins.RTMRs[2]); got != len(p.Registers) {
+				t.Fatalf("RTMR[2] set has %d values, want %d", got, len(p.Registers))
+			}
+			if !maps.EqualFunc(pins.PCRs, p.PCRs, bytes.Equal) {
+				t.Fatalf("PCRs = %v, want %v", pins.PCRs, p.PCRs)
+			}
+			for _, other := range []teetypes.PlatformType{teetypes.PlatformSNP, teetypes.PlatformTDX} {
+				if other != platform {
+					if _, ok := policies.Pins(other); ok {
+						t.Fatalf("an entry for %s as well", other)
+					}
+				}
+			}
+		})
 	}
 }
