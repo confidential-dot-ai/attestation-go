@@ -17,10 +17,10 @@ import (
 // Every pin the service can check is sent to it, so a mismatch is refused at
 // the service as well as by [EnforcePins]: the report-data and init-data
 // bindings, the debug rule, the SEV-SNP TCB floor, the set of launch
-// measurements (from Images and Measurements together), flat register pins,
-// vTPM PCR pins and SEV-SNP measurement registers. Image pins stay atomic on
-// the client: the service checks the launch measurement set, [EnforceImages]
-// that the registers and anchor belong to the matched image.
+// measurements, flat register pins, vTPM PCR pins and SEV-SNP measurement
+// registers. Images replace Measurements and Registers, as [EnforcePins]
+// applies them: the service checks the image digests as the launch set,
+// [EnforceImages] that the registers and anchor belong to the matched image.
 //
 // A policy element the platform cannot answer is a policy error here, before
 // any request is made: MinTcb off SEV-SNP ([ErrMinTcbNotAllowed]), register
@@ -33,6 +33,10 @@ func PoliciesFor(platform teetypes.PlatformType, policy Policy) (Policies, error
 	family := platform.Family()
 	if family == teetypes.FamilyUnknown {
 		return Policies{}, fmt.Errorf("%w: %q", ErrUnsupportedPlatform, platform)
+	}
+	// Images replace the flat pins; see [Policy.Images].
+	if len(policy.Images) > 0 {
+		policy.Measurements, policy.Registers = nil, nil
 	}
 	// MinTcb is SEV-SNP's alone. Dropping it for another family would verify
 	// under no floor while the caller believes one was applied.
@@ -122,8 +126,8 @@ func PoliciesFor(platform teetypes.PlatformType, policy Policy) (Policies, error
 }
 
 // launchMeasurements is the set of launch measurements the policy accepts:
-// every image's digest and every flat measurement, each 48 bytes, without
-// duplicates. Empty when the policy pins no launch measurement.
+// every image's digest, or the flat measurements when no image is pinned,
+// each 48 bytes, without duplicates. Empty when the policy pins no launch measurement.
 func launchMeasurements(policy Policy) ([][]byte, error) {
 	var out [][]byte
 	for _, img := range policy.Images {

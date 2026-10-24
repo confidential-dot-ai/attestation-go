@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -323,3 +324,61 @@ func TestStubCloseMakesTheServiceUnreachable(t *testing.T) {
 		t.Fatalf("err = %#v, want *remote.RequestError", err)
 	}
 }
+
+// Evidence from a platform the request's policies name no entry for is the
+// service's 422 platform_not_allowed, not a 200 under no pins.
+func TestStubRefusesPlatformWithoutPolicies(t *testing.T) {
+	stub := mockapi.New(t)
+	stub.SetVerdict(mockapi.PassingVerdict(""))
+	req := remote.NewVerifyRequest(
+		teetypes.AttestationEvidence{Platform: teetypes.PlatformSNP, Evidence: json.RawMessage(`{}`)},
+		remote.Policies{TDX: &remote.TDXParams{}}, false)
+	_, err := remote.NewClient(stub.URL()).VerifyEnforced(context.Background(), req)
+	var apiErr *remote.APIError
+	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusUnprocessableEntity || apiErr.Response.Error != mockapi.ErrorCodePlatformNotAllowed {
+		t.Fatalf("err = %#v, want 422 %s", err, mockapi.ErrorCodePlatformNotAllowed)
+	}
+}
+
+// Register mode answers as the service does: the commitment counts only under
+// a matched launch digest, and the registers travel only on a passed result.
+func TestStubRegisterModeFollowsTheService(t *testing.T) {
+	digest := strings.Repeat("ab", 48)
+	pinned, _ := hex.DecodeString(digest)
+	registers := make([][]byte, teetypes.MeasurementRegisterCount)
+	for i := range registers {
+		registers[i] = make([]byte, 48)
+	}
+	verdict := mockapi.PassingVerdict(digest)
+	verdict.MeasurementRegisters = &teetypes.MeasurementRegisters{EventCount: 0, Registers: registers}
+	stub := mockapi.New(t)
+	stub.SetVerdict(verdict)
+	c := remote.NewClient(stub.URL())
+	request := func(launch []byte) remote.VerifyRequest {
+		return remote.NewVerifyRequest(
+			teetypes.AttestationEvidence{Platform: teetypes.PlatformSNP, Evidence: json.RawMessage(`{}`)},
+			remote.Policies{SNP: &remote.SNPParams{
+				ReportData:           make([]byte, 64),
+				LaunchDigest:         [][]byte{launch},
+				MeasurementRegisters: &[][]byte{},
+			}}, false)
+	}
+
+	resp, err := c.Verify(context.Background(), request(pinned))
+	if err != nil || !resp.Passed || resp.Result.MeasurementRegisters == nil {
+		t.Fatalf("matched launch digest: resp = %+v, err = %v", resp, err)
+	}
+
+	other := bytes.Repeat([]byte{0xcd}, 48)
+	resp, err = c.Verify(context.Background(), request(other))
+	if err != nil {
+		t.Fatal(err)
+	}
+	no := teetypes.Ptr(false)
+	if resp.Passed || resp.Result.MeasurementRegisters != nil ||
+		!boolEq(resp.Result.ReportDataMatch, no) || !boolEq(resp.Result.MeasurementRegistersMatch, no) {
+		t.Fatalf("other launch digest: resp = %+v", resp)
+	}
+}
+
+func boolEq(got, want *bool) bool { return got != nil && want != nil && *got == *want }

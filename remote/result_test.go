@@ -295,3 +295,35 @@ func TestVerifyResponseRoundTrip(t *testing.T) {
 		})
 	}
 }
+
+// A 200 whose body is not a /verify result (a proxy page, a stub answering the
+// wrong shape) must not decode into a result with a valid signature.
+func TestDecodeRequiresAPlatform(t *testing.T) {
+	for _, body := range []string{`{}`, `{"result":{},"passed":true}`, `{"result":{"platform":""},"passed":true}`} {
+		var resp VerifyResponse
+		if err := json.Unmarshal([]byte(body), &resp); err == nil {
+			t.Fatalf("%s decoded to %+v, want an error", body, resp)
+		}
+	}
+}
+
+// CollateralVerified keeps its in-process meaning: the collateral checks ran
+// and passed. A revoked chain is checked, not verified.
+func TestDecodeCollateralVerifiedFollowsCRLOK(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		want bool
+	}{
+		{`{"result":{"platform":"snp","crl_ok":true,"collateral":[]},"passed":true}`, true},
+		{`{"result":{"platform":"snp","crl_ok":false,"collateral":[]},"passed":false}`, false},
+		{`{"result":{"platform":"snp","crl_ok":null,"collateral":[]},"passed":true}`, false},
+	} {
+		var resp VerifyResponse
+		if err := json.Unmarshal([]byte(tc.body), &resp); err != nil {
+			t.Fatal(err)
+		}
+		if resp.Result.CollateralVerified != tc.want {
+			t.Fatalf("%s: CollateralVerified = %v, want %v", tc.body, resp.Result.CollateralVerified, tc.want)
+		}
+	}
+}
