@@ -57,6 +57,11 @@ const (
 type SnpEvidence struct {
 	AttestationReport string        `json:"attestation_report"` // base64 (std) of the 1184-byte report
 	CertChain         *SnpCertChain `json:"cert_chain,omitempty"`
+	// EventLog is the guest kernel's measurement-register log, base64 (std)
+	// of 49-byte entries, when the kernel has the provider (see registers.go).
+	// Absent is an empty log: a report that commits to events then fails
+	// register-mode verification, as it should.
+	EventLog string `json:"event_log,omitempty"`
 }
 
 // SnpCertChain carries the VCEK/VLEK (the only field used) plus the ignored
@@ -108,7 +113,14 @@ func VerifyEvidenceContext(ctx context.Context, ev SnpEvidence, params teetypes.
 			return nil, fmt.Errorf("snp: decoding vcek: %w", err)
 		}
 	}
-	return VerifyReportContext(ctx, reportBytes, vcekDER, params, teetypes.PlatformSNP, MinReportVersion, opts)
+	if err := teetypes.CheckFieldSize("event_log", len(ev.EventLog)); err != nil {
+		return nil, fmt.Errorf("snp: %w", err)
+	}
+	eventLog, err := base64.StdEncoding.DecodeString(ev.EventLog)
+	if err != nil {
+		return nil, fmt.Errorf("snp: decoding event_log: %w", err)
+	}
+	return verifyReport(ctx, reportBytes, vcekDER, eventLog, params, teetypes.PlatformSNP, MinReportVersion, opts)
 }
 
 // KDS fetch defaults, applied by DefaultKDSGetter to a non-positive argument.
@@ -155,7 +167,21 @@ func VerifyReport(reportBytes, vcekDER []byte, params teetypes.VerifyParams, pla
 // including Zen4c (Bergamo/Siena), which go-sev-guest maps to "Unknown" (see
 // kdsProductLine). ctx bounds the fetch; chain verification itself is always
 // offline against bundled AMD roots.
+//
+// A bare report carries no event log, so with params.MeasurementRegisters set
+// it verifies as a kernel that extended nothing: only a report committing to
+// zero events passes. Evidence with a log goes through VerifyEvidenceContext.
 func VerifyReportContext(ctx context.Context, reportBytes, vcekDER []byte, params teetypes.VerifyParams, platform teetypes.PlatformType, minVersion uint32, opts Options) (*teetypes.VerificationResult, error) {
+	return verifyReport(ctx, reportBytes, vcekDER, nil, params, platform, minVersion, opts)
+}
+
+func verifyReport(ctx context.Context, reportBytes, vcekDER, eventLog []byte, params teetypes.VerifyParams, platform teetypes.PlatformType, minVersion uint32, opts Options) (*teetypes.VerificationResult, error) {
+	registerMode := params.MeasurementRegisters != nil
+	if registerMode {
+		if err := checkMeasurementRegisterParams(params, platform); err != nil {
+			return nil, err
+		}
+	}
 	report, err := abi.ReportToProto(reportBytes)
 	if err != nil {
 		return nil, fmt.Errorf("snp: parsing report: %w", err)
@@ -232,8 +258,13 @@ func VerifyReportContext(ctx context.Context, reportBytes, vcekDER []byte, param
 	}
 
 	// Field/policy validation: VMPL==0, debug policy, report_data, host_data,
-	// minimum TCB. Maps teetypes.VerifyParams onto validate.Options.
-	vOpts, err := validateOptions(params)
+	// minimum TCB. Maps teetypes.VerifyParams onto validate.Options. In
+	// register mode REPORT_DATA is a commitment, checked below instead.
+	validateParams := params
+	if registerMode {
+		validateParams.ExpectedReportData = nil
+	}
+	vOpts, err := validateOptions(validateParams)
 	if err != nil {
 		return nil, err
 	}
@@ -247,8 +278,20 @@ func VerifyReportContext(ctx context.Context, reportBytes, vcekDER []byte, param
 		Claims:             extractClaims(report),
 		CollateralVerified: opts.CheckRevocations,
 	}
+	if registerMode {
+		// validate pinned the launch digest and VMPL 0 above, so the
+		// commitment comes from the provider kernel; the kernel committed to
+		// the full 64-byte field, holding the requester's bytes zero-extended.
+		registers, err := checkMeasurementRegisters(report.GetReportData(), eventLog,
+			pad(params.ExpectedReportData, reportDataSize), params.MeasurementRegisters)
+		if err != nil {
+			return nil, err
+		}
+		res.MeasurementRegisters = registers
+		res.MeasurementRegistersMatch = teetypes.Ptr(true)
+	}
 	if params.ExpectedReportData != nil {
-		res.ReportDataMatch = teetypes.Ptr(true) // validate enforced it (mismatch errors above)
+		res.ReportDataMatch = teetypes.Ptr(true) // validate or the commitment enforced it (mismatch errors above)
 	}
 	if params.ExpectedInitDataHash != nil {
 		res.InitDataMatch = teetypes.Ptr(true)

@@ -47,6 +47,7 @@ toward the reference.
 | **CCEL eventlog → RTMR replay** (was "not yet ported") | tdx | `tdx/ccel.go` parses the TCG2 event log and replays it into RTMR[0-3]. `VerifyEvidence` enforces RTMR[0-2] and reports RTMR[3]. |
 | **`MinTCB.FMC` was silently dropped** | snp, az-snp | A caller-supplied FMC floor is now an explicit error instead of being ignored, so nobody believes they pinned a floor they did not get. |
 | **No per-field size caps on direct calls** | tdx, az-snp, az-tdx | `teetypes.CheckFieldSize` (1 MiB, mirroring Rust's `MAX_EVIDENCE_FIELD_SIZE`) bounds `hcl_report`, `vcek`/`td_quote`/`quote`, `cc_eventlog`, and the vTPM quote fields. |
+| **Kernel measurement registers** (attestation-rs `212f98f`, `snp/measurement_registers.rs`) | snp | `VerifyParams.MeasurementRegisters` selects register mode: `snp/registers.go` replays the evidence's `event_log` and checks the `snp-kmr-v1` commitment in `REPORT_DATA`. Same vectors and hardware fixtures as Rust. Rust reports `report_data_match: false`; Go errors, per the fatal-mismatch convention above. Rust requires a `launch_digest` set; Go requires `ExpectedLaunchDigest`, its single pin. |
 
 ### CCEL replay semantics
 
