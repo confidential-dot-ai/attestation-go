@@ -58,13 +58,14 @@ func ReplayEventLog(log []byte, eventCount uint32) (registers [][]byte, ok bool,
 	for i := range registers {
 		registers[i] = make([]byte, registerSize)
 	}
+	h := sha512.New384()
 	for i := range int(eventCount) {
 		entry := log[i*eventLogEntrySize : (i+1)*eventLogEntrySize]
 		r := registers[entry[0]]
-		h := sha512.New384()
+		h.Reset()
 		h.Write(r)
 		h.Write(entry[1:])
-		copy(r, h.Sum(nil))
+		h.Sum(r[:0])
 	}
 	return registers, true, nil
 }
@@ -79,11 +80,11 @@ func CommitmentReportData(eventCount uint32, registers [][]byte, callerData []by
 	if len(callerData) != reportDataSize {
 		return nil, fmt.Errorf("snp: caller data is %d bytes, want %d", len(callerData), reportDataSize)
 	}
-	header := make([]byte, commitmentHeaderSize)
-	binary.LittleEndian.PutUint32(header, eventCount)
+	out := make([]byte, commitmentHeaderSize, reportDataSize)
+	binary.LittleEndian.PutUint32(out, eventCount)
 	h := sha512.New384()
 	h.Write(commitmentTag)
-	h.Write(header)
+	h.Write(out)
 	for i, r := range registers {
 		if len(r) != registerSize {
 			return nil, fmt.Errorf("snp: register %d is %d bytes, want %d", i, len(r), registerSize)
@@ -91,7 +92,7 @@ func CommitmentReportData(eventCount uint32, registers [][]byte, callerData []by
 		h.Write(r)
 	}
 	h.Write(callerData)
-	return append(header, h.Sum(nil)...), nil
+	return h.Sum(out), nil
 }
 
 // VerifyCommitment returns the registers that reported (a report's
