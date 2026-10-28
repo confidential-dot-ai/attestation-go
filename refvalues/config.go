@@ -19,9 +19,13 @@ import (
 	"github.com/confidential-dot-ai/attestation-go/runtimemeasure"
 )
 
-// schemaVersion1 is the only measurements config schema version this package
-// accepts. A future version is rejected, never guessed at.
-const schemaVersion1 = "1"
+// The measurements config schema versions this package accepts. A future
+// version is rejected, never guessed at. Schema 2 adds the per-entry
+// launch_file field.
+const (
+	schemaVersion1 = "1"
+	schemaVersion2 = "2"
+)
 
 // maxRTMRs is the number of TDX runtime measurement registers, and so the
 // length of the config file's rtmr array.
@@ -41,6 +45,7 @@ type wireImage struct {
 	MRTD        *string         `json:"mrtd,omitempty"`
 	RTMR        []*string       `json:"rtmr,omitempty"`
 	ApproverKey json.RawMessage `json:"approver_key,omitempty"`
+	LaunchFile  json.RawMessage `json:"launch_file,omitempty"`
 }
 
 // Load reads and validates a measurements config file. A missing or malformed
@@ -81,8 +86,10 @@ func parse(data []byte, allowEmpty bool) (ReferenceValues, error) {
 }
 
 func (f wire) validate(allowEmpty bool) (ReferenceValues, error) {
-	if f.SchemaVersion != schemaVersion1 {
-		return ReferenceValues{}, fmt.Errorf("schema_version %q, want %q", f.SchemaVersion, schemaVersion1)
+	switch f.SchemaVersion {
+	case schemaVersion1, schemaVersion2:
+	default:
+		return ReferenceValues{}, fmt.Errorf("schema_version %q, want %q or %q", f.SchemaVersion, schemaVersion1, schemaVersion2)
 	}
 	fam, err := teetypes.ParseFamily(f.TEE)
 	if err != nil {
@@ -113,7 +120,20 @@ func (f wire) validate(allowEmpty bool) (ReferenceValues, error) {
 		tuples[key] = i
 		rv.Images = append(rv.Images, img)
 	}
+	if err := checkLaunchFileSchema(f.SchemaVersion, rv); err != nil {
+		return ReferenceValues{}, err
+	}
 	return rv, nil
+}
+
+// checkLaunchFileSchema requires a document pinning a launch file to declare
+// schema 2. A schema 1 reader has no such field, so it must refuse the
+// document rather than load it without the binding; schema 2 may pin none.
+func checkLaunchFileSchema(version string, rv ReferenceValues) error {
+	if pinsLaunchFile(rv) && version != schemaVersion2 {
+		return fmt.Errorf("launch_file requires schema_version %q, got %q", schemaVersion2, version)
+	}
+	return nil
 }
 
 func (we wireImage) validate(fam teetypes.Family, i int) (remote.ImagePin, error) {
@@ -122,15 +142,8 @@ func (we wireImage) validate(fam teetypes.Family, i int) (remote.ImagePin, error
 		return remote.ImagePin{}, fmt.Errorf("%s: name is required", at)
 	}
 	img := remote.ImagePin{Name: we.Name}
-	if we.ApproverKey != nil {
-		var text string
-		if err := json.Unmarshal(we.ApproverKey, &text); err != nil {
-			return remote.ImagePin{}, fmt.Errorf("%s.approver_key: %w", at, err)
-		}
-		img.Anchor = []byte(text)
-		if _, err := runtimemeasure.ParsePublicKeyPEM(img.Anchor); err != nil {
-			return remote.ImagePin{}, fmt.Errorf("%s.approver_key: %w", at, err)
-		}
+	if err := we.pinLaunchBinding(&img, at); err != nil {
+		return remote.ImagePin{}, err
 	}
 
 	switch fam {
@@ -167,6 +180,47 @@ func (we wireImage) validate(fam teetypes.Family, i int) (remote.ImagePin, error
 		return remote.ImagePin{}, fmt.Errorf("%s: tee %q has no known pin shape", at, fam)
 	}
 	return img, nil
+}
+
+// pinLaunchBinding reads the entry's launch binding: the approver key the
+// guest was launched to trust, or the launch file it was launched with. Both
+// pin the same hardware field, so an entry carries at most one.
+func (we wireImage) pinLaunchBinding(img *remote.ImagePin, at string) error {
+	switch {
+	case we.ApproverKey != nil && we.LaunchFile != nil:
+		return fmt.Errorf("%s: approver_key and launch_file both pin the launch binding, want at most one", at)
+	case we.ApproverKey != nil:
+		key, err := launchBytes(we.ApproverKey)
+		if err != nil {
+			return fmt.Errorf("%s.approver_key: %w", at, err)
+		}
+		if _, err := runtimemeasure.ParsePublicKeyPEM(key); err != nil {
+			return fmt.Errorf("%s.approver_key: %w", at, err)
+		}
+		img.Anchor = key
+	case we.LaunchFile != nil:
+		file, err := launchBytes(we.LaunchFile)
+		if err != nil {
+			return fmt.Errorf("%s.launch_file: %w", at, err)
+		}
+		img.LaunchFile = file
+	}
+	return nil
+}
+
+// launchBytes takes the exact bytes of a launch binding field. The field stays
+// a raw message so a JSON null is told apart from an absent field and refused
+// here with every other value carrying no bytes: a binding to nothing proves
+// nothing.
+func launchBytes(raw json.RawMessage) ([]byte, error) {
+	var text string
+	if err := json.Unmarshal(raw, &text); err != nil {
+		return nil, err
+	}
+	if text == "" {
+		return nil, fmt.Errorf("is empty")
+	}
+	return []byte(text), nil
 }
 
 func decodeRTMRs(raw []*string, at string) (map[int][]byte, error) {
@@ -212,17 +266,25 @@ func decodeRegister(s string) ([]byte, error) {
 // render is an error, never dropped, so a set that formats is a set that
 // [Parse] loads back.
 func Format(rv ReferenceValues) ([]byte, error) {
-	f := wire{SchemaVersion: schemaVersion1, TEE: string(rv.Family)}
+	f := wire{SchemaVersion: schemaVersionFor(rv), TEE: string(rv.Family)}
 	for i, img := range rv.Images {
 		we := wireImage{Name: img.Name}
-		// The anchor is validated once, by the f.validate call below: it walks
-		// every entry through the same wireImage.validate the parse path uses.
+		// The launch binding is validated once, by the f.validate call below:
+		// it walks every entry through the same wireImage.validate the parse
+		// path uses.
 		if img.Anchor != nil {
-			// JSON replaces invalid UTF-8, which would change the launch binding.
-			if !utf8.Valid(img.Anchor) {
-				return nil, fmt.Errorf("measurements[%d].approver_key: invalid UTF-8", i)
+			key, err := jsonString(img.Anchor)
+			if err != nil {
+				return nil, fmt.Errorf("measurements[%d].approver_key: %w", i, err)
 			}
-			we.ApproverKey, _ = json.Marshal(string(img.Anchor))
+			we.ApproverKey = key
+		}
+		if img.LaunchFile != nil {
+			file, err := jsonString(img.LaunchFile)
+			if err != nil {
+				return nil, fmt.Errorf("measurements[%d].launch_file: %w", i, err)
+			}
+			we.LaunchFile = file
 		}
 		d := hex.EncodeToString(img.Digest)
 		switch rv.Family {
@@ -261,8 +323,17 @@ func Format(rv ReferenceValues) ([]byte, error) {
 	return append(out, '\n'), nil
 }
 
-// tupleKey is the identity a pin is matched on: digest, registers, and anchor.
-// The name is diagnostic only, so it is not part of the key.
+// jsonString encodes exact bytes as a JSON string field. JSON replaces invalid
+// UTF-8, which would change the launch binding, so such bytes are refused.
+func jsonString(b []byte) (json.RawMessage, error) {
+	if !utf8.Valid(b) {
+		return nil, fmt.Errorf("invalid UTF-8")
+	}
+	return json.Marshal(string(b))
+}
+
+// tupleKey is the identity a pin is matched on: digest, registers, and launch
+// binding. The name is diagnostic only, so it is not part of the key.
 func tupleKey(img remote.ImagePin) string {
 	var b strings.Builder
 	b.WriteString(hex.EncodeToString(img.Digest))
@@ -272,5 +343,28 @@ func tupleKey(img remote.ImagePin) string {
 	if img.Anchor != nil {
 		fmt.Fprintf(&b, "|anchor=%x", img.Anchor)
 	}
+	if img.LaunchFile != nil {
+		fmt.Fprintf(&b, "|launch_file=%x", img.LaunchFile)
+	}
 	return b.String()
+}
+
+// schemaVersionFor names the schema version [Format] writes for rv: schema 1
+// expresses every set that pins no launch file.
+func schemaVersionFor(rv ReferenceValues) string {
+	if pinsLaunchFile(rv) {
+		return schemaVersion2
+	}
+	return schemaVersion1
+}
+
+// pinsLaunchFile reports whether any image pins a launch file, the binding
+// schema 2 introduced.
+func pinsLaunchFile(rv ReferenceValues) bool {
+	for _, img := range rv.Images {
+		if img.LaunchFile != nil {
+			return true
+		}
+	}
+	return false
 }

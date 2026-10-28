@@ -34,11 +34,25 @@ type ReferenceValues struct {
 // accept any attested peer without saying so.
 func (rv ReferenceValues) Empty() bool { return len(rv.Images) == 0 }
 
-// HasAnchors reports whether any image pins a launch anchor. Flattened digest
-// and register policies cannot express these per-image bindings.
+// HasAnchors reports whether any image pins an approver key. A caller asking
+// what the flat digest and register lists lose wants
+// [ReferenceValues.HasLaunchBindings], which covers launch files too.
 func (rv ReferenceValues) HasAnchors() bool {
 	for _, img := range rv.Images {
 		if img.Anchor != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// HasLaunchBindings reports whether any image pins a launch binding, anchor or
+// launch file. Flattened digest and register policies cannot express these
+// per-image bindings, so a caller converting to the flat form must refuse such
+// a set.
+func (rv ReferenceValues) HasLaunchBindings() bool {
+	for _, img := range rv.Images {
+		if img.Anchor != nil || img.LaunchFile != nil {
 			return true
 		}
 	}
@@ -80,9 +94,9 @@ func (rv ReferenceValues) hexDigests() []string {
 // pins; when uniform is false it must report that rather than drop them
 // silently.
 //
-// uniform here answers only about registers. Anchors are a separate loss that
-// [ReferenceValues.Flatten] folds in, so this reports uniform=true for an
-// anchored set whose registers agree.
+// uniform here answers only about registers. Launch bindings are a separate
+// loss that [ReferenceValues.Flatten] folds in, so this reports uniform=true
+// for a bound set whose registers agree.
 func (rv ReferenceValues) CommonRegisters() (common map[int][]byte, uniform bool) {
 	if len(rv.Images) == 0 {
 		return nil, true
@@ -100,12 +114,13 @@ func (rv ReferenceValues) CommonRegisters() (common map[int][]byte, uniform bool
 // register map: every pinned digest as lowercase hex, plus the registers all
 // images agree on.
 //
-// uniform is false when register pins differ or any image pins an anchor.
-// In that case the flat form loses policy constraints, so a caller requiring
-// the complete policy must refuse it rather than silently weaken admission.
+// uniform is false when register pins differ or any image pins a launch
+// binding. In that case the flat form loses policy constraints, so a caller
+// requiring the complete policy must refuse it rather than silently weaken
+// admission.
 func (rv ReferenceValues) Flatten() (digests []string, rtmrs map[int][]byte, uniform bool) {
 	common, uniform := rv.CommonRegisters()
-	return rv.hexDigests(), common, uniform && !rv.HasAnchors()
+	return rv.hexDigests(), common, uniform && !rv.HasLaunchBindings()
 }
 
 // FromFlags converts the legacy flat pins into images: every digest carries

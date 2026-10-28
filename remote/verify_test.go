@@ -406,11 +406,8 @@ func TestEnforceImagesPinsAnchorWithImage(t *testing.T) {
 // HOSTDATA is set by the paravisor, even when it happens to equal our anchor.
 func TestEnforceImagesRefusesUnsupportedAnchorBinding(t *testing.T) {
 	anchor := []byte("operator")
-	hd := runtimemeasure.HostData(anchor)
-	r := evidence(t, digestA, nil)
-	r.Result.SignatureValid = true
+	r := snpBoundTo(t, anchor)
 	r.Result.Platform = teetypes.PlatformAzSNP
-	r.Result.Claims.InitData = hd[:]
 	images := []ImagePin{{Name: "image", Digest: mustHex(t, digestA), Anchor: anchor}}
 	if err := EnforceImages(r, images, teetypes.PlatformAzSNP); !errors.Is(err, ErrAnchorNotAllowed) {
 		t.Fatalf("Azure SNP launcher binding accepted: %v", err)
@@ -439,6 +436,18 @@ func TestEnforcePinsRefusesMismatchedVerifiedPlatform(t *testing.T) {
 	if err := EnforcePins(r, policy, teetypes.AttestationEvidence{Platform: teetypes.PlatformSNP}); err != nil {
 		t.Fatalf("unstated verified platform refused: %v", err)
 	}
+}
+
+// snpBoundTo returns SNP evidence of image digestA whose HOSTDATA is anchor's
+// digest.
+func snpBoundTo(t *testing.T, anchor []byte) VerifyResponse {
+	t.Helper()
+	hostData := runtimemeasure.HostData(anchor)
+	r := evidence(t, digestA, nil)
+	r.Result.SignatureValid = true
+	r.Result.Platform = teetypes.PlatformSNP
+	r.Result.Claims.InitData = hostData[:]
+	return r
 }
 
 // tdxBoundTo returns TDX evidence of image digestA whose RTMR[3] is anchor's
@@ -513,15 +522,63 @@ func TestEnforceImagesRequiresBareSeed(t *testing.T) {
 	}
 }
 
+// A CDS pin names the exact launch file its VM was started with, and nothing
+// in such a guest extends the binding afterwards.
+func TestEnforceImagesPinsLaunchFile(t *testing.T) {
+	file := []byte("clusterID: alpha\n")
+	other := []byte("clusterID: beta\n")
+	images := []ImagePin{{Name: "cds", Digest: mustHex(t, digestA), LaunchFile: file}}
+
+	t.Run("tdx", func(t *testing.T) {
+		if err := EnforceImages(tdxBoundTo(t, file, nil), images, teetypes.PlatformTDX); err != nil {
+			t.Fatalf("the pinned launch file was refused: %v", err)
+		}
+		if err := EnforceImages(tdxBoundTo(t, other, nil), images, teetypes.PlatformTDX); !errors.Is(err, ErrLaunchFileNotAllowed) {
+			t.Fatalf("another launch file = %v, want ErrLaunchFileNotAllowed", err)
+		}
+		extended := []string{"sha256:" + strings.Repeat("01", 32)}
+		for _, claimed := range [][]string{nil, extended} {
+			err := EnforceImagesWithRuntimeLog(tdxBoundTo(t, file, extended), images, teetypes.PlatformTDX, claimed)
+			if !errors.Is(err, ErrLaunchFileNotAllowed) {
+				t.Fatalf("extended RTMR[3] with claimed %q = %v, want ErrLaunchFileNotAllowed", claimed, err)
+			}
+		}
+	})
+
+	t.Run("snp", func(t *testing.T) {
+		if err := EnforceImages(snpBoundTo(t, file), images, teetypes.PlatformSNP); err != nil {
+			t.Fatalf("the pinned launch file was refused: %v", err)
+		}
+		if err := EnforceImages(snpBoundTo(t, other), images, teetypes.PlatformSNP); !errors.Is(err, ErrLaunchFileNotAllowed) {
+			t.Fatalf("another launch file = %v, want ErrLaunchFileNotAllowed", err)
+		}
+	})
+}
+
+// A launch-file pin that cannot mean what it says is a policy the caller never
+// meant, so it is refused rather than half applied.
+func TestEnforceImagesRefusesContradictoryLaunchFilePin(t *testing.T) {
+	file := []byte("clusterID: alpha\n")
+	for name, mutate := range map[string]func(*ImagePin){
+		"an empty launch file": func(p *ImagePin) { p.LaunchFile = []byte{} },
+		"anchor as well":       func(p *ImagePin) { p.Anchor = file },
+		"an extension hook":    func(p *ImagePin) { p.AcceptExtension = func(string) error { return nil } },
+	} {
+		t.Run(name, func(t *testing.T) {
+			pin := ImagePin{Name: "cds", Digest: mustHex(t, digestA), LaunchFile: file}
+			mutate(&pin)
+			if err := EnforceImages(snpBoundTo(t, file), []ImagePin{pin}, teetypes.PlatformSNP); !errors.Is(err, ErrLaunchFileNotAllowed) {
+				t.Fatalf("pin with %s = %v, want ErrLaunchFileNotAllowed", name, err)
+			}
+		})
+	}
+}
+
 // SNP has no runtime extends, so a claimed list proves nothing there and
 // AcceptExtension never runs.
 func TestEnforceImagesWithRuntimeLogOnSNP(t *testing.T) {
 	anchor := []byte("operator")
-	hd := runtimemeasure.HostData(anchor)
-	r := evidence(t, digestA, nil)
-	r.Result.SignatureValid = true
-	r.Result.Platform = teetypes.PlatformSNP
-	r.Result.Claims.InitData = hd[:]
+	r := snpBoundTo(t, anchor)
 	images := []ImagePin{{
 		Name: "image", Digest: mustHex(t, digestA), Anchor: anchor,
 		AcceptExtension: func(string) error { return errors.New("refuse everything") },

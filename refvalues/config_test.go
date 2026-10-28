@@ -34,6 +34,10 @@ func tdxFile(images string) string {
 	return `{"schema_version":"1","tee":"tdx","measurements":[` + images + `]}`
 }
 
+func snp2File(images string) string {
+	return `{"schema_version":"2","tee":"sev-snp","measurements":[` + images + `]}`
+}
+
 func mustHex(t *testing.T, s string) []byte {
 	t.Helper()
 	b, err := hex.DecodeString(s)
@@ -96,8 +100,14 @@ func TestParseRejects(t *testing.T) {
 		doc  string
 		want string
 	}{
-		{"wrong schema version", `{"schema_version":"2","tee":"tdx","measurements":[{"name":"a","mrtd":"` + d1 + `"}]}`, "schema_version"},
+		{"unknown schema version", `{"schema_version":"3","tee":"tdx","measurements":[{"name":"a","mrtd":"` + d1 + `"}]}`, "schema_version"},
 		{"missing schema version", `{"tee":"tdx","measurements":[{"name":"a","mrtd":"` + d1 + `"}]}`, "schema_version"},
+		{"launch file under schema 1", snpFile(`{"name":"a","measurement":"` + d1 + `","launch_file":"clusterID: alpha\n"}`), "schema_version"},
+		{"launch file and approver key", snp2File(`{"name":"a","measurement":"` + d1 + `","approver_key":"key","launch_file":"clusterID: alpha\n"}`), "at most one"},
+		{"empty launch file", snp2File(`{"name":"a","measurement":"` + d1 + `","launch_file":""}`), "launch_file: is empty"},
+		{"null launch file", snp2File(`{"name":"a","measurement":"` + d1 + `","launch_file":null}`), "launch_file: is empty"},
+		{"non-string launch file", snp2File(`{"name":"a","measurement":"` + d1 + `","launch_file":42}`), "launch_file"},
+		{"duplicate launch file tuple", snp2File(`{"name":"a","measurement":"` + d1 + `","launch_file":"x"},{"name":"b","measurement":"` + d1 + `","launch_file":"x"}`), "same tuple"},
 		{"unknown tee", `{"schema_version":"1","tee":"sev","measurements":[{"name":"a","mrtd":"` + d1 + `"}]}`, "tee"},
 		{"empty measurements", `{"schema_version":"1","tee":"tdx","measurements":[]}`, "empty"},
 		{"missing measurements", `{"schema_version":"1","tee":"tdx"}`, "empty"},
@@ -303,6 +313,7 @@ func TestLoad(t *testing.T) {
 func FuzzParse(f *testing.F) {
 	f.Add(snpFile(`{"name":"a","measurement":"` + d1 + `"}`))
 	f.Add(tdxFile(`{"name":"a","mrtd":"` + d1 + `","rtmr":[null,"` + r1 + `","` + r2 + `",""]}`))
+	f.Add(snp2File(`{"name":"a","measurement":"` + d1 + `","launch_file":"clusterID: alpha\n"}`))
 	f.Fuzz(func(t *testing.T, doc string) {
 		rv, err := Parse([]byte(doc))
 		if err != nil {
@@ -399,6 +410,80 @@ func TestAnchorRoundTripAndTupleIdentity(t *testing.T) {
 	}
 }
 
+// Schema 2 is the version a launch file needs, not one that demands a launch
+// file: a document may declare it and pin none.
+func TestParseSchema2WithoutLaunchFile(t *testing.T) {
+	rv, err := Parse([]byte(snp2File(`{"name":"a","measurement":"` + d1 + `"}`)))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(rv.Images) != 1 || rv.Images[0].LaunchFile != nil {
+		t.Fatalf("parsed %+v, want one pin with no launch file", rv.Images)
+	}
+}
+
+// A launch-file pin is schema 2, survives the document byte for byte, and is
+// part of the tuple: one image launched with two configs is two pins.
+func TestLaunchFileRoundTripAndTupleIdentity(t *testing.T) {
+	const launchFile = "clusterID: alpha\nworkloads:\n  - name: \"a\\tb\"\n"
+	const fileWithTrailingNewline = launchFile + "\n"
+	file := []byte(launchFile)
+	for _, family := range []teetypes.Family{teetypes.FamilyTDX, teetypes.FamilySNP} {
+		t.Run(string(family), func(t *testing.T) {
+			rv := ReferenceValues{Family: family, Images: []remote.ImagePin{
+				{Name: "cds-smp2", Digest: mustHex(t, d1), LaunchFile: file},
+				{Name: "cds-smp4", Digest: mustHex(t, d1), LaunchFile: []byte(fileWithTrailingNewline)},
+			}}
+			if family == teetypes.FamilyTDX {
+				for i := range rv.Images {
+					rv.Images[i].Registers = map[int][]byte{1: mustHex(t, r1), 2: mustHex(t, r2)}
+				}
+			}
+			if rv.HasAnchors() {
+				t.Fatal("a launch file was reported as an anchor")
+			}
+			if _, _, uniform := rv.Flatten(); uniform {
+				t.Fatal("flat policy silently discarded launch files")
+			}
+			if !bytes.Equal(rv.Policy().Images[0].LaunchFile, file) {
+				t.Fatal("Policy dropped the launch file")
+			}
+			for _, format := range []func(ReferenceValues) ([]byte, error){Format, Render} {
+				data, err := format(rv)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var doc struct {
+					SchemaVersion string `json:"schema_version"`
+				}
+				if err := json.Unmarshal(data, &doc); err != nil {
+					t.Fatal(err)
+				}
+				if doc.SchemaVersion != "2" {
+					t.Fatalf("launch file pinned under schema_version %q", doc.SchemaVersion)
+				}
+				for _, parse := range []func([]byte) (ReferenceValues, error){Parse, ParseRendered} {
+					got, err := parse(data)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if !reflect.DeepEqual(got, rv) {
+						t.Fatalf("policy changed on round trip: %+v", got)
+					}
+				}
+			}
+			missing, extra := Diff(ReferenceValues{Images: rv.Images[:1]}, ReferenceValues{Images: rv.Images[1:]})
+			if len(missing) != 1 || len(extra) != 1 {
+				t.Fatal("Diff ignored the launch file")
+			}
+			rv.Images[1].LaunchFile = file
+			if _, err := Format(rv); err == nil {
+				t.Fatal("Format accepted duplicate complete tuple")
+			}
+		})
+	}
+}
+
 func TestAnchorWireAndRenderedDocumentsFailClosed(t *testing.T) {
 	key, err := json.Marshal(string(approverPEM(t)))
 	if err != nil {
@@ -435,13 +520,18 @@ func TestAnchorWireAndRenderedDocumentsFailClosed(t *testing.T) {
 func TestFormatRefusesInvalidOrLossyPins(t *testing.T) {
 	invalidUTF8 := append([]byte{0xff, '\n'}, approverPEM(t)...)
 	for name, mutate := range map[string]func(*remote.ImagePin){
-		"invalid UTF-8 anchor":   func(p *remote.ImagePin) { p.Anchor = invalidUTF8 },
-		"empty anchor":           func(p *remote.ImagePin) { p.Anchor = []byte{} },
-		"generic anchor not PEM": func(p *remote.ImagePin) { p.Anchor = []byte("generic bytes") },
-		"short digest":           func(p *remote.ImagePin) { p.Digest = []byte{1} },
-		"missing name":           func(p *remote.ImagePin) { p.Name = "" },
-		"empty register":         func(p *remote.ImagePin) { p.Registers = map[int][]byte{1: {}} },
-		"short register":         func(p *remote.ImagePin) { p.Registers = map[int][]byte{1: {1}} },
+		"invalid UTF-8 anchor":      func(p *remote.ImagePin) { p.Anchor = invalidUTF8 },
+		"empty anchor":              func(p *remote.ImagePin) { p.Anchor = []byte{} },
+		"generic anchor not PEM":    func(p *remote.ImagePin) { p.Anchor = []byte("generic bytes") },
+		"short digest":              func(p *remote.ImagePin) { p.Digest = []byte{1} },
+		"missing name":              func(p *remote.ImagePin) { p.Name = "" },
+		"empty register":            func(p *remote.ImagePin) { p.Registers = map[int][]byte{1: {}} },
+		"short register":            func(p *remote.ImagePin) { p.Registers = map[int][]byte{1: {1}} },
+		"invalid UTF-8 launch file": func(p *remote.ImagePin) { p.LaunchFile = []byte{0xff} },
+		"empty launch file":         func(p *remote.ImagePin) { p.LaunchFile = []byte{} },
+		"both launch bindings": func(p *remote.ImagePin) {
+			p.Anchor, p.LaunchFile = approverPEM(t), []byte("clusterID: alpha\n")
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			rv := ReferenceValues{Family: teetypes.FamilyTDX, Images: []remote.ImagePin{{Name: "image", Digest: mustHex(t, d1)}}}
