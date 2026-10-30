@@ -149,3 +149,27 @@ func TestExpectedMeasurementsMarshalAsBase64(t *testing.T) {
 		t.Errorf("expected_mrtd is not standard base64: %s", body)
 	}
 }
+
+// The envelope splits into the platform at the top level and the evidence
+// object beside it, and the request asks for no token.
+func TestNewVerifyRequestNoToken(t *testing.T) {
+	evidence := json.RawMessage(`{"quote":"x"}`)
+	req := NewVerifyRequestNoToken(teetypes.AttestationEvidence{
+		Platform: teetypes.PlatformGcpSNP,
+		Evidence: evidence,
+	}, &VerifyParams{ExpectedReportData: measurement(0x07)})
+
+	if req.Platform != teetypes.PlatformGcpSNP {
+		t.Errorf("platform = %q, want gcp-snp", req.Platform)
+	}
+	if !bytes.Equal(req.Evidence, evidence) {
+		t.Errorf("evidence = %s, want %s", req.Evidence, evidence)
+	}
+	body, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"issue_token":false`) {
+		t.Errorf("request does not ask for no token: %s", body)
+	}
+}

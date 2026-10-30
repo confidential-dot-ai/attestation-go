@@ -197,7 +197,7 @@ func TestVerifyEnforcedChecksExpectedMeasurementsAgainstClaims(t *testing.T) {
 				t.Fatal(err)
 			}
 			ev := teetypes.AttestationEvidence{Platform: teetypes.PlatformTDX, Evidence: json.RawMessage(`{}`)}
-			_, err := c.VerifyEnforced(context.Background(), NewVerifyRequest(ev, &params, false))
+			_, err := c.VerifyEnforced(context.Background(), NewVerifyRequestNoToken(ev, &params))
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("VerifyEnforced() = %v, want %v", err, tc.want)
 			}

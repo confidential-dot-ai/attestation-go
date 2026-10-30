@@ -52,7 +52,7 @@ func (r AttestResponse) Envelope() teetypes.AttestationEvidence {
 
 // VerifyRequest is the body of POST /verify. The service wants the platform at
 // the top level and Evidence as the platform-specific object, so build it with
-// [NewVerifyRequest] rather than by hand from an envelope.
+// [NewVerifyRequestNoToken] rather than by hand from an envelope.
 type VerifyRequest struct {
 	Platform   teetypes.PlatformType `json:"platform"`
 	Evidence   json.RawMessage       `json:"evidence"`
@@ -60,14 +60,26 @@ type VerifyRequest struct {
 	IssueToken *bool                 `json:"issue_token,omitempty"`
 }
 
-// NewVerifyRequest splits an evidence envelope into the shape /verify expects.
-func NewVerifyRequest(evidence teetypes.AttestationEvidence, params *VerifyParams, issueToken bool) VerifyRequest {
+// NewVerifyRequestNoToken splits an evidence envelope into the shape /verify
+// expects, asking for a verdict and no token: the verdict answers the one
+// decision the caller is making, and a token outlives it.
+func NewVerifyRequestNoToken(evidence teetypes.AttestationEvidence, params *VerifyParams) VerifyRequest {
 	return VerifyRequest{
 		Platform:   evidence.Platform,
 		Evidence:   evidence.Evidence,
 		Params:     params,
-		IssueToken: &issueToken,
+		IssueToken: teetypes.Ptr(false),
 	}
+}
+
+// NewVerifyRequest splits an evidence envelope into the shape /verify expects.
+//
+// Deprecated: use [NewVerifyRequestNoToken], and set
+// [VerifyRequest.IssueToken] on its result to ask the service for a token.
+func NewVerifyRequest(evidence teetypes.AttestationEvidence, params *VerifyParams, issueToken bool) VerifyRequest {
+	request := NewVerifyRequestNoToken(evidence, params)
+	request.IssueToken = &issueToken
+	return request
 }
 
 // VerifyParams are the optional checks /verify performs server-side. An empty

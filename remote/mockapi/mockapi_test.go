@@ -154,10 +154,10 @@ func TestStubVerifyRecordsAndAnswersVerdict(t *testing.T) {
 	stub.SetVerdict(mockapi.PassingVerdict("deadbeef"))
 
 	expected := []byte("expected-report-data")
-	req := remote.NewVerifyRequest(teetypes.AttestationEvidence{
+	req := remote.NewVerifyRequestNoToken(teetypes.AttestationEvidence{
 		Platform: teetypes.PlatformGcpSNP,
 		Evidence: json.RawMessage(`{"quote":"x"}`),
-	}, &remote.VerifyParams{ExpectedReportData: expected}, false)
+	}, &remote.VerifyParams{ExpectedReportData: expected})
 
 	resp, err := remote.NewClient(stub.URL()).VerifyEnforced(context.Background(), req)
 	if err != nil {
@@ -190,9 +190,9 @@ func TestStubVerifyMismatchFailsEnforcement(t *testing.T) {
 	verdict.ReportDataMatch = teetypes.Ptr(false)
 	stub.SetVerdict(verdict)
 
-	req := remote.NewVerifyRequest(
+	req := remote.NewVerifyRequestNoToken(
 		teetypes.AttestationEvidence{Platform: teetypes.PlatformSNP, Evidence: json.RawMessage(`{}`)},
-		&remote.VerifyParams{ExpectedReportData: []byte("expected-report-data")}, false)
+		&remote.VerifyParams{ExpectedReportData: []byte("expected-report-data")})
 	_, err := remote.NewClient(stub.URL()).VerifyEnforced(context.Background(), req)
 	if !errors.Is(err, remote.ErrReportDataMismatch) {
 		t.Fatalf("err = %v, want ErrReportDataMismatch", err)
@@ -207,9 +207,9 @@ func TestStubVerifyErrorAnswersTheRefusalShape(t *testing.T) {
 	stub.SetVerifyError(mockapi.VerificationFailed("report signature does not verify"))
 	c := remote.NewClient(stub.URL())
 
-	req := remote.NewVerifyRequest(
+	req := remote.NewVerifyRequestNoToken(
 		teetypes.AttestationEvidence{Platform: teetypes.PlatformSNP, Evidence: json.RawMessage(`{}`)},
-		&remote.VerifyParams{ExpectedReportData: []byte("expected-report-data")}, false)
+		&remote.VerifyParams{ExpectedReportData: []byte("expected-report-data")})
 	_, err := c.VerifyEnforced(context.Background(), req)
 
 	var apiErr *remote.APIError
@@ -247,9 +247,9 @@ func TestStubVerifyErrorPlainTextBody(t *testing.T) {
 		Message: "Failed to deserialize the JSON body into the target type",
 	})
 
-	req := remote.NewVerifyRequest(
+	req := remote.NewVerifyRequestNoToken(
 		teetypes.AttestationEvidence{Platform: teetypes.PlatformSNP, Evidence: json.RawMessage(`{}`)},
-		&remote.VerifyParams{ExpectedReportData: []byte("expected-report-data")}, false)
+		&remote.VerifyParams{ExpectedReportData: []byte("expected-report-data")})
 	_, err := remote.NewClient(stub.URL()).VerifyEnforced(context.Background(), req)
 
 	var unexpected *remote.UnexpectedError
