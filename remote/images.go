@@ -182,9 +182,6 @@ func enforceLaunchFile(r *teetypes.VerificationResult, img ImagePin) error {
 func checkLaunchFilePins(images []ImagePin) error {
 	for _, img := range images {
 		if img.LaunchFile == nil {
-func checkLaunchFilePins(images []ImagePin) error {
-	for _, img := range images {
-		if img.LaunchFile == nil {
 			continue
 		}
 		if len(img.LaunchFile) == 0 {
