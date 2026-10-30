@@ -226,12 +226,12 @@ func (c Client) VerifyEvidenceWithRuntimeLog(ctx context.Context, evidence teety
 		return VerifyResponse{}, fmt.Errorf("%w: platform %q has no SEV-SNP TCB", ErrMinTcbNotAllowed, evidence.Platform)
 	}
 
-	resp, err := c.VerifyEnforced(ctx, NewVerifyRequest(evidence, &VerifyParams{
+	resp, err := c.VerifyEnforced(ctx, NewVerifyRequestNoToken(evidence, &VerifyParams{
 		ExpectedReportData:   policy.ExpectedReportData,
 		ExpectedInitDataHash: policy.ExpectedInitDataHash,
 		AllowDebug:           teetypes.Ptr(policy.AllowDebug),
 		MinTcb:               policy.MinTcb,
-	}, false))
+	}))
 	if err != nil {
 		return VerifyResponse{}, err
 	}
