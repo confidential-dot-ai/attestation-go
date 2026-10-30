@@ -210,6 +210,13 @@ leaves the anchor unchecked; a non-nil empty anchor is refused.
 as `ErrAnchorNotAllowed`.
 Azure SNP refuses this binding because its paravisor owns HOSTDATA.
 
+`ImagePin.LaunchFile` pins the launch configuration file a guest was launched
+with, in the same binding field, and reports every refusal as
+`ErrLaunchFileNotAllowed`. The quote must carry that file alone, so a runtime
+extension on top of it is refused whatever the claimed list says. A pin that
+sets `LaunchFile` together with `Anchor` or `AcceptExtension` is refused before
+any evidence is matched.
+
 `Client.Verify` is the raw endpoint, for callers enforcing the verdict
 themselves; `Client.VerifyEnforced` is the middle ground (verdict gated,
 reference values not).
@@ -340,16 +347,26 @@ refuses other values or invalid UTF-8 that JSON cannot preserve. Identical image
 measurements with different anchors are distinct accepted tuples. Repeating a
 complete tuple or a name is an error.
 
+`schema_version` `"2"` adds the other launch binding: `launch_file`, a JSON
+string holding the exact bytes of the launch configuration file the guest was
+launched with, mapping to `ImagePin.LaunchFile`. An entry carries at most one
+of the two fields. A `launch_file` under `"1"` is refused, so a schema 1 reader
+never loads a document whose binding it would ignore; a `"2"` document may pin
+none. `Format` and `Render` write `"2"` only for a set that pins a launch file,
+so a schema 1 reader keeps loading every other document and fails closed on
+this one.
+
 `Parse` and `ParseRendered` reject unknown or duplicate JSON fields, trailing
 data, and malformed pins. `Format` and `Render` refuse values they cannot
 preserve. `Render` and `ParseRendered` additionally support empty sets for
 components reporting that they pin nothing. `Diff` compares the complete
-digest/register/anchor tuple; diagnostic names do not affect admission.
+digest/register/binding tuple; diagnostic names do not affect admission.
 
-`HasAnchors` reports whether the set pins any anchor. `Flatten` returns
-`uniform=false` for such a set because flat digest/register flags cannot
-express its bindings; callers requiring the complete policy must reject that
-conversion. `FromFlags` gives distinct digests stable diagnostic names and
+`HasAnchors` reports whether the set pins any approver key, and
+`HasLaunchBindings` whether it pins either binding kind. `Flatten` returns
+`uniform=false` for a set pinning any launch binding because flat
+digest/register flags cannot express it; callers requiring the complete policy
+must reject that conversion. `FromFlags` gives distinct digests stable diagnostic names and
 removes repeated digests. `FormatRTMRPins` renders register flags in index
 order.
 

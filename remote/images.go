@@ -11,7 +11,8 @@ import (
 
 // ImagePin is one guest image's measurement identity: its launch digest
 // together with the registers measured from the same build and an optional
-// anchor distinguishing the launch it was configured to trust.
+// launch binding — the anchor it was configured to trust, or the launch file
+// it was launched with.
 //
 // A launch digest and its registers only mean anything together — two images
 // built against the same firmware share a TDX MRTD — so a pin is matched whole
@@ -36,6 +37,15 @@ type ImagePin struct {
 	// [EnforceImagesWithRuntimeLog].
 	Anchor []byte
 
+	// LaunchFile pins the exact bytes of the launch configuration file the
+	// guest was launched with. The binding must carry that file alone, with no
+	// runtime extension on top of it. Nil leaves the binding unchecked.
+	//
+	// An empty file, or one set alongside Anchor, which is the same hardware
+	// field, or alongside AcceptExtension, which a launch-file binding never
+	// calls, is refused with [ErrLaunchFileNotAllowed].
+	LaunchFile []byte
+
 	// AcceptExtension judges each runtime extension the quote proves on top
 	// of Anchor. A refusal fails with [ErrAnchorNotAllowed] wrapping the
 	// returned error, so errors.Is reaches the hook's own sentinel. Nil
@@ -48,7 +58,7 @@ type ImagePin struct {
 }
 
 // EnforceImages accepts evidence matching one pinned image whole: its launch
-// digest, every register, and the launch anchor that image pins.
+// digest, every register, and the launch binding that image pins.
 // Callers must first verify the hardware signature and freshness verdict.
 //
 // An image that pins registers cannot match evidence from a platform without
@@ -76,11 +86,21 @@ func EnforceImages(resp VerifyResponse, images []ImagePin, platform teetypes.Pla
 // were not measured into it, prove nothing, and are not judged. On SEV-SNP
 // k is always 0. A nil claimed requires the bare seed.
 //
+// An image pinning LaunchFile requires the bare binding, so claimed says
+// nothing about it: a guest launched with a pinned file extends nothing on top
+// of it.
+//
 // Each anchored image replays claimed at one SHA-384 per entry, so bound a
 // list taken from a peer before passing it; armtls caps it at 256.
 func EnforceImagesWithRuntimeLog(resp VerifyResponse, images []ImagePin, platform teetypes.PlatformType, claimed []string) error {
 	if len(images) == 0 {
 		return nil
+	}
+	if err := checkVerifiedPlatform(resp, platform); err != nil {
+		return err
+	}
+	if err := checkLaunchFilePins(images); err != nil {
+		return err
 	}
 	digest, err := launchDigest(resp)
 	if err != nil {
@@ -111,6 +131,12 @@ func EnforceImagesWithRuntimeLog(resp VerifyResponse, images []ImagePin, platfor
 				continue
 			}
 		}
+		if img.LaunchFile != nil {
+			if err := enforceLaunchFile(&resp.Result, img); err != nil {
+				lastErr = fmt.Errorf("%s: %w: %w", img.Name, ErrLaunchFileNotAllowed, err)
+				continue
+			}
+		}
 		return nil
 	}
 	if lastErr != nil {
@@ -137,6 +163,35 @@ func enforceAnchor(r *teetypes.VerificationResult, img ImagePin, claimed []strin
 	for _, d := range claimed[:k] {
 		if err := img.AcceptExtension(d); err != nil {
 			return fmt.Errorf("runtime extension %s refused: %w", d, err)
+		}
+	}
+	return nil
+}
+
+// enforceLaunchFile requires the binding to prove img.LaunchFile and nothing
+// else. VerifyBinding owns every platform question the file raises: which
+// field carries the binding, and which platforms refuse it.
+func enforceLaunchFile(r *teetypes.VerificationResult, img ImagePin) error {
+	var noRuntimeExtensions []string
+	return runtimemeasure.VerifyBinding(r, img.LaunchFile, noRuntimeExtensions)
+}
+
+// checkLaunchFilePins refuses a launch-file pin that cannot mean what it says:
+// an empty file binds nothing, Anchor is the same hardware field, and
+// AcceptExtension judges extensions a launch-file binding does not admit.
+func checkLaunchFilePins(images []ImagePin) error {
+	for _, img := range images {
+		if img.LaunchFile == nil {
+			continue
+		}
+		if len(img.LaunchFile) == 0 {
+			return fmt.Errorf("%s: %w: the launch file pin is empty", img.Name, ErrLaunchFileNotAllowed)
+		}
+		if img.Anchor != nil {
+			return fmt.Errorf("%s: %w: the pin sets both Anchor and LaunchFile", img.Name, ErrLaunchFileNotAllowed)
+		}
+		if img.AcceptExtension != nil {
+			return fmt.Errorf("%s: %w: the pin sets AcceptExtension, which a launch-file binding never calls", img.Name, ErrLaunchFileNotAllowed)
 		}
 	}
 	return nil

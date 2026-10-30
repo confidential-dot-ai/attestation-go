@@ -1,6 +1,7 @@
 // Package refvalues holds the reference values a verifier compares evidence
 // against: the set of guest images a deployment accepts, each pinned as one
-// atomic tuple of launch digest, runtime registers, and optional launch anchor.
+// atomic tuple of launch digest, runtime registers, and optional launch
+// binding.
 //
 // A launch digest and its registers only mean anything together — two images
 // built against the same TDVF firmware share an MRTD — so an image matches
@@ -12,17 +13,27 @@
 // Generic programmatic anchors cannot be formatted as approver_key unless
 // they satisfy that public-key contract.
 //
-// The field names its one kind deliberately. [remote.ImagePin.Anchor] is
+// Each field names its one kind deliberately. [remote.ImagePin.Anchor] is
 // opaque bytes because [runtimemeasure] hashes whatever it is given, but a
 // document an operator reviews should say what the value it pins is, so that a
-// reviewer can check it rather than compare hex. A second anchor kind is a new
-// field under a new schema_version, not a reinterpretation of this one.
+// reviewer can check it rather than compare hex. A second binding kind is a
+// new field under a new schema_version, not a reinterpretation of the first.
+//
+// schema_version 2 adds that second kind: a launch_file holding the exact
+// bytes of the launch configuration file a guest was launched with, mapped to
+// [remote.ImagePin.LaunchFile]. An entry carries at most one of approver_key
+// and launch_file, both naming the same hardware field. [Format] and [Render]
+// write schema_version 2 only for a set that pins a launch file, so a schema 1
+// reader sees a document it still loads, and refuse one they cannot preserve
+// byte for byte. [Parse] refuses a launch_file under schema_version 1, where a
+// reader has no such field; a schema 2 document may pin none.
 //
 // [ParseRendered] uses the same strict parsing rules as [Parse], while
 // permitting the empty set a component may report through [Render]. [Diff]
-// includes the anchor in the tuple. [ReferenceValues.HasAnchors] lets callers
-// detect bindings that flat flags cannot express; [ReferenceValues.Flatten]
-// reports uniform=false rather than claiming those pins survived.
+// includes the launch binding in the tuple. [ReferenceValues.HasLaunchBindings]
+// lets callers detect the bindings flat flags cannot express, of either kind;
+// [ReferenceValues.Flatten] reports uniform=false for such a set rather than
+// claiming those pins survived.
 //
 // The package owns three shapes of the same thing:
 //

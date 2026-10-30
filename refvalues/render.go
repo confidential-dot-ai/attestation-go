@@ -36,9 +36,9 @@ func ParseRendered(data []byte) (ReferenceValues, error) {
 }
 
 // Diff reports the images each side pins and the other does not, matched on
-// what decides admission: the digest, registers, and anchor. Names are diagnostic
-// only, so two entries that name one image differently are still the same
-// pin.
+// what decides admission: the digest, registers, and launch binding. Names are
+// diagnostic only, so two entries that name one image differently are still
+// the same pin.
 func Diff(want, got ReferenceValues) (missing, extra []remote.ImagePin) {
 	index := func(rv ReferenceValues) map[string]remote.ImagePin {
 		m := make(map[string]remote.ImagePin, len(rv.Images))

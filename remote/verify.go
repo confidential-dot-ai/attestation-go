@@ -42,6 +42,11 @@ var (
 	// anchor, or the verified platform cannot carry that binding.
 	ErrAnchorNotAllowed = errors.New("remote: launch anchor not allowed")
 
+	// ErrLaunchFileNotAllowed: a matched image does not bind its pinned launch
+	// file, the verified platform cannot carry that binding, or the pin states
+	// a launch file alongside a binding that contradicts it.
+	ErrLaunchFileNotAllowed = errors.New("remote: launch file not allowed")
+
 	// ErrPlatformMismatch: the verifier attested a platform other than the one
 	// the evidence was submitted for, so every claim read from the result
 	// answers a different question than the policy asked.
@@ -89,7 +94,7 @@ type Policy struct {
 	MinTcb *teetypes.SnpTcb
 
 	// Images pins whole images: launch digest, registers from the same build,
-	// and an optional launch anchor matched on that same entry. When set it
+	// and an optional launch binding matched on that same entry. When set it
 	// replaces Measurements and Registers; none of these pins match independently.
 	Images []ImagePin
 
@@ -258,17 +263,8 @@ func EnforcePins(resp VerifyResponse, policy Policy, evidence teetypes.Attestati
 // than a [Policy] field.
 func EnforcePinsWithRuntimeLog(resp VerifyResponse, policy Policy, evidence teetypes.AttestationEvidence, claimed []string) error {
 	platform := evidence.Platform
-	// Every pin below reads claims out of the verified result and judges them
-	// against the platform the evidence was submitted for. If the verifier
-	// attested a different platform, those claims answer a different question,
-	// so this is settled once for the response rather than per pin form.
-	//
-	// A result that names no platform states nothing to contradict; the pin
-	// forms below already refuse the claims such a response fails to carry.
-	if resp.Result.Platform != "" &&
-		teetypes.NormalizePlatform(string(platform)) != teetypes.NormalizePlatform(string(resp.Result.Platform)) {
-		return fmt.Errorf("%w: verified %q, evidence submitted for %q",
-			ErrPlatformMismatch, resp.Result.Platform, platform)
+	if err := checkVerifiedPlatform(resp, platform); err != nil {
+		return err
 	}
 	// PCR pins are orthogonal to the launch measurement: on an Azure guest the
 	// launch measurement identifies the paravisor and the PCRs identify the
@@ -292,6 +288,22 @@ func EnforcePinsWithRuntimeLog(resp VerifyResponse, policy Policy, evidence teet
 			ErrRegistersNotAllowed, len(policy.Registers), platform)
 	}
 	return nil
+}
+
+// checkVerifiedPlatform requires the platform the verifier attested to be the
+// one the evidence was submitted for. Every pin reads claims out of the
+// verified result and judges them against the submitted platform, so claims
+// attested for another one answer a different question than the pin asked.
+//
+// A result that names no platform states nothing to contradict; the pin forms
+// already refuse the claims such a response fails to carry.
+func checkVerifiedPlatform(resp VerifyResponse, platform teetypes.PlatformType) error {
+	verified := resp.Result.Platform
+	if verified == "" ||
+		teetypes.NormalizePlatform(string(platform)) == teetypes.NormalizePlatform(string(verified)) {
+		return nil
+	}
+	return fmt.Errorf("%w: verified %q, evidence submitted for %q", ErrPlatformMismatch, verified, platform)
 }
 
 // EnforcePCRs requires each pinned vTPM register to byte-equal what the
