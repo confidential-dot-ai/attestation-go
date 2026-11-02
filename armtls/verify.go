@@ -32,8 +32,8 @@ import (
 // counts as a failure.
 //
 // It does not replay att.RuntimeExtensions. A caller pinning an image anchor
-// passes the list to [remote.EnforceImagesWithRuntimeLog] or
-// [runtimemeasure.MatchBindingPrefix] along with the result.
+// or launch file digest passes the list to [remote.EnforceImagesWithRuntimeLog]
+// or [runtimemeasure.MatchBindingPrefix] along with the result.
 func VerifyOffline(att *Attestation, pub crypto.PublicKey, nonce []byte, params teetypes.VerifyParams, opts teeverify.Options) (*teetypes.VerificationResult, error) {
 	env, err := att.Envelope()
 	if err != nil {
@@ -85,9 +85,9 @@ func VerifyCertOffline(cert *x509.Certificate, oid asn1.ObjectIdentifier, nonce 
 // It goes through [remote.Client.VerifyEvidenceWithRuntimeLog], which fails
 // closed on the verdict and then on the policy's pins, and refuses a platform
 // tag it has no rules for. On TDX, att.RuntimeExtensions is the claimed list
-// replayed against image anchor pins, refused first when too long or holding a
-// non-canonical digest; on SEV-SNP it is ignored. Its sentinels
-// (remote.ErrSignatureInvalid, remote.ErrReportDataMismatch,
+// replayed against image anchor and launch file digest pins, refused first
+// when too long or holding a non-canonical digest; on SEV-SNP it is ignored.
+// Its sentinels (remote.ErrSignatureInvalid, remote.ErrReportDataMismatch,
 // remote.ErrMeasurementNotAllowed, …) reach the caller unchanged, so errors.Is
 // reaches them.
 //

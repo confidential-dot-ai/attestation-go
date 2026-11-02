@@ -36,7 +36,8 @@ func (rv ReferenceValues) Empty() bool { return len(rv.Images) == 0 }
 
 // HasAnchors reports whether any image pins an approver key. A caller asking
 // what the flat digest and register lists lose wants
-// [ReferenceValues.HasLaunchBindings], which covers launch files too.
+// [ReferenceValues.HasLaunchBindings], which covers launch files and their
+// digests too.
 func (rv ReferenceValues) HasAnchors() bool {
 	for _, img := range rv.Images {
 		if img.Anchor != nil {
@@ -46,13 +47,13 @@ func (rv ReferenceValues) HasAnchors() bool {
 	return false
 }
 
-// HasLaunchBindings reports whether any image pins a launch binding, anchor or
-// launch file. Flattened digest and register policies cannot express these
-// per-image bindings, so a caller converting to the flat form must refuse such
-// a set.
+// HasLaunchBindings reports whether any image pins a launch binding: anchor,
+// launch file, or launch file digest. Flattened digest and register policies
+// cannot express these per-image bindings, so a caller converting to the flat
+// form must refuse such a set.
 func (rv ReferenceValues) HasLaunchBindings() bool {
 	for _, img := range rv.Images {
-		if img.Anchor != nil || img.LaunchFile != nil {
+		if img.Anchor != nil || img.LaunchFile != nil || img.LaunchFileDigest != nil {
 			return true
 		}
 	}

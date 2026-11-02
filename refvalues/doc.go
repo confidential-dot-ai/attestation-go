@@ -21,17 +21,20 @@
 //
 // schema_version 2 adds that second kind: a launch_file holding the exact
 // bytes of the launch configuration file a guest was launched with, mapped to
-// [remote.ImagePin.LaunchFile]. An entry carries at most one of approver_key
-// and launch_file, both naming the same hardware field. [Format] and [Render]
-// write schema_version 2 only for a set that pins a launch file, so a schema 1
+// [remote.ImagePin.LaunchFile], or a launch_file_digest holding its
+// [runtimemeasure.LaunchFileDigest] alone as lowercase hex of the document
+// family's width, mapped to [remote.ImagePin.LaunchFileDigest]. An entry
+// carries at most one of approver_key, launch_file and launch_file_digest, all
+// naming the same hardware field. [Format] and [Render] write schema_version 2
+// only for a set that pins a launch file, whole or by digest, so a schema 1
 // reader sees a document it still loads, and refuse one they cannot preserve
-// byte for byte. [Parse] refuses a launch_file under schema_version 1, where a
+// byte for byte. [Parse] refuses either field under schema_version 1, where a
 // reader has no such field; a schema 2 document may pin none.
 //
 // [ParseRendered] uses the same strict parsing rules as [Parse], while
 // permitting the empty set a component may report through [Render]. [Diff]
 // includes the launch binding in the tuple. [ReferenceValues.HasLaunchBindings]
-// lets callers detect the bindings flat flags cannot express, of either kind;
+// lets callers detect the bindings flat flags cannot express, of any kind;
 // [ReferenceValues.Flatten] reports uniform=false for such a set rather than
 // claiming those pins survived.
 //
