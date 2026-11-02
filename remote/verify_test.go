@@ -3,6 +3,7 @@ package remote
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -461,8 +462,18 @@ func tdxBoundTo(t *testing.T, anchor []byte, extended []string) VerifyResponse {
 	return r
 }
 
+// A launch file digest pin replays the runtime log exactly as an anchor pin of
+// the same file does.
 func TestEnforceImagesWithRuntimeLog(t *testing.T) {
 	anchor := []byte("operator")
+	pins := []struct {
+		kind     string
+		pin      ImagePin
+		sentinel error
+	}{
+		{"anchor", ImagePin{Anchor: anchor}, ErrAnchorNotAllowed},
+		{"launch file digest", ImagePin{LaunchFileDigest: digestOfAnchor(t, teetypes.FamilyTDX, anchor)}, ErrLaunchFileNotAllowed},
+	}
 	d := func(b string) string { return "sha256:" + strings.Repeat(b, 32) }
 	log := []string{d("01"), d("02"), d("03")}
 	acceptAll := func(string) error { return nil }
@@ -492,19 +503,22 @@ func TestEnforceImagesWithRuntimeLog(t *testing.T) {
 		{name: "refused beyond the prefix", extended: log[:2], claimed: log, accept: refuse(log[2])},
 		{name: "non-canonical entry", extended: log[:1], claimed: []string{strings.ToUpper(log[0])}, wantErr: true},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			images := []ImagePin{{Name: "image", Digest: mustHex(t, digestA), Anchor: anchor, AcceptExtension: tc.accept}}
-			err := EnforceImagesWithRuntimeLog(tdxBoundTo(t, anchor, tc.extended), images, teetypes.PlatformTDX, tc.claimed)
-			if tc.wantErr {
-				if !errors.Is(err, ErrAnchorNotAllowed) {
-					t.Fatalf("EnforceImagesWithRuntimeLog() = %v, want ErrAnchorNotAllowed", err)
+		for _, p := range pins {
+			t.Run(p.kind+"/"+tc.name, func(t *testing.T) {
+				pin := p.pin
+				pin.Name, pin.Digest, pin.AcceptExtension = "image", mustHex(t, digestA), tc.accept
+				err := EnforceImagesWithRuntimeLog(tdxBoundTo(t, anchor, tc.extended), []ImagePin{pin}, teetypes.PlatformTDX, tc.claimed)
+				if tc.wantErr {
+					if !errors.Is(err, p.sentinel) {
+						t.Fatalf("EnforceImagesWithRuntimeLog() = %v, want %v", err, p.sentinel)
+					}
+					return
 				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("EnforceImagesWithRuntimeLog() = %v, want nil", err)
-			}
-		})
+				if err != nil {
+					t.Fatalf("EnforceImagesWithRuntimeLog() = %v, want nil", err)
+				}
+			})
+		}
 	}
 }
 
@@ -569,6 +583,104 @@ func TestEnforceImagesRefusesContradictoryLaunchFilePin(t *testing.T) {
 			mutate(&pin)
 			if err := EnforceImages(snpBoundTo(t, file), []ImagePin{pin}, teetypes.PlatformSNP); !errors.Is(err, ErrLaunchFileNotAllowed) {
 				t.Fatalf("pin with %s = %v, want ErrLaunchFileNotAllowed", name, err)
+			}
+		})
+	}
+}
+
+func mustLaunchFileDigest(t *testing.T, f teetypes.Family, file []byte) []byte {
+	t.Helper()
+	d, err := runtimemeasure.LaunchFileDigest(f, file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+// digestOfAnchor returns the LaunchFileDigest pin that tdxBoundTo and
+// snpBoundTo evidence for anchor satisfies, having checked that it is: Seed is
+// Extend(Zero, SHA-384(anchor)), and HostData is SHA-256(anchor).
+func digestOfAnchor(t *testing.T, f teetypes.Family, anchor []byte) []byte {
+	t.Helper()
+	d := mustLaunchFileDigest(t, f, anchor)
+	switch f {
+	case teetypes.FamilyTDX:
+		if len(d) != runtimemeasure.Size || runtimemeasure.Extend(runtimemeasure.Zero, [runtimemeasure.Size]byte(d)) != runtimemeasure.Seed(anchor) {
+			t.Fatal("a TDX launch file digest does not fold to its anchor's seed")
+		}
+	case teetypes.FamilySNP:
+		if hostData := runtimemeasure.HostData(anchor); !bytes.Equal(d, hostData[:]) {
+			t.Fatal("an SEV-SNP launch file digest is not its anchor's HOSTDATA")
+		}
+	default:
+		t.Fatalf("no evidence builder for family %s", f)
+	}
+	return d
+}
+
+// A worker pin names its launch file by digest alone.
+func TestEnforceImagesPinsLaunchFileDigest(t *testing.T) {
+	file := []byte("clusterID: alpha\n")
+	other := []byte("clusterID: beta\n")
+	for _, tc := range []struct {
+		name     string
+		resp     VerifyResponse
+		platform teetypes.PlatformType
+		digest   []byte
+		wantErr  bool
+	}{
+		{"tdx", tdxBoundTo(t, file, nil), teetypes.PlatformTDX, digestOfAnchor(t, teetypes.FamilyTDX, file), false},
+		{"tdx other file", tdxBoundTo(t, other, nil), teetypes.PlatformTDX, digestOfAnchor(t, teetypes.FamilyTDX, file), true},
+		{"snp", snpBoundTo(t, file), teetypes.PlatformSNP, digestOfAnchor(t, teetypes.FamilySNP, file), false},
+		{"snp other file", snpBoundTo(t, other), teetypes.PlatformSNP, digestOfAnchor(t, teetypes.FamilySNP, file), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			images := []ImagePin{{Name: "worker", Digest: mustHex(t, digestA), LaunchFileDigest: tc.digest}}
+			err := EnforceImages(tc.resp, images, tc.platform)
+			if tc.wantErr {
+				if !errors.Is(err, ErrLaunchFileNotAllowed) {
+					t.Fatalf("EnforceImages() = %v, want ErrLaunchFileNotAllowed", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("EnforceImages() = %v, want nil", err)
+			}
+		})
+	}
+}
+
+// A launch binding pin that cannot mean what it says fails the whole policy
+// before any evidence is matched, even beside a pin that matches.
+func TestEnforceImagesRefusesInvalidLaunchBindingPin(t *testing.T) {
+	file := []byte("clusterID: alpha\n")
+	snp := digestOfAnchor(t, teetypes.FamilySNP, file)
+	tdx := digestOfAnchor(t, teetypes.FamilyTDX, file)
+	emptyFile := sha256.Sum256(nil)
+	for name, tc := range map[string]struct {
+		resp     VerifyResponse
+		platform teetypes.PlatformType
+		valid    []byte
+		invalid  ImagePin
+	}{
+		"anchor and launch file":        {snpBoundTo(t, file), teetypes.PlatformSNP, snp, ImagePin{Anchor: file, LaunchFile: file}},
+		"anchor and launch file digest": {snpBoundTo(t, file), teetypes.PlatformSNP, snp, ImagePin{Anchor: file, LaunchFileDigest: snp}},
+		"launch file and its digest":    {snpBoundTo(t, file), teetypes.PlatformSNP, snp, ImagePin{LaunchFile: file, LaunchFileDigest: snp}},
+		"empty digest":                  {snpBoundTo(t, file), teetypes.PlatformSNP, snp, ImagePin{LaunchFileDigest: []byte{}}},
+		"tdx width on sev-snp":          {snpBoundTo(t, file), teetypes.PlatformSNP, snp, ImagePin{LaunchFileDigest: tdx}},
+		"sev-snp width on tdx":          {tdxBoundTo(t, file, nil), teetypes.PlatformTDX, tdx, ImagePin{LaunchFileDigest: snp}},
+		"all-zero digest":               {snpBoundTo(t, file), teetypes.PlatformSNP, snp, ImagePin{LaunchFileDigest: make([]byte, runtimemeasure.HostDataSize)}},
+		"empty file's digest":           {snpBoundTo(t, file), teetypes.PlatformSNP, snp, ImagePin{LaunchFileDigest: emptyFile[:]}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			valid := ImagePin{Name: "valid", Digest: mustHex(t, digestA), LaunchFileDigest: tc.valid}
+			if err := EnforceImages(tc.resp, []ImagePin{valid}, tc.platform); err != nil {
+				t.Fatalf("the valid pin alone = %v, want nil", err)
+			}
+			invalid := tc.invalid
+			invalid.Name, invalid.Digest = "invalid", mustHex(t, digestA)
+			if err := EnforceImages(tc.resp, []ImagePin{valid, invalid}, tc.platform); !errors.Is(err, ErrLaunchFileNotAllowed) {
+				t.Fatalf("EnforceImages() = %v, want ErrLaunchFileNotAllowed", err)
 			}
 		})
 	}

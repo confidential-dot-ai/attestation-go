@@ -61,27 +61,51 @@ func checkBindingPlatform(p teetypes.PlatformType) error {
 // is refused: its digest is a public constant, so a guest launched with an
 // empty anchor file would verify as bound to nothing in particular.
 //
-// workloadDigests are canonical "sha256:<64-hex>" strings (see
-// [CanonicalDigest]), deduplicated and in extend order. SEV-SNP has no runtime
-// extends, so a non-empty list there is a policy error rather than a value this
-// function could compute.
+// workloadDigests are as for [bindingFromDigest].
 func expectedBinding(p teetypes.PlatformType, anchor []byte, workloadDigests []string) ([]byte, error) {
 	if len(anchor) == 0 {
 		return nil, fmt.Errorf("anchor is empty; a binding to no anchor proves nothing")
 	}
+	digest, err := LaunchFileDigest(p.Family(), anchor)
+	if err != nil {
+		return nil, err
+	}
+	return bindingFromDigest(p, digest, workloadDigests)
+}
+
+// bindingFromDigest returns the value [Binding] must equal for a guest launched
+// with a file of this [LaunchFileDigest], having measured workloadDigests in
+// that order: on TDX, RTMR[3] extended from zero with the digest, as [Seed]
+// does, then with each workload; on SEV-SNP, the digest itself.
+//
+// workloadDigests are canonical "sha256:<64-hex>" strings (see
+// [CanonicalDigest]), deduplicated and in extend order. SEV-SNP has no runtime
+// extends, so a non-empty list there is a policy error rather than a value this
+// function could compute.
+func bindingFromDigest(p teetypes.PlatformType, digest []byte, workloadDigests []string) ([]byte, error) {
 	if err := checkBindingPlatform(p); err != nil {
 		return nil, err
 	}
-	if p.HasRegisters() {
-		reg := FromDigestsSeeded(Seed(anchor), workloadDigests)
+	family := p.Family()
+	if err := CheckLaunchFileDigest(family, digest); err != nil {
+		return nil, fmt.Errorf("launch file digest %w", err)
+	}
+	switch family {
+	case teetypes.FamilyTDX:
+		if len(digest) != Size {
+			return nil, fmt.Errorf("launch file digest is %d bytes, want %d on %s", len(digest), Size, family)
+		}
+		reg := FromDigestsSeeded(Extend(Zero, [Size]byte(digest)), workloadDigests)
 		return reg[:], nil
+	case teetypes.FamilySNP:
+		if len(workloadDigests) > 0 {
+			return nil, fmt.Errorf("platform %q has no runtime extends, so %d workload digest(s) cannot be measured into its binding: %w",
+				p, len(workloadDigests), ErrNoRegister)
+		}
+		return bytes.Clone(digest), nil
+	default:
+		return nil, fmt.Errorf("%w %q", ErrUnknownPlatform, p)
 	}
-	if len(workloadDigests) > 0 {
-		return nil, fmt.Errorf("platform %q has no runtime extends, so %d workload digest(s) cannot be measured into its binding: %w",
-			p, len(workloadDigests), ErrNoRegister)
-	}
-	hd := HostData(anchor)
-	return hd[:], nil
 }
 
 // VerifyBinding reports whether the guest that produced r was launched with
@@ -116,7 +140,7 @@ func VerifyBinding(r *teetypes.VerificationResult, anchor []byte, workloadDigest
 // not the anchor itself, so the error may be logged.
 func bindingMismatch(p teetypes.PlatformType, got, want []byte) error {
 	return fmt.Errorf(
-		"guest is not bound to the expected anchor: %s carries %s, anchor implies %s",
+		"guest is not bound to the expected launch binding: %s carries %s, expected %s",
 		bindingName(p), hex.EncodeToString(got), hex.EncodeToString(want))
 }
 
@@ -145,6 +169,24 @@ func bindingName(p teetypes.PlatformType) string {
 // The cost is one SHA-384 per entry, and the list usually comes from the peer,
 // so bound it before calling; armtls caps it at 256.
 func MatchBindingPrefix(r *teetypes.VerificationResult, anchor []byte, claimed []string) (int, error) {
+	return matchBindingPrefix(r, claimed, func(p teetypes.PlatformType) ([]byte, error) {
+		return expectedBinding(p, anchor, nil)
+	})
+}
+
+// MatchLaunchFileDigestPrefix is [MatchBindingPrefix] for a guest pinned by
+// its launch file's [LaunchFileDigest] rather than the file. digest must be of
+// the width r's family commits, so one family's digest never matches the
+// other's evidence. An all-zero digest, or the empty file's, is refused.
+func MatchLaunchFileDigestPrefix(r *teetypes.VerificationResult, digest []byte, claimed []string) (int, error) {
+	return matchBindingPrefix(r, claimed, func(p teetypes.PlatformType) ([]byte, error) {
+		return bindingFromDigest(p, digest, nil)
+	})
+}
+
+// matchBindingPrefix returns the k for which the binding r carries equals
+// expected(r.Platform) extended with claimed[:k].
+func matchBindingPrefix(r *teetypes.VerificationResult, claimed []string, expected func(teetypes.PlatformType) ([]byte, error)) (int, error) {
 	for i, d := range claimed {
 		if c, err := CanonicalDigest(d); err != nil || c != d {
 			return 0, fmt.Errorf("claimed extension %d (%q) is not a canonical sha256 digest", i, d)
@@ -154,7 +196,7 @@ func MatchBindingPrefix(r *teetypes.VerificationResult, anchor []byte, claimed [
 	if err != nil {
 		return 0, err
 	}
-	want, err := expectedBinding(r.Platform, anchor, nil)
+	want, err := expected(r.Platform)
 	if err != nil {
 		return 0, err
 	}
@@ -173,6 +215,6 @@ func MatchBindingPrefix(r *teetypes.VerificationResult, anchor []byte, claimed [
 			return i + 1, nil
 		}
 	}
-	return 0, fmt.Errorf("guest is not bound to the expected anchor: RTMR[3] carries %s, which is neither the anchor seed %s nor that seed extended with a prefix of the %d claimed digest(s)",
+	return 0, fmt.Errorf("guest is not bound to the expected launch binding: RTMR[3] carries %s, which is neither the expected seed %s nor that seed extended with a prefix of the %d claimed digest(s)",
 		hex.EncodeToString(got), hex.EncodeToString(want), len(claimed))
 }
