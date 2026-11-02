@@ -23,7 +23,7 @@ func mustLaunchFileDigest(t *testing.T, f teetypes.Family, file []byte) []byte {
 	return d
 }
 
-// The digest is the one the anchor path folds, so a launcher committing it
+// The digest is the init data a launcher commits, so a launcher committing it
 // and a verifier holding the file agree.
 func TestLaunchFileDigest(t *testing.T) {
 	hostData := HostData(launchFile)
@@ -33,9 +33,6 @@ func TestLaunchFileDigest(t *testing.T) {
 	tdx := mustLaunchFileDigest(t, teetypes.FamilyTDX, launchFile)
 	if want := sha512.Sum384(launchFile); !bytes.Equal(tdx, want[:]) {
 		t.Errorf("tdx digest = %x, want SHA-384 %x", tdx, want)
-	}
-	if Extend(Zero, [Size]byte(tdx)) != Seed(launchFile) {
-		t.Error("tdx digest does not fold to the file's seed")
 	}
 	for _, f := range []teetypes.Family{teetypes.FamilySNP, teetypes.FamilyTDX} {
 		for _, empty := range [][]byte{nil, {}} {
@@ -96,12 +93,10 @@ func TestMatchLaunchFileDigestPrefix(t *testing.T) {
 	snp := mustLaunchFileDigest(t, teetypes.FamilySNP, launchFile)
 	tdx := mustLaunchFileDigest(t, teetypes.FamilyTDX, launchFile)
 	claimed := []string{"sha256:" + strings.Repeat("01", 32), "sha256:" + strings.Repeat("02", 32)}
-	seed := Seed(launchFile)
-	extended := FromDigestsSeeded(seed, claimed[:1])
-	otherSeed := Seed([]byte("another file\n"))
+	extended := runtimeLog(claimed[:1]...)
+	other := []byte("another file\n")
+	otherHostData := HostData(other)
 	emptySNP, emptyTDX := sha256.Sum256(nil), sha512.Sum384(nil)
-	emptySeed := Extend(Zero, emptyTDX)
-	zeroSeed := Extend(Zero, Zero)
 	zeroHostData := make([]byte, HostDataSize)
 
 	for _, tc := range []struct {
@@ -113,18 +108,22 @@ func TestMatchLaunchFileDigestPrefix(t *testing.T) {
 		wantErr bool
 		errIs   error
 	}{
-		{name: "tdx bare seed", result: tdxResult(teetypes.PlatformTDX, seed[:]), digest: tdx, want: 0},
-		{name: "tdx extended", result: tdxResult(teetypes.PlatformTDX, extended[:]), digest: tdx, claimed: claimed, want: 1},
-		{name: "tdx extended, no list", result: tdxResult(teetypes.PlatformTDX, extended[:]), digest: tdx, wantErr: true},
-		{name: "tdx other file", result: tdxResult(teetypes.PlatformTDX, otherSeed[:]), digest: tdx, wantErr: true},
+		{name: "tdx bare", result: tdxResult(teetypes.PlatformTDX, tdx, Zero[:]), digest: tdx, want: 0},
+		{name: "tdx extended", result: tdxResult(teetypes.PlatformTDX, tdx, extended), digest: tdx, claimed: claimed, want: 1},
+		{name: "tdx extended, no list", result: tdxResult(teetypes.PlatformTDX, tdx, extended), digest: tdx, wantErr: true},
+		{name: "tdx RTMR[3] extended with the file digest", result: tdxResult(teetypes.PlatformTDX, tdx, extendedWithFileDigest(launchFile)), digest: tdx, claimed: claimed, wantErr: true},
+		{name: "tdx missing RTMR[3]", result: tdxResult(teetypes.PlatformTDX, tdx, nil), digest: tdx, wantErr: true},
+		{name: "tdx other file", result: tdxResult(teetypes.PlatformTDX, mrConfigID(other), Zero[:]), digest: tdx, wantErr: true},
+		{name: "tdx zero-padded SHA-256", result: tdxResult(teetypes.PlatformTDX, paddedHostData(launchFile), Zero[:]), digest: tdx, wantErr: true},
 		{name: "snp", result: snpResult(teetypes.PlatformSNP, snp), digest: snp, claimed: claimed, want: 0},
-		{name: "snp other file", result: snpResult(teetypes.PlatformSNP, otherSeed[:HostDataSize]), digest: snp, wantErr: true},
+		{name: "snp other file", result: snpResult(teetypes.PlatformSNP, otherHostData[:]), digest: snp, wantErr: true},
 		{name: "zero digest on keyless snp", result: snpResult(teetypes.PlatformSNP, zeroHostData), digest: zeroHostData, wantErr: true},
-		{name: "zero digest on tdx", result: tdxResult(teetypes.PlatformTDX, zeroSeed[:]), digest: Zero[:], wantErr: true},
+		{name: "zero digest on keyless tdx", result: tdxResult(teetypes.PlatformTDX, Zero[:], Zero[:]), digest: Zero[:], wantErr: true},
 		{name: "empty file on snp", result: snpResult(teetypes.PlatformSNP, emptySNP[:]), digest: emptySNP[:], wantErr: true},
-		{name: "empty file on tdx", result: tdxResult(teetypes.PlatformTDX, emptySeed[:]), digest: emptyTDX[:], wantErr: true},
-		{name: "non-canonical claim", result: tdxResult(teetypes.PlatformTDX, extended[:]), digest: tdx, claimed: []string{strings.ToUpper(claimed[0])}, wantErr: true},
+		{name: "empty file on tdx", result: tdxResult(teetypes.PlatformTDX, emptyTDX[:], Zero[:]), digest: emptyTDX[:], wantErr: true},
+		{name: "non-canonical claim", result: tdxResult(teetypes.PlatformTDX, tdx, extended), digest: tdx, claimed: []string{strings.ToUpper(claimed[0])}, wantErr: true},
 		{name: "az-snp refused", result: snpResult(teetypes.PlatformAzSNP, snp), digest: snp, wantErr: true, errIs: ErrNoRegister},
+		{name: "az-tdx refused", result: tdxResult(teetypes.PlatformAzTDX, tdx, Zero[:]), digest: tdx, wantErr: true, errIs: ErrNoRegister},
 		{name: "unknown platform", result: snpResult("nonsense", snp), digest: snp, wantErr: true, errIs: ErrUnknownPlatform},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -147,8 +146,7 @@ func TestMatchLaunchFileDigestPrefix(t *testing.T) {
 func TestMatchLaunchFileDigestPrefixRefusesWrongWidth(t *testing.T) {
 	tdx := mustLaunchFileDigest(t, teetypes.FamilyTDX, launchFile)
 	snp := mustLaunchFileDigest(t, teetypes.FamilySNP, launchFile)
-	seed := Seed(launchFile)
-	tdxEvidence := tdxResult(teetypes.PlatformTDX, seed[:])
+	tdxEvidence := tdxResult(teetypes.PlatformTDX, tdx, Zero[:])
 	snpEvidence := snpResult(teetypes.PlatformSNP, snp)
 	for name, tc := range map[string]struct {
 		result *teetypes.VerificationResult
@@ -172,14 +170,15 @@ func TestMatchLaunchFileDigestPrefixRefusesWrongWidth(t *testing.T) {
 // A digest pin answers exactly as an anchor pin of the same file does.
 func TestMatchLaunchFileDigestPrefixAgreesWithAnchor(t *testing.T) {
 	claimed := []string{"sha256:" + strings.Repeat("01", 32), "sha256:" + strings.Repeat("02", 32)}
-	seed := Seed(anchor)
 	hostData := HostData(anchor)
 	results := []*teetypes.VerificationResult{snpResult(teetypes.PlatformSNP, hostData[:]), snpResult(teetypes.PlatformSNP, make([]byte, HostDataSize))}
 	for k := range len(claimed) + 1 {
-		reg := FromDigestsSeeded(seed, claimed[:k])
-		results = append(results, tdxResult(teetypes.PlatformTDX, reg[:]))
+		results = append(results, tdxResult(teetypes.PlatformTDX, mrConfigID(anchor), runtimeLog(claimed[:k]...)))
 	}
-	results = append(results, tdxResult(teetypes.PlatformTDX, Zero[:]))
+	results = append(results,
+		tdxResult(teetypes.PlatformTDX, make([]byte, Size), Zero[:]),
+		tdxResult(teetypes.PlatformTDX, mrConfigID(anchor), extendedWithFileDigest(anchor)),
+		tdxResult(teetypes.PlatformTDX, mrConfigID(anchor), nil))
 	for i, r := range results {
 		digest := mustLaunchFileDigest(t, r.Platform.Family(), anchor)
 		for _, list := range [][]string{nil, claimed} {

@@ -59,8 +59,8 @@ offline configuration cannot enable network fetching implicitly.
 
 ## Runtime measurement (`runtimemeasure`)
 
-Launch measurement covers what booted. Runtime measurement covers what the
-guest committed afterwards — the *anchor* it was launched to trust, and the
+Launch measurement covers what booted. The launch binding covers the
+*anchor* the guest was launched to trust, and runtime measurement the
 workloads it admitted. An anchor is whatever bytes distinguish one launch from
 another: a public key, a policy document, a configuration digest. The package’s
 binding functions hash those bytes and do not interpret them.
@@ -70,9 +70,14 @@ that hides the difference:
 
 | | Intel TDX | AMD SEV-SNP |
 |---|---|---|
-| Where the binding lives | RTMR[3], hardware append-only | HOSTDATA, fixed at launch |
+| Where the launch binding lives | MRCONFIGID, fixed at launch | HOSTDATA, fixed at launch |
 | Width | 48 bytes (SHA-384) | 32 bytes (SHA-256) |
-| Per-workload extends | Yes | None — `ErrNoRegister` |
+| Runtime log | RTMR[3], from zero, one extend per workload | None — `ErrNoRegister` |
+
+The launcher sets the field to the anchor's `LaunchFileDigest`, and the
+measured initrd powers the guest off if it differs. Azure sets HOSTDATA and
+MRCONFIGID itself, so `az-snp` and `az-tdx` carry no launch binding and every
+binding function refuses them; `gcp-snp` and `gcp-tdx` bind as bare metal.
 
 Callers asking "was this guest launched with my anchor" never branch on
 platform:
@@ -116,10 +121,10 @@ extended, err := j.MeasureOnce("sha256:...") // false when already journaled
 
 A verifier of a measuring guest needs the guest's list to interpret RTMR[3].
 `ReadJournal` reads it without touching the register, and
-`MatchBindingPrefix` replays it: it returns the `k` for which RTMR[3] equals
-the anchor seed extended with the first `k` digests. The journal records
-before it extends, so the list may run ahead of the quote; only that prefix is
-proven. SEV-SNP has no extends, so `k` is always 0 there.
+`MatchBindingPrefix` replays it: having checked the launch binding, it returns
+the `k` for which RTMR[3] equals zero extended with the first `k` digests. The
+journal records before it extends, so the list may run ahead of the quote;
+only that prefix is proven. SEV-SNP has no extends, so `k` is always 0 there.
 
 ```go
 list, err := runtimemeasure.ReadJournal("/run/measured")
@@ -139,7 +144,7 @@ the family with `LoadImageManifestFor` to pick a half:
 ```go
 identity, err := runtimemeasure.LoadImageManifest("manifest.json") // an ImageIdentity, family detected
 err = identity.Verify(res)                                        // MRTD+RTMR[1,2], or launch digest in the per-SMP set
-err = runtimemeasure.VerifyBinding(res, anchor, workloadDigests)  // RTMR[3] or HOSTDATA
+err = runtimemeasure.VerifyBinding(res, anchor, workloadDigests)  // MRCONFIGID and RTMR[3], or HOSTDATA
 
 for _, v := range identity.LaunchDigests() { ... } // v.Label is "" on TDX, "smp4" on SNP
 registers := identity.RTMRs()                      // RTMR[1] and RTMR[2] on TDX, none on SNP
@@ -150,10 +155,6 @@ report: one launch digest, plus RTMR[1] and RTMR[2] on TDX. It rejects unknown
 families and missing or malformed claims. An observed SNP digest is unlabelled
 because the report does not establish a vCPU count. The caller must establish
 freshness and trust in the verifier before using that report as a reference.
-
-`InitDataAnchor` reads the 32-byte init-data digest back out of a verified
-result — SEV-SNP HOST_DATA verbatim, TDX MRCONFIGID with its zero padding
-checked — for a guest asking which document it was launched with.
 
 ## attestation-api client (`remote`)
 
@@ -206,26 +207,27 @@ resp, err := c.VerifyEvidence(ctx, evidence, remote.Policy{
 })
 ```
 
-Each `ImagePin.Anchor` binds its exact bytes to that same image: TDX RTMR[3]
-or SNP HOSTDATA must match the bare launch binding, without workload extends.
-A matching image with another anchor cannot satisfy half of a pin. `nil`
+Each `ImagePin.Anchor` binds its exact bytes to that same image: TDX
+MRCONFIGID or SNP HOSTDATA must equal their digest, and TDX RTMR[3] must be
+zero. A matching image with another anchor cannot satisfy half of a pin. `nil`
 leaves the anchor unchecked; a non-nil empty anchor is refused.
 `EnforceImages` reports missing, mismatched, or unsupported anchor bindings
 as `ErrAnchorNotAllowed`.
-Azure SNP refuses this binding because its paravisor owns HOSTDATA.
+Azure SNP and TDX refuse this binding because Azure sets HOSTDATA and
+MRCONFIGID.
 
 `ImagePin.LaunchFile` pins the launch configuration file a guest was launched
 with, in the same binding field, and reports every refusal as
 `ErrLaunchFileNotAllowed`. The quote must carry that file alone, so a runtime
-extension on top of it is refused whatever the claimed list says. A pin that
+extension in RTMR[3] is refused whatever the claimed list says. A pin that
 sets `LaunchFile` together with `AcceptExtension` is refused before any
 evidence is matched.
 
 `ImagePin.LaunchFileDigest` pins that file by its digest alone, so a policy
 can carry it without the document.
 `runtimemeasure.LaunchFileDigest(family, file)` computes it: SHA-256 on
-SEV-SNP, which HOSTDATA must equal, and SHA-384 on TDX, extended into RTMR[3]
-from zero. It accepts runtime extensions as
+SEV-SNP, which HOSTDATA must equal, and SHA-384 on TDX, which MRCONFIGID must
+equal. It accepts runtime extensions as
 `Anchor` does, and reports refusals as `ErrLaunchFileNotAllowed`. A pin whose
 digest `runtimemeasure.CheckLaunchFileDigest` refuses for the verified family
 (the other family's width, all zero, or the empty file's), or that sets more
@@ -412,7 +414,7 @@ unchanged. `VerifyWithService` replays the list against each image pin's
 `Anchor` or `LaunchFileDigest` and passes only the proven prefix to
 `ImagePin.AcceptExtension`, the hook for an allowlist; entries beyond the
 prefix were not quoted and are not judged. A pin without `AcceptExtension`
-still requires the bare seed; `func(string) error { return nil }` accepts any
+still requires RTMR[3] to be zero; `func(string) error { return nil }` accepts any
 list that replays. A list over 256 entries or holding a non-canonical digest is
 refused. SEV-SNP has no
 runtime extends: marshaling omits a list there, parsing refuses one, and

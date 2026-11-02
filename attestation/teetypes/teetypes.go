@@ -70,8 +70,9 @@ type VerifyParams struct {
 	// evidence (the SNP/TDX report_data directly, or the vTPM quote nonce on
 	// Azure platforms). At most 64 bytes.
 	ExpectedReportData []byte
-	// ExpectedInitDataHash, if set, must match the init-data binding (SNP
-	// HOST_DATA / TDX MR_CONFIG_ID, or PCR[8] on Azure vTPM). At most 32 bytes.
+	// ExpectedInitDataHash, if set, must match the init-data binding: SNP
+	// HOST_DATA (at most 32 bytes, zero-padded), TDX MR_CONFIG_ID (exactly 48
+	// bytes), or PCR[8] on Azure vTPM (exactly 32 bytes).
 	ExpectedInitDataHash []byte
 	// AllowDebug permits guests launched with a debug policy. Default false.
 	AllowDebug bool

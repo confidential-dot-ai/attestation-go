@@ -31,15 +31,15 @@ type ImagePin struct {
 	// platforms without registers.
 	Registers map[int][]byte
 
-	// Anchor pins the exact launch-bound bytes along with this image. Nil
-	// leaves the binding unchecked; a non-nil empty anchor is invalid. On TDX
-	// the binding may carry runtime extensions on top of the anchor seed; see
-	// [EnforceImagesWithRuntimeLog].
+	// Anchor pins the exact launch-bound bytes along with this image: HOSTDATA
+	// on SEV-SNP, MRCONFIGID on TDX. Nil leaves the binding unchecked; a
+	// non-nil empty anchor is invalid. On TDX, RTMR[3] may carry runtime
+	// extensions from zero; see [EnforceImagesWithRuntimeLog].
 	Anchor []byte
 
 	// LaunchFile pins the exact bytes of the launch configuration file the
-	// guest was launched with. The binding must carry that file alone, with no
-	// runtime extension on top of it. Nil leaves the binding unchecked.
+	// guest was launched with. The binding must carry that file alone: on TDX,
+	// RTMR[3] must be zero. Nil leaves the binding unchecked.
 	//
 	// An empty file, or one set alongside AcceptExtension, which a launch-file
 	// binding never calls, is refused with [ErrLaunchFileNotAllowed].
@@ -47,8 +47,8 @@ type ImagePin struct {
 
 	// LaunchFileDigest pins the launch configuration file the guest was
 	// launched with by its [runtimemeasure.LaunchFileDigest] alone: 32 bytes
-	// on SEV-SNP, 48 on TDX. Like Anchor, the binding may carry runtime
-	// extensions on top of it, judged by AcceptExtension. Nil leaves the
+	// on SEV-SNP, 48 on TDX. Like Anchor, RTMR[3] may carry runtime
+	// extensions beside it, judged by AcceptExtension. Nil leaves the
 	// binding unchecked. A digest [runtimemeasure.CheckLaunchFileDigest]
 	// refuses for the verified family is refused with
 	// [ErrLaunchFileNotAllowed] before any evidence is matched.
@@ -57,10 +57,10 @@ type ImagePin struct {
 	// a pin setting more than one is refused with [ErrLaunchFileNotAllowed].
 	LaunchFileDigest []byte
 
-	// AcceptExtension judges each runtime extension the quote proves on top
-	// of Anchor or LaunchFileDigest. A refusal fails with that binding's
+	// AcceptExtension judges each runtime extension RTMR[3] proves beside
+	// Anchor or LaunchFileDigest. A refusal fails with that binding's
 	// sentinel wrapping the returned error, so errors.Is reaches the hook's
-	// own. Nil refuses any proven extension, requiring the bare seed as
+	// own. Nil refuses any proven extension, requiring RTMR[3] to be zero as
 	// [EnforceImages] does; func(string) error { return nil } accepts any
 	// list that replays. Unused without either, and never called on
 	// SEV-SNP, where no extension is provable: a well-formed list there is
@@ -79,7 +79,7 @@ type ImagePin struct {
 // folds the guest image into its launch digest and reports no registers, so an
 // SNP image measurement is its digest alone; an anchor still pins HOSTDATA.
 //
-// It requires the bare anchor seed, with no runtime extensions; a guest that
+// It requires RTMR[3] to be zero, with no runtime extensions; a guest that
 // extends RTMR[3] at runtime is checked with [EnforceImagesWithRuntimeLog].
 func EnforceImages(resp VerifyResponse, images []ImagePin, platform teetypes.PlatformType) error {
 	return EnforceImagesWithRuntimeLog(resp, images, platform, nil)
@@ -89,18 +89,18 @@ func EnforceImages(resp VerifyResponse, images []ImagePin, platform teetypes.Pla
 // RTMR[3] after launch. claimed is the guest's runtime extension list, as
 // canonical digests in extend order (see [runtimemeasure.Journal]).
 //
-// For an image pinning Anchor, the binding must equal the anchor seed
-// extended with some prefix claimed[:k] ([runtimemeasure.MatchBindingPrefix]),
-// and AcceptExtension must accept each of claimed[:k]; an image without
-// AcceptExtension requires k = 0. The guest records
-// before it extends, so the list may run ahead of the quote; entries past k
-// were not measured into it, prove nothing, and are not judged. On SEV-SNP
-// k is always 0. A nil claimed requires the bare seed.
+// For an image pinning Anchor, the launch binding must commit the anchor and
+// RTMR[3] must equal zero extended with some prefix claimed[:k]
+// ([runtimemeasure.MatchBindingPrefix]), and AcceptExtension must accept each
+// of claimed[:k]; an image without AcceptExtension requires k = 0. The guest
+// records before it extends, so the list may run ahead of the quote; entries
+// past k were not measured into it, prove nothing, and are not judged. On
+// SEV-SNP k is always 0. A nil claimed requires RTMR[3] to be zero.
 //
 // An image pinning LaunchFileDigest is matched as one pinning Anchor, with
 // [runtimemeasure.MatchLaunchFileDigestPrefix]. An image pinning LaunchFile
 // requires the bare binding, so claimed says nothing about it: a guest
-// launched with a pinned file extends nothing on top of it.
+// launched with a pinned file extends nothing into RTMR[3].
 //
 // Each Anchor or LaunchFileDigest image replays claimed at one SHA-384 per
 // entry, so bound a list taken from a peer before passing it; armtls caps it

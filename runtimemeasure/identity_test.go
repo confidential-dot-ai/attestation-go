@@ -174,9 +174,9 @@ func TestImageIdentityFamilies(t *testing.T) {
 func TestVerifyThenVerifyBinding(t *testing.T) {
 	pins := testTDXPins()
 	anchorBytes := []byte("anchor-bytes-v1\n")
-	seed := Seed(anchorBytes)
 	res := tdxImageResult(teetypes.PlatformTDX, mrtdHex, rtmr1Hex, rtmr2Hex)
-	res.Claims.PlatformData["rtmr_3"] = hex.EncodeToString(seed[:])
+	res.Claims.InitData = mrConfigID(anchorBytes)
+	res.Claims.PlatformData["rtmr_3"] = hex.EncodeToString(Zero[:])
 
 	if err := pins.Verify(res); err != nil {
 		t.Fatalf("Verify = %v", err)

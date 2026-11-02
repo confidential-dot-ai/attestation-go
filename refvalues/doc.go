@@ -52,6 +52,6 @@
 // one SNP image becomes one pin per SMP variant. TDX pins MRTD plus RTMR[1]
 // (kernel) and RTMR[2] (command line, carrying the dm-verity root hash), and
 // never derives RTMR[0], which varies with the guest's vCPU and memory shape,
-// or RTMR[3], which is a launch/runtime binding rather than a build value.
+// or RTMR[3], which is a runtime log rather than a build value.
 // A measurements file may explicitly pin RTMR[3].
 package refvalues

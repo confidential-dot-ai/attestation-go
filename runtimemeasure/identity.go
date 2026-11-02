@@ -78,8 +78,8 @@ func (p tdxImagePins) RTMRs() map[int][Size]byte {
 // RTMR[1] and RTMR[2]. All three come from one build and only mean anything
 // together.
 //
-// RTMR[3] is not checked here: it carries the launch anchor and the workload
-// chain, which [VerifyBinding] checks.
+// MRCONFIGID and RTMR[3] are not checked here: they carry the launch anchor
+// and the workload chain, which [VerifyBinding] checks.
 func (p tdxImagePins) Verify(r *teetypes.VerificationResult) error {
 	if err := r.Check(); err != nil {
 		return err

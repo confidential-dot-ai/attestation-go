@@ -3,7 +3,7 @@
 //
 // Runtime measurement is the counterpart to launch measurement. A launch
 // measurement (MRTD on Intel TDX, the launch digest on AMD SEV-SNP) covers what
-// booted and is fixed at launch. What a guest commits afterwards can carry
+// booted and is fixed at launch. What a guest commits beside it can carry
 // identity a launch measurement cannot: the anchor it was launched to trust,
 // and the workloads it admitted.
 //
@@ -11,30 +11,25 @@
 // key, a policy document, a configuration digest. This package hashes those
 // bytes and says nothing about what they mean.
 //
-// The two families express all this differently, and the difference is the
-// reason this package exists:
+// Both families bind the anchor at launch, in an init-data field the launcher
+// sets to the anchor's digest ([LaunchFileDigest]) and the measured initrd
+// checks before it trusts the anchor:
 //
-//   - Intel TDX has RTMR[3], a hardware append-only register. A guest seeds it
-//     with the anchor digest ([Seed]), then chains zero or more per-workload
-//     image extends on top ([Event], [Extend]). [Register] is the local device.
-//   - AMD SEV-SNP has no runtime-extend register. The launcher commits the
-//     anchor digest into the report's immutable HOSTDATA field at launch
-//     ([HostData]), and per-workload extends do not exist, so [Register]
-//     reports [ErrNoRegister] and Event/FromDigests do not apply.
+//   - Intel TDX: MRCONFIGID = SHA-384(anchor), 48 bytes. RTMR[3], a hardware
+//     append-only register, is a separate runtime log: it starts at [Zero] and
+//     chains one extend per workload image ([Event], [Extend], [FromDigests]).
+//     [Register] is the local device.
+//   - AMD SEV-SNP: HOSTDATA = SHA-256(anchor), 32 bytes ([HostData]). There is
+//     no runtime log, so [Register] reports [ErrNoRegister].
 //
 // Callers that only need "was this guest launched with my anchor" use
 // [VerifyBinding], which resolves the difference and never asks the caller
 // which platform it is on. Callers driving the register directly (an in-guest
 // measurer) use [Register], with [Journal] on top of it to keep those extends
-// exactly-once across restarts. Callers pinning which image booted, rather than
-// what it did afterwards, use [ImageIdentity].
-//
-// A verifier cannot interpret a TDX register without knowing its seed, so a
-// guest launched with an anchor must be verified with
-// FromDigestsSeeded(Seed(anchor), ...) rather than FromDigests.
-// A verifier holding the guest's own extension list, which may run ahead of
-// the quote, uses [MatchBindingPrefix] to find the prefix the register
-// proves.
+// exactly-once across restarts. A verifier holding the guest's own extension
+// list, which may run ahead of the quote, uses [MatchBindingPrefix] to find the
+// prefix RTMR[3] proves. Callers pinning which image booted, rather than what
+// it was launched with, use [ImageIdentity].
 package runtimemeasure
 
 import (
@@ -67,74 +62,39 @@ func Extend(reg, event [Size]byte) [Size]byte {
 	return out
 }
 
-// FromDigests computes the expected register value after measuring the given
-// canonical image digests in order, starting from Zero. Each DISTINCT
-// image is extended exactly once (the measurer dedups restarts/replicas
-// before extending); callers pass the deduped, ordered set.
-//
-// Use FromDigestsSeeded for a guest launched with an anchor: its
-// register does not start from Zero.
+// FromDigests computes the expected RTMR[3] value after measuring the given
+// canonical image digests in order, starting from Zero. Each DISTINCT image
+// is extended exactly once (the measurer dedups restarts/replicas before
+// extending); callers pass the deduped, ordered set.
 func FromDigests(canonicalDigests []string) [Size]byte {
-	return FromDigestsSeeded(Zero, canonicalDigests)
-}
-
-// FromDigestsSeeded is FromDigests starting from an arbitrary register
-// value, so per-workload extends can chain onto an anchor seed:
-//
-//	FromDigestsSeeded(Seed(anchor), digests)
-func FromDigestsSeeded(seed [Size]byte, canonicalDigests []string) [Size]byte {
-	reg := seed
+	reg := Zero
 	for _, d := range canonicalDigests {
 		reg = Extend(reg, Event(d))
 	}
 	return reg
 }
 
-// Seed computes the TDX register value as it reads back on a guest launched
-// with anchor bytes and no per-workload extends:
-//
-//	reg = SHA384( 0x00*48 ‖ SHA384(anchor) )
-//
-// anchor is whatever the guest was launched to trust — a public key, a policy
-// document, a configuration digest. This package does not interpret it. The
-// measured initrd hashes those bytes and extends the digest into the register
-// before switch_root, so a remote party can tell offline which anchor the guest
-// was launched for. An in-guest service re-derives the same value to confirm a
-// staged on-disk copy is the one that was measured; see [VerifyBinding].
-//
-// anchor is the EXACT bytes the initrd hashed, byte for byte. Re-encoding,
-// re-wrapping, or a stripped trailing newline yields a different digest and a
-// silent verification failure. Where the bytes come from a file, pass the file
-// contents through unmodified rather than round-tripping them through a parser.
-func Seed(anchor []byte) [Size]byte {
-	return Extend(Zero, sha512.Sum384(anchor))
-}
-
 // HostDataSize is the byte length of the SEV-SNP HOSTDATA field, and so of the
 // launch-time binding value on SNP (SHA-256).
 const HostDataSize = 32
 
-// HostData computes the SEV-SNP launch-time binding: the value a launcher
-// commits as HOSTDATA when launching a guest for these anchor bytes.
+// HostData computes the SEV-SNP launch binding: the value a launcher commits
+// as HOSTDATA when launching a guest for these anchor bytes.
 //
 //	HOSTDATA = SHA256(anchor)
 //
-// It is the SNP counterpart of [Seed]. SNP has no runtime-extend register, so
-// instead of a measured initrd extending the digest after launch, the
-// (untrusted) launcher commits it at launch. The host can set any value, but a
-// verifier that checks HOSTDATA against the anchor it expects rejects a
-// wrong-anchor launch, exactly as it would reject a wrong RTMR[3]. A guest
-// launched with no anchor carries all-zero HOSTDATA, which no SHA-256 output
-// equals, so that fails closed too.
+// The host can set any value, but a verifier that checks HOSTDATA against the
+// anchor it expects rejects a wrong-anchor launch. A guest launched with no
+// anchor carries all-zero HOSTDATA, which no SHA-256 output equals, so that
+// fails closed too.
 //
 // What HOSTDATA proves is which anchor the launcher committed, not that the
-// guest honours it. The measured-initrd argument on TDX holds because the
-// image that hashed the anchor is the one that goes on to enforce it; on SNP
-// the verifier must also pin a launch digest of an image known to read
-// HOSTDATA and refuse any anchor that does not match it.
+// guest honours it: the verifier must also pin a launch digest of an image
+// known to check HOSTDATA and refuse any anchor that does not match it. The
+// same holds for MRCONFIGID on TDX.
 //
-// anchor is the EXACT bytes committed, with the same byte-for-byte requirement
-// as [Seed].
+// anchor is the EXACT bytes committed, byte for byte, as for
+// [LaunchFileDigest].
 func HostData(anchor []byte) [HostDataSize]byte {
 	return sha256.Sum256(anchor)
 }

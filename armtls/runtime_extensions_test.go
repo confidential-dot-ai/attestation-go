@@ -2,6 +2,7 @@ package armtls
 
 import (
 	"context"
+	"crypto/sha512"
 	"encoding/asn1"
 	"encoding/hex"
 	"errors"
@@ -181,10 +182,13 @@ func TestVerifyCertWithServiceReplaysRuntimeExtensions(t *testing.T) {
 	anchor := []byte("operator")
 	launch := hex.EncodeToString(make([]byte, 48))
 	list := digests(3)
-	reg := runtimemeasure.FromDigestsSeeded(runtimemeasure.Seed(anchor), list[:2])
+	reg := runtimemeasure.FromDigests(list[:2])
+	mrConfigID := sha512.Sum384(anchor)
 
 	stub := mockapi.New(t)
+	stub.SetPlatform(teetypes.PlatformTDX)
 	verdict := mockapi.PassingVerdict(launch)
+	verdict.Claims.InitData = mrConfigID[:]
 	verdict.Claims.PlatformData = map[string]any{"rtmr_3": hex.EncodeToString(reg[:])}
 	stub.SetVerdict(verdict)
 	acceptAll := func(string) error { return nil }
@@ -204,6 +208,9 @@ func TestVerifyCertWithServiceReplaysRuntimeExtensions(t *testing.T) {
 			policy := remote.Policy{Images: []remote.ImagePin{{Name: "node", Digest: make([]byte, 48), Anchor: anchor, AcceptExtension: tc.accept}}}
 			cert, _ := certWithExtension(t, tdxAttestation(t, tc.list))
 			_, err := VerifyCertWithService(context.Background(), remote.NewClient(stub.URL()), cert, testOID, nil, policy)
+			if reqs := stub.VerifyRequests(); len(reqs) == 0 || reqs[len(reqs)-1].Platform != teetypes.PlatformTDX {
+				t.Fatalf("verify requests = %+v, want the last for %q", reqs, teetypes.PlatformTDX)
+			}
 			if tc.wantErr {
 				if !errors.Is(err, remote.ErrAnchorNotAllowed) {
 					t.Fatalf("VerifyCertWithService() = _, %v, want ErrAnchorNotAllowed", err)

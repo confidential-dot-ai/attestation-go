@@ -297,29 +297,25 @@ func TestMeasureOnceRejectsUnpinnedReference(t *testing.T) {
 	}
 }
 
-// A guest launched with an anchor reads back Seed(anchor) before anything is
-// measured, so the seed must be folded in or every restart reads as divergence.
-func TestOpenJournalSeeded(t *testing.T) {
+// RTMR[3] starts at Zero. A register extended before the measurer started,
+// as by an initrd measuring its launch file, is a foreign extend.
+func TestOpenJournalOverPreExtendedRegister(t *testing.T) {
 	nodePath, journalPath := journalPaths(t)
-	seed := Seed([]byte("anchor-bytes-v1\n"))
-	node := newNode(t, nodePath, seed)
+	preExtended := [Size]byte(extendedWithFileDigest([]byte("anchor-bytes-v1\n")))
+	node := newNode(t, nodePath, preExtended)
 
-	j, err := OpenJournalSeeded(journalPath, node, seed)
-	if err != nil {
-		t.Fatalf("OpenJournalSeeded = _, %v", err)
+	j, err := OpenJournal(journalPath, node)
+	if !errors.Is(err, ErrRegisterDiverged) {
+		t.Fatalf("OpenJournal over a pre-extended register = _, %v, want ErrRegisterDiverged", err)
 	}
-	mustMeasure(t, j, digestA, true)
-	if want := FromDigestsSeeded(seed, []string{digestA}); registerValue(t, node) != want {
-		t.Error("register does not match the seeded fold")
+	if j == nil {
+		t.Fatal("OpenJournal over a pre-extended register returned no journal")
 	}
-
-	if _, err := OpenJournalSeeded(journalPath, node, seed); err != nil {
-		t.Fatalf("seeded restart = _, %v, want a clean restart", err)
+	if _, err := j.MeasureOnce(digestA); !errors.Is(err, ErrRegisterDiverged) {
+		t.Fatalf("MeasureOnce = _, %v, want ErrRegisterDiverged", err)
 	}
-	// The same guest opened as if it booted from Zero: the seed is unaccounted
-	// for, which is exactly the shape of a foreign extend.
-	if _, err := OpenJournal(journalPath, node); !errors.Is(err, ErrRegisterDiverged) {
-		t.Fatalf("unseeded open of a seeded register = _, %v, want ErrRegisterDiverged", err)
+	if node.extends != 0 || registerValue(t, node) != preExtended {
+		t.Fatalf("extends = %d, register = %x; want the pre-extended value untouched", node.extends, registerValue(t, node))
 	}
 }
 

@@ -44,7 +44,6 @@ var ErrMalformedEntry = errors.New("journal line is not a canonical digest")
 type Journal struct {
 	path     string
 	reg      Register
-	seed     [Size]byte
 	measured map[string]struct{}
 	order    []string
 	diverged bool
@@ -52,17 +51,6 @@ type Journal struct {
 
 // OpenJournal loads the journal at path and cross-checks it against reg, whose
 // value at guest boot is [Zero].
-//
-// Use [OpenJournalSeeded] on a guest whose register was seeded before the
-// measurer started — every guest launched with an anchor (see [Seed]) is one.
-func OpenJournal(path string, reg Register) (*Journal, error) {
-	return OpenJournalSeeded(path, reg, Zero)
-}
-
-// OpenJournalSeeded is [OpenJournal] for a register that already held seed
-// before any journaled extend. On TDX a guest launched with an anchor reads
-// back Seed(anchor) with nothing measured, so folding the journal from [Zero]
-// there would report every restart as divergence.
 //
 // A missing file is a fresh boot, not an error. What the file does hold is
 // then reconciled with the register:
@@ -81,7 +69,7 @@ func OpenJournal(path string, reg Register) (*Journal, error) {
 // also comes back alongside a usable journal. To fail closed, treat any
 // non-nil error as fatal; to keep measuring, log everything except
 // [ErrRegisterDiverged], which already blocks further extends.
-func OpenJournalSeeded(path string, reg Register, seed [Size]byte) (*Journal, error) {
+func OpenJournal(path string, reg Register) (*Journal, error) {
 	if reg == nil {
 		return nil, errors.New("open journal: no register to measure into")
 	}
@@ -95,7 +83,7 @@ func OpenJournalSeeded(path string, reg Register, seed [Size]byte) (*Journal, er
 	// A missing file is the first start this boot; the register is still
 	// cross-checked.
 	order, skipped := parseJournal(b)
-	j := &Journal{path: path, reg: reg, seed: seed, measured: make(map[string]struct{}, len(order)), order: order}
+	j := &Journal{path: path, reg: reg, measured: make(map[string]struct{}, len(order)), order: order}
 	for _, d := range order {
 		j.measured[d] = struct{}{}
 	}
@@ -163,11 +151,11 @@ func (j *Journal) reconcile(problems *[]error) error {
 		*problems = append(*problems, fmt.Errorf("cannot read the register to cross-check the journal: %w", err))
 		return nil
 	}
-	if want := FromDigestsSeeded(j.seed, j.order); bytes.Equal(cur, want[:]) {
+	if want := FromDigests(j.order); bytes.Equal(cur, want[:]) {
 		return nil
 	}
 	if n := len(j.order); n > 0 {
-		if want := FromDigestsSeeded(j.seed, j.order[:n-1]); bytes.Equal(cur, want[:]) {
+		if want := FromDigests(j.order[:n-1]); bytes.Equal(cur, want[:]) {
 			last := j.order[n-1]
 			event := Event(last)
 			if err := j.reg.Extend(event[:]); err != nil {

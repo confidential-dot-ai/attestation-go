@@ -8,6 +8,7 @@
 package tdx
 
 import (
+	"bytes"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/binary"
@@ -192,10 +193,13 @@ func validateOptions(params teetypes.VerifyParams) (*tvalidate.Options, error) {
 		opts.TdQuoteBodyOptions.ReportData = pad(d, 64)
 	}
 	if d := params.ExpectedInitDataHash; d != nil {
-		if len(d) > 48 {
-			return nil, fmt.Errorf("tdx: expected_init_data_hash is %d bytes (max 48 for MR_CONFIG_ID)", len(d))
+		if len(d) == 0 {
+			return nil, fmt.Errorf("tdx: expected_init_data_hash is set but empty")
 		}
-		opts.TdQuoteBodyOptions.MrConfigID = pad(d, 48)
+		if len(d) != 48 {
+			return nil, fmt.Errorf("tdx: expected_init_data_hash is %d bytes (want 48 for MR_CONFIG_ID)", len(d))
+		}
+		opts.TdQuoteBodyOptions.MrConfigID = bytes.Clone(d)
 	}
 	if d := params.ExpectedLaunchDigest; d != nil {
 		if len(d) != 48 {

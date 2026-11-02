@@ -1,12 +1,14 @@
 package tdx
 
 import (
+	"bytes"
 	"crypto/x509"
 	_ "embed"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -152,6 +154,46 @@ func TestValidateOptions_LaunchDigestAndRTMRs(t *testing.T) {
 	}
 	if _, err := validateOptions(teetypes.VerifyParams{ExpectedRTMRs: make([][]byte, 5)}); err == nil {
 		t.Error(">4 rtmrs should error")
+	}
+}
+
+// The init-data hash is MR_CONFIG_ID itself, so it must be exactly 48 bytes.
+// The v4 fixture's MR_CONFIG_ID is all zero.
+func TestVerifyQuoteBytes_InitDataHashIsExactlyMrConfigID(t *testing.T) {
+	for _, n := range []int{0, 32, 47, 49} {
+		params := teetypes.VerifyParams{AllowDebug: true, ExpectedInitDataHash: make([]byte, n)}
+		if _, err := VerifyQuoteBytes(tdxQuoteV4, params, teetypes.PlatformTDX, Options{}); err == nil {
+			t.Errorf("%d-byte expected_init_data_hash accepted", n)
+		}
+	}
+	res, err := VerifyQuoteBytes(tdxQuoteV4, teetypes.VerifyParams{AllowDebug: true, ExpectedInitDataHash: make([]byte, 48)}, teetypes.PlatformTDX, Options{})
+	if err != nil {
+		t.Fatalf("48-byte expected_init_data_hash = %v, want nil", err)
+	}
+	if res.InitDataMatch == nil || !*res.InitDataMatch {
+		t.Fatalf("InitDataMatch = %v, want true", res.InitDataMatch)
+	}
+	wrong := make([]byte, 48)
+	wrong[47] = 1
+	if _, err := VerifyQuoteBytes(tdxQuoteV4, teetypes.VerifyParams{AllowDebug: true, ExpectedInitDataHash: wrong}, teetypes.PlatformTDX, Options{}); err == nil {
+		t.Error("a different MR_CONFIG_ID was accepted")
+	}
+}
+
+func TestValidateOptions_InitDataHash(t *testing.T) {
+	if _, err := validateOptions(teetypes.VerifyParams{ExpectedInitDataHash: []byte{}}); err == nil || !strings.Contains(err.Error(), "empty") {
+		t.Errorf("empty expected_init_data_hash = %v, want an error naming it empty", err)
+	}
+	want := make([]byte, 48)
+	want[0] = 0xc0
+	caller := bytes.Clone(want)
+	opts, err := validateOptions(teetypes.VerifyParams{ExpectedInitDataHash: caller})
+	if err != nil {
+		t.Fatal(err)
+	}
+	caller[0] = 0
+	if got := opts.TdQuoteBodyOptions.MrConfigID; !bytes.Equal(got, want) {
+		t.Errorf("MrConfigID = %x after the caller's slice changed, want %x", got, want)
 	}
 }
 

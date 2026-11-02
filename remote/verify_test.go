@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -352,8 +353,8 @@ func TestEnforceImagesPinsAnchorWithImage(t *testing.T) {
 				r.Result.SignatureValid = true
 				r.Result.Platform = platform
 				if platform == teetypes.PlatformTDX {
-					seed := runtimemeasure.Seed(key)
-					r.Result.Claims.PlatformData["rtmr_3"] = hex.EncodeToString(seed[:])
+					r.Result.Claims.InitData = mustLaunchFileDigest(t, teetypes.FamilyTDX, key)
+					r.Result.Claims.PlatformData["rtmr_3"] = hex.EncodeToString(runtimemeasure.Zero[:])
 				} else {
 					hostData := runtimemeasure.HostData(key)
 					r.Result.Claims.InitData = hostData[:]
@@ -403,20 +404,68 @@ func TestEnforceImagesPinsAnchorWithImage(t *testing.T) {
 	}
 }
 
-// Cloud overlays cannot borrow another platform's binding semantics. Azure SNP
-// HOSTDATA is set by the paravisor, even when it happens to equal our anchor.
-func TestEnforceImagesRefusesUnsupportedAnchorBinding(t *testing.T) {
+// Azure sets HOSTDATA and MRCONFIGID itself, even when they happen to equal
+// our anchor's digest; GCP carries the bare-metal report.
+func TestEnforceImagesCloudOverlays(t *testing.T) {
 	anchor := []byte("operator")
-	r := snpBoundTo(t, anchor)
-	r.Result.Platform = teetypes.PlatformAzSNP
 	images := []ImagePin{{Name: "image", Digest: mustHex(t, digestA), Anchor: anchor}}
-	if err := EnforceImages(r, images, teetypes.PlatformAzSNP); !errors.Is(err, ErrAnchorNotAllowed) {
-		t.Fatalf("Azure SNP launcher binding accepted: %v", err)
+	for _, tc := range []struct {
+		name     string
+		platform teetypes.PlatformType
+		want     error
+	}{
+		{"az-snp is refused", teetypes.PlatformAzSNP, ErrAnchorNotAllowed},
+		{"az-tdx is refused", teetypes.PlatformAzTDX, ErrAnchorNotAllowed},
+		{"gcp-snp binds as snp", teetypes.PlatformGcpSNP, nil},
+		{"gcp-tdx binds as tdx", teetypes.PlatformGcpTDX, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := EnforceImages(boundOn(t, tc.platform, anchor, nil), images, tc.platform)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("EnforceImages() = %v, want %v", err, tc.want)
+			}
+		})
 	}
-	r.Result.Platform = teetypes.PlatformSNP
-	images[0].Anchor = []byte{}
-	if err := EnforceImages(r, images, teetypes.PlatformSNP); !errors.Is(err, ErrAnchorNotAllowed) {
-		t.Fatalf("explicit empty anchor accepted: %v", err)
+}
+
+// An az-tdx guest satisfies no launch binding pin, even with evidence that
+// satisfies the same pin on bare-metal tdx.
+func TestEnforceImagesRefusesAzureTDXOnEveryBindingPin(t *testing.T) {
+	file := []byte("clusterID: alpha\n")
+	digest := digestOfAnchor(t, teetypes.FamilyTDX, file)
+	log := []string{"sha256:" + strings.Repeat("01", 32)}
+	acceptAll := func(string) error { return nil }
+	for _, tc := range []struct {
+		name     string
+		pin      ImagePin
+		claimed  []string
+		sentinel error
+	}{
+		{"anchor", ImagePin{Anchor: file}, nil, ErrAnchorNotAllowed},
+		{"anchor with replayed extensions", ImagePin{Anchor: file, AcceptExtension: acceptAll}, log, ErrAnchorNotAllowed},
+		{"launch file", ImagePin{LaunchFile: file}, nil, ErrLaunchFileNotAllowed},
+		{"launch file digest", ImagePin{LaunchFileDigest: digest}, nil, ErrLaunchFileNotAllowed},
+		{"launch file digest with replayed extensions", ImagePin{LaunchFileDigest: digest, AcceptExtension: acceptAll}, log, ErrLaunchFileNotAllowed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pin := tc.pin
+			pin.Name, pin.Digest = "image", mustHex(t, digestA)
+			images := []ImagePin{pin}
+			if err := EnforceImagesWithRuntimeLog(boundOn(t, teetypes.PlatformTDX, file, tc.claimed), images, teetypes.PlatformTDX, tc.claimed); err != nil {
+				t.Fatalf("tdx = %v, want nil", err)
+			}
+			err := EnforceImagesWithRuntimeLog(boundOn(t, teetypes.PlatformAzTDX, file, tc.claimed), images, teetypes.PlatformAzTDX, tc.claimed)
+			if !errors.Is(err, tc.sentinel) {
+				t.Fatalf("az-tdx = %v, want %v", err, tc.sentinel)
+			}
+		})
+	}
+}
+
+func TestEnforceImagesRefusesEmptyAnchor(t *testing.T) {
+	images := []ImagePin{{Name: "image", Digest: mustHex(t, digestA), Anchor: []byte{}}}
+	if err := EnforceImages(snpBoundTo(t, []byte("operator")), images, teetypes.PlatformSNP); !errors.Is(err, ErrAnchorNotAllowed) {
+		t.Fatalf("explicit empty anchor = %v, want ErrAnchorNotAllowed", err)
 	}
 }
 
@@ -451,14 +500,32 @@ func snpBoundTo(t *testing.T, anchor []byte) VerifyResponse {
 	return r
 }
 
-// tdxBoundTo returns TDX evidence of image digestA whose RTMR[3] is anchor's
-// seed extended with extended.
+// tdxBoundTo returns TDX evidence of image digestA whose MRCONFIGID is
+// anchor's SHA-384 and whose RTMR[3] is zero extended with extended.
 func tdxBoundTo(t *testing.T, anchor []byte, extended []string) VerifyResponse {
 	t.Helper()
-	reg := runtimemeasure.FromDigestsSeeded(runtimemeasure.Seed(anchor), extended)
+	reg := runtimemeasure.FromDigests(extended)
 	r := evidence(t, digestA, map[string]string{"rtmr_3": hex.EncodeToString(reg[:])})
 	r.Result.SignatureValid = true
 	r.Result.Platform = teetypes.PlatformTDX
+	r.Result.Claims.InitData = mustLaunchFileDigest(t, teetypes.FamilyTDX, anchor)
+	return r
+}
+
+// boundOn returns evidence from platform of image digestA bound to file, as
+// tdxBoundTo or snpBoundTo builds it for platform's family.
+func boundOn(t *testing.T, platform teetypes.PlatformType, file []byte, extended []string) VerifyResponse {
+	t.Helper()
+	var r VerifyResponse
+	switch platform.Family() {
+	case teetypes.FamilyTDX:
+		r = tdxBoundTo(t, file, extended)
+	case teetypes.FamilySNP:
+		r = snpBoundTo(t, file)
+	default:
+		t.Fatalf("no evidence builder for platform %q", platform)
+	}
+	r.Result.Platform = platform
 	return r
 }
 
@@ -492,8 +559,8 @@ func TestEnforceImagesWithRuntimeLog(t *testing.T) {
 		accept   func(string) error
 		wantErr  bool
 	}{
-		{name: "bare seed, nil list", extended: nil, claimed: nil},
-		{name: "bare seed, list without hook", extended: nil, claimed: log},
+		{name: "zero RTMR[3], nil list", extended: nil, claimed: nil},
+		{name: "zero RTMR[3], list without hook", extended: nil, claimed: log},
 		{name: "exact list", extended: log, claimed: log, accept: acceptAll},
 		{name: "list ahead of the quote", extended: log[:2], claimed: log, accept: acceptAll},
 		{name: "extended without hook", extended: log[:2], claimed: log, wantErr: true},
@@ -522,14 +589,14 @@ func TestEnforceImagesWithRuntimeLog(t *testing.T) {
 	}
 }
 
-// EnforceImages keeps requiring the bare seed: a measuring guest is refused
+// EnforceImages requires RTMR[3] to be zero: a measuring guest is refused
 // unless its list is passed.
-func TestEnforceImagesRequiresBareSeed(t *testing.T) {
+func TestEnforceImagesRequiresZeroRuntimeLog(t *testing.T) {
 	anchor := []byte("operator")
 	extended := []string{"sha256:" + strings.Repeat("01", 32)}
 	images := []ImagePin{{Name: "image", Digest: mustHex(t, digestA), Anchor: anchor}}
 	if err := EnforceImages(tdxBoundTo(t, anchor, nil), images, teetypes.PlatformTDX); err != nil {
-		t.Fatalf("EnforceImages(bare seed) = %v, want nil", err)
+		t.Fatalf("EnforceImages(zero RTMR[3]) = %v, want nil", err)
 	}
 	if err := EnforceImages(tdxBoundTo(t, anchor, extended), images, teetypes.PlatformTDX); !errors.Is(err, ErrAnchorNotAllowed) {
 		t.Fatalf("EnforceImages(extended) = %v, want ErrAnchorNotAllowed", err)
@@ -569,6 +636,76 @@ func TestEnforceImagesPinsLaunchFile(t *testing.T) {
 	})
 }
 
+// bindingPin is a launch binding pin and the sentinel its refusals wrap.
+type bindingPin struct {
+	kind     string
+	pin      ImagePin
+	sentinel error
+}
+
+// tdxBindingPins returns one pin of each launch binding kind for file.
+func tdxBindingPins(t *testing.T, file []byte) []bindingPin {
+	t.Helper()
+	return []bindingPin{
+		{"anchor", ImagePin{Name: "image", Digest: mustHex(t, digestA), Anchor: file}, ErrAnchorNotAllowed},
+		{"launch file", ImagePin{Name: "image", Digest: mustHex(t, digestA), LaunchFile: file}, ErrLaunchFileNotAllowed},
+		{"launch file digest", ImagePin{Name: "image", Digest: mustHex(t, digestA), LaunchFileDigest: digestOfAnchor(t, teetypes.FamilyTDX, file)}, ErrLaunchFileNotAllowed},
+	}
+}
+
+// TDX evidence whose MRCONFIGID is not SHA-384(file), or whose RTMR[3] is not
+// zero, satisfies no launch binding pin. Each case changes one claim of
+// evidence that does.
+func TestEnforceImagesRefusesOtherTDXBindings(t *testing.T) {
+	file := []byte("clusterID: alpha\n")
+	hostData := runtimemeasure.HostData(file)
+	extendedWithFileDigest := runtimemeasure.Extend(runtimemeasure.Zero, sha512.Sum384(file))
+	for _, tc := range []struct {
+		name   string
+		mutate func(*VerifyResponse)
+	}{
+		{"RTMR[3] extended with the file digest", func(r *VerifyResponse) {
+			r.Result.Claims.PlatformData["rtmr_3"] = hex.EncodeToString(extendedWithFileDigest[:])
+		}},
+		{"no RTMR[3]", func(r *VerifyResponse) { delete(r.Result.Claims.PlatformData, "rtmr_3") }},
+		{"zero MRCONFIGID", func(r *VerifyResponse) { r.Result.Claims.InitData = make([]byte, runtimemeasure.Size) }},
+		{"zero-padded SHA-256 MRCONFIGID", func(r *VerifyResponse) {
+			r.Result.Claims.InitData = append(hostData[:], make([]byte, runtimemeasure.Size-runtimemeasure.HostDataSize)...)
+		}},
+		{"SHA-256 MRCONFIGID", func(r *VerifyResponse) { r.Result.Claims.InitData = hostData[:] }},
+	} {
+		for _, p := range tdxBindingPins(t, file) {
+			t.Run(tc.name+"/"+p.kind, func(t *testing.T) {
+				if err := EnforceImages(tdxBoundTo(t, file, nil), []ImagePin{p.pin}, teetypes.PlatformTDX); err != nil {
+					t.Fatalf("the bound guest = %v, want nil", err)
+				}
+				r := tdxBoundTo(t, file, nil)
+				tc.mutate(&r)
+				if err := EnforceImages(r, []ImagePin{p.pin}, teetypes.PlatformTDX); !errors.Is(err, p.sentinel) {
+					t.Fatalf("EnforceImages() = %v, want %v", err, p.sentinel)
+				}
+			})
+		}
+	}
+}
+
+// A guest of an image that extended RTMR[3] with its file digest and left
+// MRCONFIGID zero satisfies no launch binding pin.
+func TestEnforceImagesRefusesOldImageGuest(t *testing.T) {
+	file := []byte("clusterID: alpha\n")
+	extendedWithFileDigest := runtimemeasure.Extend(runtimemeasure.Zero, sha512.Sum384(file))
+	r := tdxBoundTo(t, file, nil)
+	r.Result.Claims.InitData = make([]byte, runtimemeasure.Size)
+	r.Result.Claims.PlatformData["rtmr_3"] = hex.EncodeToString(extendedWithFileDigest[:])
+	for _, p := range tdxBindingPins(t, file) {
+		t.Run(p.kind, func(t *testing.T) {
+			if err := EnforceImages(r, []ImagePin{p.pin}, teetypes.PlatformTDX); !errors.Is(err, p.sentinel) {
+				t.Fatalf("EnforceImages() = %v, want %v", err, p.sentinel)
+			}
+		})
+	}
+}
+
 // A launch-file pin that cannot mean what it says is a policy the caller never
 // meant, so it is refused rather than half applied.
 func TestEnforceImagesRefusesContradictoryLaunchFilePin(t *testing.T) {
@@ -598,15 +735,15 @@ func mustLaunchFileDigest(t *testing.T, f teetypes.Family, file []byte) []byte {
 }
 
 // digestOfAnchor returns the LaunchFileDigest pin that tdxBoundTo and
-// snpBoundTo evidence for anchor satisfies, having checked that it is: Seed is
-// Extend(Zero, SHA-384(anchor)), and HostData is SHA-256(anchor).
+// snpBoundTo evidence for anchor satisfies, having checked that it is:
+// MRCONFIGID is SHA-384(anchor), and HostData is SHA-256(anchor).
 func digestOfAnchor(t *testing.T, f teetypes.Family, anchor []byte) []byte {
 	t.Helper()
 	d := mustLaunchFileDigest(t, f, anchor)
 	switch f {
 	case teetypes.FamilyTDX:
-		if len(d) != runtimemeasure.Size || runtimemeasure.Extend(runtimemeasure.Zero, [runtimemeasure.Size]byte(d)) != runtimemeasure.Seed(anchor) {
-			t.Fatal("a TDX launch file digest does not fold to its anchor's seed")
+		if want := sha512.Sum384(anchor); !bytes.Equal(d, want[:]) {
+			t.Fatal("a TDX launch file digest is not its anchor's SHA-384")
 		}
 	case teetypes.FamilySNP:
 		if hostData := runtimemeasure.HostData(anchor); !bytes.Equal(d, hostData[:]) {
