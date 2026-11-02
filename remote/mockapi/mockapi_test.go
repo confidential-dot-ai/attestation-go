@@ -330,9 +330,9 @@ func TestStubCloseMakesTheServiceUnreachable(t *testing.T) {
 func TestStubRefusesPlatformWithoutPolicies(t *testing.T) {
 	stub := mockapi.New(t)
 	stub.SetVerdict(mockapi.PassingVerdict(""))
-	req := remote.NewVerifyRequest(
+	req := remote.NewVerifyRequestNoToken(
 		teetypes.AttestationEvidence{Platform: teetypes.PlatformSNP, Evidence: json.RawMessage(`{}`)},
-		remote.Policies{TDX: &remote.TDXParams{}}, false)
+		remote.Policies{TDX: &remote.TDXParams{}})
 	_, err := remote.NewClient(stub.URL()).VerifyEnforced(context.Background(), req)
 	var apiErr *remote.APIError
 	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusUnprocessableEntity || apiErr.Response.Error != mockapi.ErrorCodePlatformNotAllowed {
@@ -355,13 +355,13 @@ func TestStubRegisterModeFollowsTheService(t *testing.T) {
 	stub.SetVerdict(verdict)
 	c := remote.NewClient(stub.URL())
 	request := func(launch []byte) remote.VerifyRequest {
-		return remote.NewVerifyRequest(
+		return remote.NewVerifyRequestNoToken(
 			teetypes.AttestationEvidence{Platform: teetypes.PlatformSNP, Evidence: json.RawMessage(`{}`)},
 			remote.Policies{SNP: &remote.SNPParams{
 				ReportData:           make([]byte, 64),
 				LaunchDigest:         [][]byte{launch},
 				MeasurementRegisters: &[][]byte{},
-			}}, false)
+			}})
 	}
 
 	resp, err := c.Verify(context.Background(), request(pinned))
