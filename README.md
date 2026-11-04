@@ -126,6 +126,10 @@ list, err := runtimemeasure.ReadJournal("/run/measured")
 k, err := runtimemeasure.MatchBindingPrefix(res, anchor, list) // list[:k] is proven
 ```
 
+`MatchLaunchFileDigestPrefix` does the same for a guest known only by its
+launch file's `LaunchFileDigest`, which `ParseLaunchFileDigest` reads back from
+lowercase hex.
+
 A verifier checking a whole node pins the image with the manifest its build
 published and the anchor with `VerifyBinding`. The manifest's shape names the
 family, so the caller loads it without knowing which, and reads the pinned
@@ -214,7 +218,18 @@ Azure SNP refuses this binding because its paravisor owns HOSTDATA.
 with, in the same binding field, and reports every refusal as
 `ErrLaunchFileNotAllowed`. The quote must carry that file alone, so a runtime
 extension on top of it is refused whatever the claimed list says. A pin that
-sets `LaunchFile` together with `Anchor` or `AcceptExtension` is refused before
+sets `LaunchFile` together with `AcceptExtension` is refused before any
+evidence is matched.
+
+`ImagePin.LaunchFileDigest` pins that file by its digest alone, so a policy
+can carry it without the document.
+`runtimemeasure.LaunchFileDigest(family, file)` computes it: SHA-256 on
+SEV-SNP, which HOSTDATA must equal, and SHA-384 on TDX, extended into RTMR[3]
+from zero. It accepts runtime extensions as
+`Anchor` does, and reports refusals as `ErrLaunchFileNotAllowed`. A pin whose
+digest `runtimemeasure.CheckLaunchFileDigest` refuses for the verified family
+(the other family's width, all zero, or the empty file's), or that sets more
+than one of `Anchor`, `LaunchFile` and `LaunchFileDigest`, is refused before
 any evidence is matched.
 
 `Client.Verify` is the raw endpoint, for callers enforcing the verdict
@@ -349,12 +364,14 @@ complete tuple or a name is an error.
 
 `schema_version` `"2"` adds the other launch binding: `launch_file`, a JSON
 string holding the exact bytes of the launch configuration file the guest was
-launched with, mapping to `ImagePin.LaunchFile`. An entry carries at most one
-of the two fields. A `launch_file` under `"1"` is refused, so a schema 1 reader
-never loads a document whose binding it would ignore; a `"2"` document may pin
-none. `Format` and `Render` write `"2"` only for a set that pins a launch file,
-so a schema 1 reader keeps loading every other document and fails closed on
-this one.
+launched with, mapping to `ImagePin.LaunchFile`, or `launch_file_digest`, its
+`runtimemeasure.LaunchFileDigest` as lowercase hex of the document family's
+width, mapping to `ImagePin.LaunchFileDigest`. An entry carries at most one of
+the three binding fields. Either field under `"1"` is refused, so a schema 1
+reader never loads a document whose binding it would ignore; a `"2"` document
+may pin none. `Format` and `Render` write `"2"` only for a set that pins a
+launch file, whole or by digest, so a schema 1 reader keeps loading every other
+document and fails closed on this one.
 
 `Parse` and `ParseRendered` reject unknown or duplicate JSON fields, trailing
 data, and malformed pins. `Format` and `Render` refuse values they cannot
@@ -363,7 +380,7 @@ components reporting that they pin nothing. `Diff` compares the complete
 digest/register/binding tuple; diagnostic names do not affect admission.
 
 `HasAnchors` reports whether the set pins any approver key, and
-`HasLaunchBindings` whether it pins either binding kind. `Flatten` returns
+`HasLaunchBindings` whether it pins any binding kind. `Flatten` returns
 `uniform=false` for a set pinning any launch binding because flat
 digest/register flags cannot express it; callers requiring the complete policy
 must reject that conversion. `FromFlags` gives distinct digests stable diagnostic names and
@@ -392,15 +409,16 @@ A guest that extends RTMR[3] at runtime sets `Attestation.RuntimeExtensions`
 to its journal before marshaling. The list travels as an optional trailing
 field, omitted when empty, so verifiers predating it decode the extension
 unchanged. `VerifyWithService` replays the list against each image pin's
-`Anchor` and passes only the proven prefix to `ImagePin.AcceptExtension`, the
-hook for an allowlist; entries beyond the prefix were not quoted and are not
-judged. A pin without `AcceptExtension` still requires the bare anchor seed;
-`func(string) error { return nil }` accepts any list that replays. A list over
-256 entries or holding a non-canonical digest is refused. SEV-SNP has no
+`Anchor` or `LaunchFileDigest` and passes only the proven prefix to
+`ImagePin.AcceptExtension`, the hook for an allowlist; entries beyond the
+prefix were not quoted and are not judged. A pin without `AcceptExtension`
+still requires the bare seed; `func(string) error { return nil }` accepts any
+list that replays. A list over 256 entries or holding a non-canonical digest is
+refused. SEV-SNP has no
 runtime extends: marshaling omits a list there, parsing refuses one, and
 `VerifyWithService` ignores one. `VerifyOffline` does not replay the list; a
-caller pinning an anchor passes `att.RuntimeExtensions` to
-`remote.EnforceImagesWithRuntimeLog`.
+caller pinning an anchor or launch file digest passes `att.RuntimeExtensions`
+to `remote.EnforceImagesWithRuntimeLog`.
 
 Certificate lifecycle — issuance, rotation, TLS configs — is the caller's.
 

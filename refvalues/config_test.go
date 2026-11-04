@@ -5,6 +5,8 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/sha512"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
@@ -17,6 +19,7 @@ import (
 
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
 	"github.com/confidential-dot-ai/attestation-go/remote"
+	"github.com/confidential-dot-ai/attestation-go/runtimemeasure"
 )
 
 const (
@@ -36,6 +39,19 @@ func tdxFile(images string) string {
 
 func snp2File(images string) string {
 	return `{"schema_version":"2","tee":"sev-snp","measurements":[` + images + `]}`
+}
+
+func tdx2File(images string) string {
+	return `{"schema_version":"2","tee":"tdx","measurements":[` + images + `]}`
+}
+
+func mustLaunchFileDigest(t *testing.T, f teetypes.Family, file []byte) []byte {
+	t.Helper()
+	d, err := runtimemeasure.LaunchFileDigest(f, file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
 }
 
 func mustHex(t *testing.T, s string) []byte {
@@ -105,7 +121,7 @@ func TestParseRejects(t *testing.T) {
 		{"launch file under schema 1", snpFile(`{"name":"a","measurement":"` + d1 + `","launch_file":"clusterID: alpha\n"}`), "schema_version"},
 		{"launch file and approver key", snp2File(`{"name":"a","measurement":"` + d1 + `","approver_key":"key","launch_file":"clusterID: alpha\n"}`), "at most one"},
 		{"empty launch file", snp2File(`{"name":"a","measurement":"` + d1 + `","launch_file":""}`), "launch_file: is empty"},
-		{"null launch file", snp2File(`{"name":"a","measurement":"` + d1 + `","launch_file":null}`), "launch_file: is empty"},
+		{"null launch file", snp2File(`{"name":"a","measurement":"` + d1 + `","launch_file":null}`), "launch_file: is null"},
 		{"non-string launch file", snp2File(`{"name":"a","measurement":"` + d1 + `","launch_file":42}`), "launch_file"},
 		{"duplicate launch file tuple", snp2File(`{"name":"a","measurement":"` + d1 + `","launch_file":"x"},{"name":"b","measurement":"` + d1 + `","launch_file":"x"}`), "same tuple"},
 		{"unknown tee", `{"schema_version":"1","tee":"sev","measurements":[{"name":"a","mrtd":"` + d1 + `"}]}`, "tee"},
@@ -314,6 +330,7 @@ func FuzzParse(f *testing.F) {
 	f.Add(snpFile(`{"name":"a","measurement":"` + d1 + `"}`))
 	f.Add(tdxFile(`{"name":"a","mrtd":"` + d1 + `","rtmr":[null,"` + r1 + `","` + r2 + `",""]}`))
 	f.Add(snp2File(`{"name":"a","measurement":"` + d1 + `","launch_file":"clusterID: alpha\n"}`))
+	f.Add(tdx2File(`{"name":"a","mrtd":"` + d1 + `","launch_file_digest":"` + r1 + `"}`))
 	f.Fuzz(func(t *testing.T, doc string) {
 		rv, err := Parse([]byte(doc))
 		if err != nil {
@@ -334,6 +351,11 @@ func FuzzParse(f *testing.F) {
 				}
 				if len(v) != DigestSize {
 					t.Fatalf("accepted a %d-byte RTMR pin", len(v))
+				}
+			}
+			if img.LaunchFileDigest != nil {
+				if _, err := runtimemeasure.ParseLaunchFileDigest(rv.Family, hex.EncodeToString(img.LaunchFileDigest)); err != nil {
+					t.Fatalf("accepted a launch file digest its family refuses: %v", err)
 				}
 			}
 		}
@@ -484,6 +506,119 @@ func TestLaunchFileRoundTripAndTupleIdentity(t *testing.T) {
 	}
 }
 
+// A digest pin is schema 2, carries its family's width, and is part of the
+// tuple: one file pinned whole and by digest is two pins.
+func TestLaunchFileDigestRoundTripAndTupleIdentity(t *testing.T) {
+	const launchFile = "clusterID: alpha\n"
+	for _, family := range []teetypes.Family{teetypes.FamilyTDX, teetypes.FamilySNP} {
+		t.Run(string(family), func(t *testing.T) {
+			digest := mustLaunchFileDigest(t, family, []byte(launchFile))
+			rv := ReferenceValues{Family: family, Images: []remote.ImagePin{
+				{Name: "worker-a", Digest: mustHex(t, d1), LaunchFileDigest: digest},
+				{Name: "worker-b", Digest: mustHex(t, d1), LaunchFileDigest: mustLaunchFileDigest(t, family, []byte(launchFile+"\n"))},
+			}}
+			if family == teetypes.FamilyTDX {
+				for i := range rv.Images {
+					rv.Images[i].Registers = map[int][]byte{1: mustHex(t, r1), 2: mustHex(t, r2)}
+				}
+			}
+			if rv.HasAnchors() || !rv.HasLaunchBindings() {
+				t.Fatal("a launch file digest was not reported as a launch binding alone")
+			}
+			if _, _, uniform := rv.Flatten(); uniform {
+				t.Fatal("flat policy silently discarded launch file digests")
+			}
+			if !bytes.Equal(rv.Policy().Images[0].LaunchFileDigest, digest) {
+				t.Fatal("Policy dropped the launch file digest")
+			}
+			for _, format := range []func(ReferenceValues) ([]byte, error){Format, Render} {
+				data, err := format(rv)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var doc struct {
+					SchemaVersion string `json:"schema_version"`
+					Measurements  []struct {
+						LaunchFileDigest string `json:"launch_file_digest"`
+					} `json:"measurements"`
+				}
+				if err := json.Unmarshal(data, &doc); err != nil {
+					t.Fatal(err)
+				}
+				if doc.SchemaVersion != "2" || doc.Measurements[0].LaunchFileDigest != hex.EncodeToString(digest) {
+					t.Fatalf("launch file digest written as %+v", doc)
+				}
+				for _, parse := range []func([]byte) (ReferenceValues, error){Parse, ParseRendered} {
+					got, err := parse(data)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if !reflect.DeepEqual(got, rv) {
+						t.Fatalf("policy changed on round trip: %+v", got)
+					}
+				}
+			}
+			pinnedByDigest := ReferenceValues{Images: rv.Images[:1]}
+			otherDigest := ReferenceValues{Images: rv.Images[1:]}
+			wholeFile := ReferenceValues{Images: []remote.ImagePin{{
+				Name: "worker-a", Digest: mustHex(t, d1), Registers: rv.Images[0].Registers, LaunchFile: []byte(launchFile),
+			}}}
+			if missing, extra := Diff(pinnedByDigest, otherDigest); len(missing) != 1 || len(extra) != 1 {
+				t.Fatal("Diff matched pins naming different launch file digests")
+			}
+			if missing, extra := Diff(pinnedByDigest, wholeFile); len(missing) != 1 || len(extra) != 1 {
+				t.Fatal("Diff matched a digest pin with a whole-file pin")
+			}
+			rv.Images[1].LaunchFileDigest = digest
+			if _, err := Format(rv); err == nil {
+				t.Fatal("Format accepted duplicate complete tuple")
+			}
+		})
+	}
+}
+
+func TestParseRefusesInvalidLaunchFileDigest(t *testing.T) {
+	file := []byte("clusterID: alpha\n")
+	snp := hex.EncodeToString(mustLaunchFileDigest(t, teetypes.FamilySNP, file))
+	tdx := hex.EncodeToString(mustLaunchFileDigest(t, teetypes.FamilyTDX, file))
+	emptySNP, emptyTDX := sha256.Sum256(nil), sha512.Sum384(nil)
+	snpEntry := func(fields string) string {
+		return snp2File(`{"name":"a","measurement":"` + d1 + `",` + fields + `}`)
+	}
+	tdxEntry := func(fields string) string {
+		return tdx2File(`{"name":"a","mrtd":"` + d1 + `",` + fields + `}`)
+	}
+	for _, tc := range []struct {
+		name string
+		doc  string
+		want string
+	}{
+		{"under schema 1", snpFile(`{"name":"a","measurement":"` + d1 + `","launch_file_digest":"` + snp + `"}`), "schema_version"},
+		{"with launch file", snpEntry(`"launch_file":"x","launch_file_digest":"` + snp + `"`), "at most one"},
+		{"with approver key", snpEntry(`"approver_key":"key","launch_file_digest":"` + snp + `"`), "at most one"},
+		{"empty", snpEntry(`"launch_file_digest":""`), "launch_file_digest: is 0 chars"},
+		{"null", snpEntry(`"launch_file_digest":null`), "launch_file_digest: is null"},
+		{"non-string", snpEntry(`"launch_file_digest":42`), "launch_file_digest"},
+		{"uppercase", snpEntry(`"launch_file_digest":"` + strings.ToUpper(snp) + `"`), "launch_file_digest: is not 64 lowercase hex chars"},
+		{"0x prefix", snpEntry(`"launch_file_digest":"0x` + snp[2:] + `"`), "launch_file_digest: is not 64 lowercase hex chars"},
+		{"algorithm prefix", snpEntry(`"launch_file_digest":"sha256:` + snp + `"`), "launch_file_digest: is 71 chars"},
+		{"odd length", snpEntry(`"launch_file_digest":"` + snp[:63] + `"`), "launch_file_digest: is 63 chars"},
+		{"tdx width on sev-snp", snpEntry(`"launch_file_digest":"` + tdx + `"`), "launch_file_digest: is 96 chars, want 64"},
+		{"snp width on tdx", tdxEntry(`"launch_file_digest":"` + snp + `"`), "launch_file_digest: is 64 chars, want 96"},
+		{"all zero", snpEntry(`"launch_file_digest":"` + strings.Repeat("0", 64) + `"`), "all zero"},
+		{"empty file on sev-snp", snpEntry(`"launch_file_digest":"` + hex.EncodeToString(emptySNP[:]) + `"`), "empty file"},
+		{"empty file on tdx", tdxEntry(`"launch_file_digest":"` + hex.EncodeToString(emptyTDX[:]) + `"`), "empty file"},
+		{"duplicate tuple", snp2File(`{"name":"a","measurement":"` + d1 + `","launch_file_digest":"` + snp + `"},{"name":"b","measurement":"` + d1 + `","launch_file_digest":"` + snp + `"}`), "same tuple"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Parse([]byte(tc.doc))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Parse() = %v, want an error mentioning %q", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestAnchorWireAndRenderedDocumentsFailClosed(t *testing.T) {
 	key, err := json.Marshal(string(approverPEM(t)))
 	if err != nil {
@@ -531,6 +666,15 @@ func TestFormatRefusesInvalidOrLossyPins(t *testing.T) {
 		"empty launch file":         func(p *remote.ImagePin) { p.LaunchFile = []byte{} },
 		"both launch bindings": func(p *remote.ImagePin) {
 			p.Anchor, p.LaunchFile = approverPEM(t), []byte("clusterID: alpha\n")
+		},
+		"empty launch file digest": func(p *remote.ImagePin) { p.LaunchFileDigest = []byte{} },
+		"zero launch file digest":  func(p *remote.ImagePin) { p.LaunchFileDigest = make([]byte, DigestSize) },
+		"snp width launch file digest on tdx": func(p *remote.ImagePin) {
+			p.LaunchFileDigest = mustLaunchFileDigest(t, teetypes.FamilySNP, []byte("clusterID: alpha\n"))
+		},
+		"launch file and its digest": func(p *remote.ImagePin) {
+			p.LaunchFile = []byte("clusterID: alpha\n")
+			p.LaunchFileDigest = mustLaunchFileDigest(t, teetypes.FamilyTDX, []byte("clusterID: alpha\n"))
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

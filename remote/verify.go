@@ -43,8 +43,8 @@ var (
 	ErrAnchorNotAllowed = errors.New("remote: launch anchor not allowed")
 
 	// ErrLaunchFileNotAllowed: a matched image does not bind its pinned launch
-	// file, the verified platform cannot carry that binding, or the pin states
-	// a launch file alongside a binding that contradicts it.
+	// file or launch file digest, the verified platform cannot carry that
+	// binding, or the pin states more than one launch binding.
 	ErrLaunchFileNotAllowed = errors.New("remote: launch file not allowed")
 
 	// ErrPlatformMismatch: the verifier attested a platform other than the one

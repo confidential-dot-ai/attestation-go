@@ -21,7 +21,7 @@ import (
 
 // The measurements config schema versions this package accepts. A future
 // version is rejected, never guessed at. Schema 2 adds the per-entry
-// launch_file field.
+// launch_file and launch_file_digest fields.
 const (
 	schemaVersion1 = "1"
 	schemaVersion2 = "2"
@@ -40,12 +40,13 @@ type wire struct {
 }
 
 type wireImage struct {
-	Name        string          `json:"name"`
-	Measurement *string         `json:"measurement,omitempty"`
-	MRTD        *string         `json:"mrtd,omitempty"`
-	RTMR        []*string       `json:"rtmr,omitempty"`
-	ApproverKey json.RawMessage `json:"approver_key,omitempty"`
-	LaunchFile  json.RawMessage `json:"launch_file,omitempty"`
+	Name             string          `json:"name"`
+	Measurement      *string         `json:"measurement,omitempty"`
+	MRTD             *string         `json:"mrtd,omitempty"`
+	RTMR             []*string       `json:"rtmr,omitempty"`
+	ApproverKey      json.RawMessage `json:"approver_key,omitempty"`
+	LaunchFile       json.RawMessage `json:"launch_file,omitempty"`
+	LaunchFileDigest json.RawMessage `json:"launch_file_digest,omitempty"`
 }
 
 // Load reads and validates a measurements config file. A missing or malformed
@@ -126,12 +127,13 @@ func (f wire) validate(allowEmpty bool) (ReferenceValues, error) {
 	return rv, nil
 }
 
-// checkLaunchFileSchema requires a document pinning a launch file to declare
-// schema 2. A schema 1 reader has no such field, so it must refuse the
-// document rather than load it without the binding; schema 2 may pin none.
+// checkLaunchFileSchema requires a document pinning a launch file, whole or by
+// digest, to declare schema 2. A schema 1 reader has no such field, so it must
+// refuse the document rather than load it without the binding; schema 2 may
+// pin none.
 func checkLaunchFileSchema(version string, rv ReferenceValues) error {
 	if pinsLaunchFile(rv) && version != schemaVersion2 {
-		return fmt.Errorf("launch_file requires schema_version %q, got %q", schemaVersion2, version)
+		return fmt.Errorf("launch_file and launch_file_digest require schema_version %q, got %q", schemaVersion2, version)
 	}
 	return nil
 }
@@ -142,10 +144,6 @@ func (we wireImage) validate(fam teetypes.Family, i int) (remote.ImagePin, error
 		return remote.ImagePin{}, fmt.Errorf("%s: name is required", at)
 	}
 	img := remote.ImagePin{Name: we.Name}
-	if err := we.pinLaunchBinding(&img, at); err != nil {
-		return remote.ImagePin{}, err
-	}
-
 	switch fam {
 	case teetypes.FamilySNP:
 		if we.MRTD != nil || we.RTMR != nil {
@@ -179,16 +177,37 @@ func (we wireImage) validate(fam teetypes.Family, i int) (remote.ImagePin, error
 	default:
 		return remote.ImagePin{}, fmt.Errorf("%s: tee %q has no known pin shape", at, fam)
 	}
+	if err := we.pinLaunchBinding(&img, fam, at); err != nil {
+		return remote.ImagePin{}, err
+	}
 	return img, nil
 }
 
 // pinLaunchBinding reads the entry's launch binding: the approver key the
-// guest was launched to trust, or the launch file it was launched with. Both
-// pin the same hardware field, so an entry carries at most one.
-func (we wireImage) pinLaunchBinding(img *remote.ImagePin, at string) error {
+// guest was launched to trust, or the launch file it was launched with, whole
+// or by digest. All pin the same hardware field, so an entry carries at most
+// one. fam is the family validate has already accepted. A field written as
+// null binds nothing and is refused rather than read as absent.
+func (we wireImage) pinLaunchBinding(img *remote.ImagePin, fam teetypes.Family, at string) error {
+	bindings := 0
+	for _, field := range []struct {
+		name string
+		raw  json.RawMessage
+	}{
+		{"approver_key", we.ApproverKey},
+		{"launch_file", we.LaunchFile},
+		{"launch_file_digest", we.LaunchFileDigest},
+	} {
+		if isJSONNull(field.raw) {
+			return fmt.Errorf("%s.%s: is null; omit the field to pin no launch binding", at, field.name)
+		}
+		if field.raw != nil {
+			bindings++
+		}
+	}
 	switch {
-	case we.ApproverKey != nil && we.LaunchFile != nil:
-		return fmt.Errorf("%s: approver_key and launch_file both pin the launch binding, want at most one", at)
+	case bindings > 1:
+		return fmt.Errorf("%s: approver_key, launch_file and launch_file_digest all pin the launch binding, want at most one", at)
 	case we.ApproverKey != nil:
 		key, err := launchBytes(we.ApproverKey)
 		if err != nil {
@@ -204,14 +223,28 @@ func (we wireImage) pinLaunchBinding(img *remote.ImagePin, at string) error {
 			return fmt.Errorf("%s.launch_file: %w", at, err)
 		}
 		img.LaunchFile = file
+	case we.LaunchFileDigest != nil:
+		var text string
+		if err := json.Unmarshal(we.LaunchFileDigest, &text); err != nil {
+			return fmt.Errorf("%s.launch_file_digest: %w", at, err)
+		}
+		digest, err := runtimemeasure.ParseLaunchFileDigest(fam, text)
+		if err != nil {
+			return fmt.Errorf("%s.launch_file_digest: %w", at, err)
+		}
+		img.LaunchFileDigest = digest
 	}
 	return nil
 }
 
-// launchBytes takes the exact bytes of a launch binding field. The field stays
-// a raw message so a JSON null is told apart from an absent field and refused
-// here with every other value carrying no bytes: a binding to nothing proves
-// nothing.
+// isJSONNull reports whether a field was written as null, which a raw
+// message keeps apart from an absent field.
+func isJSONNull(raw json.RawMessage) bool {
+	return string(raw) == "null"
+}
+
+// launchBytes takes the exact bytes of a launch binding field, refusing an
+// empty string: a binding to nothing proves nothing.
 func launchBytes(raw json.RawMessage) ([]byte, error) {
 	var text string
 	if err := json.Unmarshal(raw, &text); err != nil {
@@ -286,6 +319,12 @@ func Format(rv ReferenceValues) ([]byte, error) {
 			}
 			we.LaunchFile = file
 		}
+		if img.LaunchFileDigest != nil {
+			if err := runtimemeasure.CheckLaunchFileDigest(rv.Family, img.LaunchFileDigest); err != nil {
+				return nil, fmt.Errorf("measurements[%d].launch_file_digest: %w", i, err)
+			}
+			we.LaunchFileDigest = json.RawMessage(`"` + hex.EncodeToString(img.LaunchFileDigest) + `"`)
+		}
 		d := hex.EncodeToString(img.Digest)
 		switch rv.Family {
 		case teetypes.FamilySNP:
@@ -346,11 +385,14 @@ func tupleKey(img remote.ImagePin) string {
 	if img.LaunchFile != nil {
 		fmt.Fprintf(&b, "|launch_file=%x", img.LaunchFile)
 	}
+	if img.LaunchFileDigest != nil {
+		fmt.Fprintf(&b, "|launch_file_digest=%x", img.LaunchFileDigest)
+	}
 	return b.String()
 }
 
 // schemaVersionFor names the schema version [Format] writes for rv: schema 1
-// expresses every set that pins no launch file.
+// expresses every set that pins no launch file, whole or by digest.
 func schemaVersionFor(rv ReferenceValues) string {
 	if pinsLaunchFile(rv) {
 		return schemaVersion2
@@ -358,11 +400,11 @@ func schemaVersionFor(rv ReferenceValues) string {
 	return schemaVersion1
 }
 
-// pinsLaunchFile reports whether any image pins a launch file, the binding
-// schema 2 introduced.
+// pinsLaunchFile reports whether any image pins a launch file, whole or by
+// digest, the bindings schema 2 introduced.
 func pinsLaunchFile(rv ReferenceValues) bool {
 	for _, img := range rv.Images {
-		if img.LaunchFile != nil {
+		if img.LaunchFile != nil || img.LaunchFileDigest != nil {
 			return true
 		}
 	}
