@@ -158,8 +158,8 @@ func (c Client) Attest(ctx context.Context, req AttestRequest) (AttestResponse, 
 
 // Verify calls POST /verify and returns the service's report verbatim.
 //
-// The report is not a decision: it says what the evidence contained, including
-// when the signature did not check out. Use [Client.VerifyEnforced] or
+// The report is not a decision: a 200 says the signature and chain verified,
+// and Passed with the per-check answers says whether the policies held. Use [Client.VerifyEnforced] or
 // [Client.VerifyEvidence] unless you are enforcing the verdict yourself.
 func (c Client) Verify(ctx context.Context, req VerifyRequest) (VerifyResponse, error) {
 	var out VerifyResponse

@@ -1,9 +1,11 @@
 package mockapi
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -21,6 +23,10 @@ import (
 // not verify, carried in [remote.ErrorResponse].Error.
 const ErrorCodeVerificationFailed = "verification_failed"
 
+// ErrorCodePlatformNotAllowed is the service's error code for evidence from a
+// platform the request's policies name no entry for.
+const ErrorCodePlatformNotAllowed = "platform_not_allowed"
+
 // SNPReportSize is the byte length of an AMD SEV-SNP attestation report, the
 // size of the report [FakeSNPReport] builds.
 const SNPReportSize = snp.ReportSize
@@ -29,16 +35,23 @@ const SNPReportSize = snp.ReportSize
 // [teetypes.VerificationResult]; the match fields are pointers so the
 // no-check wire shape — the service's explicit null — stays expressible.
 type Verdict struct {
+	// SignatureValid false makes the stub answer 422 verification_failed, as
+	// the service does for a signature that does not verify.
 	SignatureValid  bool
 	ReportDataMatch *bool
 	InitDataMatch   *bool
 	Claims          teetypes.Claims
+	// MeasurementRegisters is what the stub reports as the SEV-SNP kernel
+	// measurement registers when a request pins them; nil means REPORT_DATA
+	// does not commit to the evidence's event log, which fails such a pin.
+	MeasurementRegisters *teetypes.MeasurementRegisters
 }
 
 // PassingVerdict is the verdict for evidence that verified: signature valid,
 // both bindings matched, and launchDigest reported as the claims' launch
-// digest. The match fields are read only when the request pinned the
-// corresponding value, so an unpinned true is inert.
+// digest. The match fields are answered only when the request pinned the
+// corresponding value, as the service leaves an unasked check null, so an
+// unpinned true is inert.
 func PassingVerdict(launchDigest string) Verdict {
 	return Verdict{
 		SignatureValid:  true,
@@ -247,16 +260,101 @@ func (s *Stub) handleVerify(w http.ResponseWriter, r *http.Request) {
 		writeError(w, verifyErr)
 		return
 	}
-	writeJSON(w, remote.VerifyResponse{
-		Result: teetypes.VerificationResult{
-			Platform:        req.Platform,
-			SignatureValid:  verdict.SignatureValid,
-			ReportDataMatch: verdict.ReportDataMatch,
-			InitDataMatch:   verdict.InitDataMatch,
-			Claims:          verdict.Claims,
-		},
-	})
+	// The service answers a signature that does not verify with 422, never
+	// with a 200 whose result says so.
+	if !verdict.SignatureValid {
+		writeError(w, VerificationFailed("hardware signature verification failed"))
+		return
+	}
+	// Evidence from a platform the policies name no entry for is refused, as
+	// the service refuses it, rather than verified under no pins.
+	if _, ok := req.Policies.Pins(req.Platform); !ok {
+		writeError(w, ErrorReply{
+			Status:  http.StatusUnprocessableEntity,
+			Code:    ErrorCodePlatformNotAllowed,
+			Message: fmt.Sprintf("platform %q is not allowed by the request's policies", req.Platform),
+		})
+		return
+	}
+	writeJSON(w, verdict.response(req))
 }
+
+// response is the verdict in the service's shape for req: the stub answers
+// the checks req asked for from the verdict and from its claims, and reports
+// passed when every one of them held.
+func (v Verdict) response(req remote.VerifyRequest) remote.VerifyResponse {
+	resp := remote.VerifyResponse{
+		Result: teetypes.VerificationResult{
+			Platform:       req.Platform,
+			SignatureValid: true,
+			Claims:         v.Claims,
+		},
+		Passed: true,
+	}
+	// answer records a check's outcome and folds it into passed; a check the
+	// request did not ask for stays unanswered, as the service leaves it.
+	answer := func(dst **bool, match *bool) {
+		*dst = match
+		if match != nil && !*match {
+			resp.Passed = false
+		}
+	}
+	asked, _ := req.Policies.Pins(req.Platform)
+	// In register mode the service replaces report_data_match with the
+	// commitment check, answered below.
+	if len(asked.ReportData) > 0 && asked.MeasurementRegisters == nil {
+		answer(&resp.Result.ReportDataMatch, v.ReportDataMatch)
+	}
+	if len(asked.InitData) > 0 {
+		answer(&resp.Result.InitDataMatch, v.InitDataMatch)
+	}
+
+	// The launch measurement and register pins are answered from the claims,
+	// as the service answers them from the report.
+	if len(asked.Launch) > 0 {
+		digest, err := v.Claims.LaunchMeasurement()
+		answer(&resp.Result.LaunchDigestMatch, teetypes.Ptr(err == nil && remote.MeasurementAllowed(digest, asked.Launch)))
+	}
+	for i, pins := range asked.RTMRs {
+		if len(pins) == 0 {
+			continue
+		}
+		got, err := v.Claims.RTMR(i)
+		var match *bool
+		answer(&match, teetypes.Ptr(err == nil && remote.MeasurementAllowed(got, pins)))
+		resp.Result.SetRTMRMatch(i, match)
+	}
+	// Register mode follows the service's check_measurement_registers: the
+	// commitment counts only under a matched launch digest (without the
+	// provider image it means nothing), report_data_match is whether it held,
+	// and the registers are exposed only on a result that passed.
+	var registers *teetypes.MeasurementRegisters
+	if asked.MeasurementRegisters != nil {
+		committed := v.MeasurementRegisters != nil && affirmed(resp.Result.LaunchDigestMatch)
+		answer(&resp.Result.ReportDataMatch, &committed)
+		match := committed && remote.MeasurementRegistersMatch(v.MeasurementRegisters.Registers, *asked.MeasurementRegisters)
+		answer(&resp.Result.MeasurementRegistersMatch, &match)
+		if committed {
+			registers = v.MeasurementRegisters
+		}
+	}
+	if len(asked.PCRs) > 0 {
+		match := true
+		for idx, want := range asked.PCRs {
+			got, err := v.Claims.PCR(idx)
+			if err != nil || !bytes.Equal(got, want) {
+				match = false
+			}
+		}
+		answer(&resp.Checks.PCRsMatch, &match)
+	}
+	if resp.Passed {
+		resp.Result.MeasurementRegisters = registers
+	}
+	return resp
+}
+
+func affirmed(v *bool) bool { return v != nil && *v }
 
 // undecodableBody mirrors the service's JSON rejection: 400 for a body that is
 // not valid JSON, 422 for one that does not fit the handler's type; both

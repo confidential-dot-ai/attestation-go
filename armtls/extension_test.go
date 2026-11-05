@@ -460,3 +460,28 @@ func TestExtractAttestation(t *testing.T) {
 		}
 	})
 }
+
+// A peer chooses what its certificate carries, so collateral inside an
+// embedded envelope is the peer's word, not the vendors'. It must not travel
+// on to the verifier, which fetches or holds its own.
+func TestUnmarshalExtensionDropsPeerCollateral(t *testing.T) {
+	raw := []byte(`{"platform":"az-snp","evidence":{"hcl_report":"AAAA"},"collateral":[{"url":"https://attacker.example/crl","body":"AAAA"}]}`)
+	ext, err := (&Attestation{Family: teetypes.FamilySNP, Report: raw}).MarshalExtension(testOID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	att, err := UnmarshalExtension(ext.Value)
+	if err != nil {
+		t.Fatalf("UnmarshalExtension: %v", err)
+	}
+	env, ok := att.EmbeddedEvidence()
+	if !ok {
+		t.Fatal("embedded envelope not recognised")
+	}
+	if env.Collateral != nil {
+		t.Fatalf("collateral = %s, want it dropped", env.Collateral)
+	}
+	if env.Platform != teetypes.PlatformAzSNP || len(env.Evidence) == 0 {
+		t.Fatalf("envelope = %+v, want platform and evidence kept", env)
+	}
+}
