@@ -27,10 +27,10 @@ func Render(rv ReferenceValues) ([]byte, error) {
 	return Format(rv)
 }
 
-// ParseRendered decodes a document a component published with [Render].
-// Unlike [Parse] it accepts an empty set, because a component that enforces
-// nothing must still be readable. An operator's own config file takes [Parse]
-// instead.
+// ParseRendered decodes a document that may hold an empty set: one a
+// component published with [Render], or a configuration its reader accepts
+// before any image is pinned. The document still names its TEE family. A
+// config file that must pin at least one image takes [Parse] instead.
 func ParseRendered(data []byte) (ReferenceValues, error) {
 	return parse(data, true)
 }
