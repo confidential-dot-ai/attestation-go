@@ -151,3 +151,12 @@ func (p PlatformType) HasVTPMQuote() bool {
 // evidence can answer — a policy error, not something to skip. False for an
 // unknown tag, so such a pin fails closed.
 func (p PlatformType) HasRegisters() bool { return p.Family() == FamilyTDX }
+
+// HasMeasurementRegisters reports whether the platform's guest kernel can
+// commit its measurement registers to the hardware report (the SEV-SNP
+// register mode; see MeasurementRegisters). Only bare-metal snp: the Azure
+// paravisor and GCP firmware own REPORT_DATA's provenance there, and TDX has
+// RTMRs instead. A pin elsewhere asks for a check no evidence can answer.
+func (p PlatformType) HasMeasurementRegisters() bool {
+	return NormalizePlatform(string(p)) == PlatformSNP
+}

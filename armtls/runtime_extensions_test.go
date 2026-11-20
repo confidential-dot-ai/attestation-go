@@ -229,8 +229,8 @@ func TestVerifyWithServiceRejectsRuntimeExtensions(t *testing.T) {
 		{"non-canonical entry", tdxAttestation(t, []string{"img:latest"})},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			spy := &verifySpy{result: passingVerdict(nil)}
-			_, err := VerifyWithService(context.Background(), spy.service(t), tc.att, &key.PublicKey, nil, remote.Policy{})
+			spy := newSpy(t, passingVerdict(nil))
+			_, err := VerifyWithService(context.Background(), spy.service(), tc.att, &key.PublicKey, nil, remote.Policy{})
 			if !errors.Is(err, ErrInvalidReport) {
 				t.Fatalf("VerifyWithService() = _, %v, want ErrInvalidReport", err)
 			}
@@ -256,8 +256,8 @@ func TestVerifyWithServiceIgnoresRuntimeExtensionsOnSNP(t *testing.T) {
 		att := &Attestation{Family: teetypes.FamilySNP, Report: mockapi.FakeSNPReport([]byte{}), RuntimeExtensions: list}
 		verdict := passingVerdict(launch)
 		verdict.Claims.InitData = hostData[:]
-		spy := &verifySpy{result: verdict}
-		if _, err := VerifyWithService(context.Background(), spy.service(t), att, &key.PublicKey, nil, policy); err != nil {
+		spy := newSpy(t, verdict)
+		if _, err := VerifyWithService(context.Background(), spy.service(), att, &key.PublicKey, nil, policy); err != nil {
 			t.Fatalf("VerifyWithService(snp, %q) = _, %v, want nil", list, err)
 		}
 	}

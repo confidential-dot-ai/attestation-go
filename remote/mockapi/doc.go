@@ -21,8 +21,10 @@
 //     asked the service to check show up.
 //   - GET /health answers ok with the stub's platform.
 //
-// Every 200 the real service sends reports success: refused evidence arrives as
-// the 422 of [VerificationFailed], never as a false verdict field. A false in
-// [Verdict] therefore models a service contradicting itself. Test it, because a
-// caller must fail closed on it, but do not expect that shape in production.
+// The real service answers 200 for every genuine piece of evidence and says
+// whether it passed the policy in the body; only a signature or chain that
+// does not verify is the 422 of [VerificationFailed]. The stub does the same:
+// a false [Verdict.SignatureValid] becomes that 422, and the other verdict
+// fields and the pins in the request decide passed and the per-check answers,
+// as [Verdict] documents.
 package mockapi

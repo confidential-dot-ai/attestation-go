@@ -135,8 +135,8 @@ func TestVerifyEvidenceForwardsInitDataHash(t *testing.T) {
 	if _, err := c.VerifyEvidence(context.Background(), ev, Policy{ExpectedInitDataHash: hash}); err != nil {
 		t.Fatalf("VerifyEvidence: %v", err)
 	}
-	if !bytes.Equal(s.got.Params.ExpectedInitDataHash, hash) {
-		t.Errorf("expected_init_data_hash = %x, want %x", s.got.Params.ExpectedInitDataHash, hash)
+	if s.got.Policies.AzSNP == nil || !bytes.Equal(s.got.Policies.AzSNP.HostData, hash) {
+		t.Errorf("az-snp host_data = %+v, want %x", s.got.Policies.AzSNP, hash)
 	}
 }
 
