@@ -1,6 +1,7 @@
 package tdx
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -216,6 +217,64 @@ func TestVerifyQuoteBytes_TCBStatusPolicy(t *testing.T) {
 			_, err := VerifyQuoteBytes(testdata.RawQuote, teetypes.VerifyParams{AllowDebug: true}, teetypes.PlatformTDX, tt.opts)
 			if !errorContains(err, tt.wantErr) {
 				t.Errorf("VerifyQuoteBytes() = %v, want error containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// memberAdder appends a member to the JSON responses whose URL contains match.
+type memberAdder struct{ match, member string }
+
+func (m memberAdder) Get(url string) (map[string][]string, []byte, error) {
+	header, body, err := testcases.TestGetter.Get(url)
+	if err != nil || !strings.Contains(url, m.match) {
+		return header, body, err
+	}
+	end := bytes.LastIndexByte(body, '}')
+	return header, append(append(body[:end:end], ","+m.member...), body[end:]...), nil
+}
+
+// TestVerifyQuoteBytes_CollateralEnvelope requires a TCB info or QE identity
+// response to name each member once, under either TCB status check.
+func TestVerifyQuoteBytes_CollateralEnvelope(t *testing.T) {
+	accepted := []teetypes.TdxTcbStatus{teetypes.TdxUpToDate, teetypes.TdxOutOfDate}
+	tests := []struct {
+		name   string
+		getter memberAdder
+	}{
+		{"repeated member in TCB info", memberAdder{"/tcb?", `"tcbInfo":{}`}},
+		{"repeated member in another case", memberAdder{"/tcb?", `"TCBINFO":{}`}},
+		{"repeated member in QE identity", memberAdder{"/qe/identity", `"EnclaveIdentity":{}`}},
+	}
+	for _, tt := range tests {
+		for _, statuses := range [][]teetypes.TdxTcbStatus{nil, accepted} {
+			t.Run(fmt.Sprintf("%s, accepted %v", tt.name, statuses), func(t *testing.T) {
+				opts := Options{GetCollateral: true, CheckRevocations: true, Getter: tt.getter, Now: sampleCollateralTime, AcceptedTCBStatuses: statuses}
+				_, err := VerifyQuoteBytes(testdata.RawQuote, teetypes.VerifyParams{AllowDebug: true}, teetypes.PlatformTDX, opts)
+				if !errorContains(err, "duplicate") {
+					t.Errorf("VerifyQuoteBytes() = %v, want the response refused for its repeated member", err)
+				}
+			})
+		}
+	}
+}
+
+func TestCheckSignedEnvelope(t *testing.T) {
+	tcbURL := pcs.TcbInfoURL("00806f050000")
+	tests := []struct {
+		name, url, body string
+		wantErr         string
+	}{
+		{"TCB info", tcbURL, `{"tcbInfo":{},"signature":"00"}`, ""},
+		{"QE identity", pcs.QeIdentityURL(), `{"signature":"00","enclaveIdentity":{}}`, ""},
+		{"other collateral is not checked", pcs.PckCrlURL("platform"), `{"a":1,"A":2}`, ""},
+		{"repeated member", tcbURL, `{"tcbInfo":{},"signature":"00","tcbInfo":{}}`, "duplicate"},
+		{"repeated member in another case", pcs.QeIdentityURL(), `{"enclaveIdentity":{},"ENCLAVEIDENTITY":{}}`, "duplicate"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := checkSignedEnvelope(tt.url, []byte(tt.body)); !errorContains(err, tt.wantErr) {
+				t.Errorf("checkSignedEnvelope() = %v, want error containing %q", err, tt.wantErr)
 			}
 		})
 	}

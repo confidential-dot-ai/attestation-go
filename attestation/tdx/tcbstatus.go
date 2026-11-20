@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/google/go-tdx-guest/pcs"
@@ -14,6 +15,7 @@ import (
 	"github.com/google/go-tdx-guest/verify/trust"
 
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
+	"github.com/confidential-dot-ai/attestation-go/internal/strictjson"
 )
 
 // tcbStatusOrder ranks the Intel TCB statuses from most to least favourable;
@@ -58,7 +60,8 @@ func checkAcceptedTCBStatuses(opts Options) error {
 
 // collateralRecorder keeps every response body go-tdx-guest fetches. Once the
 // quote verifies, go-tdx-guest has checked the Intel signatures over exactly
-// these bodies, so their TCB levels can be evaluated here.
+// these bodies, so their TCB levels can be evaluated here. It hands on a TCB
+// info or QE identity response only when checkSignedEnvelope accepts it.
 type collateralRecorder struct {
 	inner trust.HTTPSGetter
 
@@ -80,12 +83,29 @@ func (r *collateralRecorder) Get(url string) (map[string][]string, []byte, error
 
 func (r *collateralRecorder) GetContext(ctx context.Context, url string) (map[string][]string, []byte, error) {
 	header, body, err := trust.GetWith(ctx, r.inner, url)
-	if err == nil {
-		r.mu.Lock()
-		r.bodies[url] = body
-		r.mu.Unlock()
+	if err != nil {
+		return nil, nil, err
 	}
-	return header, body, err
+	if err := checkSignedEnvelope(url, body); err != nil {
+		return nil, nil, err
+	}
+	r.mu.Lock()
+	r.bodies[url] = body
+	r.mu.Unlock()
+	return header, body, nil
+}
+
+// checkSignedEnvelope refuses a TCB info or QE identity response that names a
+// member twice in any letter case. Intel's signature covers one object, and
+// encoding/json would otherwise decode another.
+func checkSignedEnvelope(url string, body []byte) error {
+	if url != pcs.QeIdentityURL() && !strings.HasPrefix(url, pcs.TcbInfoURL("")) {
+		return nil
+	}
+	if _, err := strictjson.RejectDuplicateKeys(body); err != nil {
+		return fmt.Errorf("tdx: collateral %s: %w", url, err)
+	}
+	return nil
 }
 
 func (r *collateralRecorder) body(url string) ([]byte, error) {

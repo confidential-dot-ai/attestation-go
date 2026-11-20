@@ -134,10 +134,14 @@ func VerifyQuoteBytes(quoteBytes []byte, params teetypes.VerifyParams, platform 
 		Now:              verificationTimeSet(opts.Now),
 		TrustedRoots:     trustedRoots,
 	}
+	// Every collateral fetch goes through the recorder, which refuses a
+	// response that names a member twice.
 	var recorder *collateralRecorder
-	if len(opts.AcceptedTCBStatuses) > 0 {
+	if opts.GetCollateral {
 		recorder = newCollateralRecorder(opts.Getter)
 		vOpts.Getter = recorder
+	}
+	if len(opts.AcceptedTCBStatuses) > 0 {
 		vOpts.DisableTcbStatusCheck = true
 	}
 	if err := tverify.TdxQuote(quote, vOpts); err != nil {
@@ -164,7 +168,7 @@ func VerifyQuoteBytes(quoteBytes []byte, params teetypes.VerifyParams, platform 
 		Claims:             extractClaims(quote),
 		CollateralVerified: opts.GetCollateral,
 	}
-	if recorder != nil {
+	if len(opts.AcceptedTCBStatuses) > 0 {
 		status, err := evaluateTCBStatus(quote, recorder, opts.AcceptedTCBStatuses)
 		if err != nil {
 			return nil, err
