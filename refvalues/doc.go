@@ -24,12 +24,34 @@
 // [remote.ImagePin.LaunchFile], or a launch_file_digest holding its
 // [runtimemeasure.LaunchFileDigest] alone as lowercase hex of the document
 // family's width, mapped to [remote.ImagePin.LaunchFileDigest]. An entry
-// carries at most one of approver_key, launch_file and launch_file_digest, all
-// naming the same hardware field. [Format] and [Render] write schema_version 2
-// only for a set that pins a launch file, whole or by digest, so a schema 1
-// reader sees a document it still loads, and refuse one they cannot preserve
-// byte for byte. [Parse] refuses either field under schema_version 1, where a
-// reader has no such field; a schema 2 document may pin none.
+// carries at most one of approver_key, launch_file and launch_file_digest,
+// alternative launch bindings. [Format] and [Render] write the earliest
+// schema_version that expresses the set: 2 for one that pins a launch file,
+// whole or by digest, 3 for one with an entry setting launch_file_field (see
+// below), and 1 otherwise. So a schema 1 reader sees a document it still
+// loads, and they refuse one they cannot preserve byte for byte. [Parse]
+// refuses either field under schema_version 1, where a reader has no such
+// field; a schema 2 or 3 document may pin none.
+//
+// schema_version 3 adds launch_file_field, which names where an entry's launch
+// file is bound. Its one value, "init_data", is the field a launcher sets at
+// launch, MRCONFIGID on TDX, mapped to [remote.ImagePin.LaunchFileInInitData];
+// an entry without it keeps the family's own binding, RTMR[3] on TDX
+// and HOSTDATA on SEV-SNP. It is a TDX field, refused in an SEV-SNP
+// document by [Parse], whose error names the entry's launch_file_field and
+// the document's tee, and in an SEV-SNP set by [Format] and [Render]:
+// on SEV-SNP HOSTDATA is the one field a launcher sets, a launch_file or
+// launch_file_digest entry already reads it, and the field would name no
+// choice. Separately, no launch-file entry accepts evidence tagged az-snp,
+// where the Azure paravisor owns HOSTDATA. An init_data entry matches
+// only evidence verified under the tdx tag: a provider's TDX tags (az-tdx,
+// gcp-tdx) are refused as that entry's mismatch: who sets MRCONFIGID under
+// a provider's stack is not established here, so a Kata guest there cannot
+// be pinned with this field. The field is part of the pin's identity,
+// requires a launch_file or launch_file_digest beside it, and is refused
+// under an earlier schema_version, whose reader would check the other
+// field. [Format] and [Render] write schema_version 3 only for a set that
+// uses it, and then for the whole set, its plain launch-file entries included.
 //
 // [ParseRendered] uses the same strict parsing rules as [Parse], while
 // permitting the empty set a component may report through [Render]. [Diff]

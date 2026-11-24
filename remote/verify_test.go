@@ -763,3 +763,197 @@ func TestEnforcePinsWithRuntimeLog(t *testing.T) {
 		t.Fatalf("EnforcePinsWithRuntimeLog(measurements only, %q) = %v, want nil", bogus, err)
 	}
 }
+
+// initDataBoundTo returns evidence of image digestA whose launcher committed
+// file in the init-data field: MRCONFIGID on TDX, HOSTDATA on SEV-SNP. On TDX
+// RTMR[3] holds what the guest's own software extended, not the file.
+func initDataBoundTo(t *testing.T, p teetypes.PlatformType, file []byte) VerifyResponse {
+	t.Helper()
+	var registers map[string]string
+	if p.HasRegisters() {
+		registers = map[string]string{"rtmr_3": strings.Repeat("ab", runtimemeasure.Size)}
+	}
+	r := evidence(t, digestA, registers)
+	r.Result.SignatureValid = true
+	r.Result.Platform = p
+	r.Result.Claims.InitData = mustLaunchFileDigest(t, p.Family(), file)
+	return r
+}
+
+// A pin reading its launch file from init data matches a guest whose launcher
+// committed that file, whole or by digest, whatever its software extended.
+func TestEnforceImagesPinsLaunchFileInInitData(t *testing.T) {
+	file := []byte("clusterID: alpha\n")
+	other := []byte("clusterID: beta\n")
+	p := teetypes.PlatformTDX
+	pins := map[string]ImagePin{
+		"file":   {Name: "ta", Digest: mustHex(t, digestA), LaunchFile: file, LaunchFileInInitData: true},
+		"digest": {Name: "ta", Digest: mustHex(t, digestA), LaunchFileDigest: mustLaunchFileDigest(t, p.Family(), file), LaunchFileInInitData: true},
+	}
+	for kind, pin := range pins {
+		t.Run(kind, func(t *testing.T) {
+			images := []ImagePin{pin}
+			if err := EnforceImages(initDataBoundTo(t, p, file), images, p); err != nil {
+				t.Fatalf("the pinned launch file was refused: %v", err)
+			}
+			if err := EnforceImages(initDataBoundTo(t, p, other), images, p); !errors.Is(err, ErrLaunchFileNotAllowed) {
+				t.Fatalf("another launch file = %v, want ErrLaunchFileNotAllowed", err)
+			}
+			// The field admits no extension, so a runtime log says nothing about it.
+			claimed := []string{"sha256:" + strings.Repeat("01", 32)}
+			if err := EnforceImagesWithRuntimeLog(initDataBoundTo(t, p, file), images, p, claimed); err != nil {
+				t.Fatalf("a claimed runtime log changed the verdict: %v", err)
+			}
+		})
+	}
+}
+
+// SEV-SNP has one launcher-set field, which a launch file pin already reads,
+// so the flag names no choice there and is refused.
+func TestEnforceImagesRefusesInitDataPinOnSNP(t *testing.T) {
+	file := []byte("clusterID: alpha\n")
+	images := []ImagePin{{Name: "ta", Digest: mustHex(t, digestA), LaunchFile: file, LaunchFileInInitData: true}}
+	if err := EnforceImages(snpBoundTo(t, file), images, teetypes.PlatformSNP); !errors.Is(err, ErrLaunchFileNotAllowed) {
+		t.Fatalf("got %v, want ErrLaunchFileNotAllowed", err)
+	}
+	images[0].LaunchFileInInitData = false
+	if err := EnforceImages(snpBoundTo(t, file), images, teetypes.PlatformSNP); err != nil {
+		t.Fatalf("a launch file pin refused the guest a Kata runtime launches: %v", err)
+	}
+}
+
+// An init-data pin is one image's constraint: a set holding it still matches
+// an SEV-SNP guest by another image, whichever way the TDX pin names its file.
+func TestEnforceImagesInitDataPinLeavesOtherFamiliesEligible(t *testing.T) {
+	file := []byte("clusterID: alpha\n")
+	tdx := map[string]ImagePin{
+		"file":   {Name: "tdx", Digest: mustHex(t, digestB), LaunchFile: file, LaunchFileInInitData: true},
+		"digest": {Name: "tdx", Digest: mustHex(t, digestB), LaunchFileDigest: mustLaunchFileDigest(t, teetypes.FamilyTDX, file), LaunchFileInInitData: true},
+	}
+	for kind, pin := range tdx {
+		t.Run(kind, func(t *testing.T) {
+			images := []ImagePin{pin, {Name: "snp", Digest: mustHex(t, digestA), LaunchFile: file}}
+			if err := EnforceImages(snpBoundTo(t, file), images, teetypes.PlatformSNP); err != nil {
+				t.Fatalf("the SEV-SNP image was refused: %v", err)
+			}
+			// Sharing the guest's launch digest does not make the TDX pin match.
+			images[0].Digest = mustHex(t, digestA)
+			if err := EnforceImages(snpBoundTo(t, file), images[:1], teetypes.PlatformSNP); !errors.Is(err, ErrLaunchFileNotAllowed) {
+				t.Fatalf("the init-data pin alone = %v, want ErrLaunchFileNotAllowed", err)
+			}
+		})
+	}
+}
+
+// On TDX the two bindings are separate fields, so the pin decides which one a
+// guest must prove: evidence of the other is refused either way.
+func TestEnforceImagesLaunchFileFieldIsThePinsChoice(t *testing.T) {
+	file := []byte("clusterID: alpha\n")
+	inRegister := []ImagePin{{Name: "ta", Digest: mustHex(t, digestA), LaunchFile: file}}
+	inInitData := []ImagePin{{Name: "ta", Digest: mustHex(t, digestA), LaunchFile: file, LaunchFileInInitData: true}}
+
+	if err := EnforceImages(initDataBoundTo(t, teetypes.PlatformTDX, file), inRegister, teetypes.PlatformTDX); !errors.Is(err, ErrLaunchFileNotAllowed) {
+		t.Fatalf("MRCONFIGID evidence under a register pin = %v, want ErrLaunchFileNotAllowed", err)
+	}
+	seeded := tdxBoundTo(t, file, nil)
+	seeded.Result.Claims.InitData = make([]byte, runtimemeasure.Size)
+	if err := EnforceImages(seeded, inInitData, teetypes.PlatformTDX); !errors.Is(err, ErrLaunchFileNotAllowed) {
+		t.Fatalf("RTMR[3] evidence under an init-data pin = %v, want ErrLaunchFileNotAllowed", err)
+	}
+}
+
+func TestEnforceImagesRefusesInvalidInitDataPin(t *testing.T) {
+	file := []byte("clusterID: alpha\n")
+	accept := func(string) error { return nil }
+	tests := map[string]ImagePin{
+		"no launch file":       {LaunchFileInInitData: true},
+		"an approver key":      {Anchor: file, LaunchFileInInitData: true},
+		"an extension verdict": {LaunchFileDigest: mustLaunchFileDigest(t, teetypes.FamilyTDX, file), AcceptExtension: accept, LaunchFileInInitData: true},
+	}
+	for name, pin := range tests {
+		t.Run(name, func(t *testing.T) {
+			// A valid image the evidence matches comes first: the refusal is of
+			// the set, so it cannot mask the misconfigured pin.
+			valid := ImagePin{Name: "valid", Digest: mustHex(t, digestA), LaunchFile: file, LaunchFileInInitData: true}
+			pin.Name, pin.Digest = "ta", mustHex(t, digestA)
+			err := EnforceImages(initDataBoundTo(t, teetypes.PlatformTDX, file), []ImagePin{valid, pin}, teetypes.PlatformTDX)
+			if !errors.Is(err, ErrLaunchFileNotAllowed) {
+				t.Fatalf("got %v, want ErrLaunchFileNotAllowed", err)
+			}
+		})
+	}
+}
+
+// An init-data pin's digest is judged as a TDX one whatever the evidence, so a
+// malformed one refuses the set under SEV-SNP evidence too: it must not fall
+// to one image's mismatch and let the SEV-SNP image accept the guest.
+func TestEnforceImagesRefusesMalformedInitDataDigestUnderAnyFamily(t *testing.T) {
+	file := []byte("clusterID: alpha\n")
+	valid := ImagePin{Name: "snp", Digest: mustHex(t, digestA), LaunchFile: file}
+	tests := map[string]ImagePin{
+		"an SEV-SNP width digest": {LaunchFileDigest: mustLaunchFileDigest(t, teetypes.FamilySNP, file), LaunchFileInInitData: true},
+		"an extension verdict": {
+			LaunchFileDigest: mustLaunchFileDigest(t, teetypes.FamilyTDX, file),
+			AcceptExtension:  func(string) error { return nil }, LaunchFileInInitData: true,
+		},
+	}
+	for name, pin := range tests {
+		t.Run(name, func(t *testing.T) {
+			pin.Name, pin.Digest = "tdx", mustHex(t, digestB)
+			err := EnforceImages(snpBoundTo(t, file), []ImagePin{pin, valid}, teetypes.PlatformSNP)
+			if !errors.Is(err, ErrLaunchFileNotAllowed) {
+				t.Fatalf("got %v, want the whole set refused with ErrLaunchFileNotAllowed", err)
+			}
+		})
+	}
+}
+
+// A provider's stack sets MRCONFIGID on its own TDX guests, so an init-data
+// pin matches evidence under the bare tdx tag only: the same field under a
+// provider's tag is refused as that image's mismatch.
+func TestEnforceImagesRefusesInitDataPinUnderProviderTags(t *testing.T) {
+	file := []byte("clusterID: alpha\n")
+	pins := map[string]ImagePin{
+		"file":   {Name: "ta", Digest: mustHex(t, digestA), LaunchFile: file, LaunchFileInInitData: true},
+		"digest": {Name: "ta", Digest: mustHex(t, digestA), LaunchFileDigest: mustLaunchFileDigest(t, teetypes.FamilyTDX, file), LaunchFileInInitData: true},
+	}
+	for _, platform := range []teetypes.PlatformType{teetypes.PlatformAzTDX, teetypes.PlatformGcpTDX} {
+		for kind, pin := range pins {
+			t.Run(string(platform)+"/"+kind, func(t *testing.T) {
+				err := EnforceImages(initDataBoundTo(t, platform, file), []ImagePin{pin}, platform)
+				if !errors.Is(err, ErrLaunchFileNotAllowed) {
+					t.Fatalf("got %v, want ErrLaunchFileNotAllowed", err)
+				}
+			})
+		}
+	}
+}
+
+// An unknown platform tag reaches a remote caller as a launch-file refusal
+// of the whole set, decided before any evidence is compared.
+func TestEnforceImagesRefusesInitDataPinsUnderAnUnknownTag(t *testing.T) {
+	file := []byte("clusterID: alpha\n")
+	const unknown = teetypes.PlatformType("nonsense")
+	valid := ImagePin{Name: "plain", Digest: mustHex(t, digestA)}
+	tests := map[string]ImagePin{
+		"by digest": {LaunchFileDigest: mustLaunchFileDigest(t, teetypes.FamilyTDX, file), LaunchFileInInitData: true},
+		"by file":   {LaunchFile: file, LaunchFileInInitData: true},
+	}
+	for name, pin := range tests {
+		t.Run(name, func(t *testing.T) {
+			pin.Name, pin.Digest = "other", mustHex(t, digestB)
+			resp := initDataBoundTo(t, teetypes.PlatformTDX, file)
+			resp.Result.Platform = unknown
+			err := EnforceImages(resp, []ImagePin{pin, valid}, unknown)
+			if !errors.Is(err, ErrLaunchFileNotAllowed) {
+				t.Fatalf("got %v, want the whole set refused with ErrLaunchFileNotAllowed", err)
+			}
+			if !errors.Is(err, runtimemeasure.ErrUnknownPlatform) {
+				t.Fatalf("got %v, want it to name the unknown platform", err)
+			}
+			if errors.Is(err, runtimemeasure.ErrNoRegister) {
+				t.Fatalf("an unknown tag was reported as a provider's: %v", err)
+			}
+		})
+	}
+}

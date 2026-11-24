@@ -116,7 +116,7 @@ func TestParseRejects(t *testing.T) {
 		doc  string
 		want string
 	}{
-		{"unknown schema version", `{"schema_version":"3","tee":"tdx","measurements":[{"name":"a","mrtd":"` + d1 + `"}]}`, "schema_version"},
+		{"unknown schema version", `{"schema_version":"4","tee":"tdx","measurements":[{"name":"a","mrtd":"` + d1 + `"}]}`, "schema_version"},
 		{"missing schema version", `{"tee":"tdx","measurements":[{"name":"a","mrtd":"` + d1 + `"}]}`, "schema_version"},
 		{"launch file under schema 1", snpFile(`{"name":"a","measurement":"` + d1 + `","launch_file":"clusterID: alpha\n"}`), "schema_version"},
 		{"launch file and approver key", snp2File(`{"name":"a","measurement":"` + d1 + `","approver_key":"key","launch_file":"clusterID: alpha\n"}`), "at most one"},
@@ -686,5 +686,104 @@ func TestFormatRefusesInvalidOrLossyPins(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func tdx3File(images string) string {
+	return `{"schema_version":"3","tee":"tdx","measurements":[` + images + `]}`
+}
+
+// Where a launch file is bound is schema 3 and part of the tuple: one image
+// and file bound in two fields is two pins.
+func TestLaunchFileFieldRoundTripAndTupleIdentity(t *testing.T) {
+	file := []byte("clusterID: alpha\n")
+	digest := hex.EncodeToString(mustLaunchFileDigest(t, teetypes.FamilyTDX, file))
+	doc := tdx3File(`{"name":"vm","mrtd":"` + d1 + `","launch_file":"clusterID: alpha\n"},` +
+		`{"name":"kata","mrtd":"` + d1 + `","launch_file":"clusterID: alpha\n","launch_file_field":"init_data"},` +
+		`{"name":"kata-digest","mrtd":"` + d1 + `","launch_file_digest":"` + digest + `","launch_file_field":"init_data"}`)
+	rv, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if got := []bool{rv.Images[0].LaunchFileInInitData, rv.Images[1].LaunchFileInInitData, rv.Images[2].LaunchFileInInitData}; got[0] || !got[1] || !got[2] {
+		t.Fatalf("init-data pins = %v, want the second and third only", got)
+	}
+	out, err := Format(rv)
+	if err != nil {
+		t.Fatalf("Format: %v", err)
+	}
+	if !strings.Contains(string(out), `"schema_version": "3"`) {
+		t.Fatalf("Format wrote %s, want schema_version 3", out)
+	}
+	back, err := Parse(out)
+	if err != nil {
+		t.Fatalf("Parse(Format): %v", err)
+	}
+	if missing, extra := Diff(rv, back); len(missing)+len(extra) != 0 {
+		t.Fatalf("round trip lost %v and gained %v", missing, extra)
+	}
+	// A hook the document cannot carry is refused, never dropped: the set
+	// with it refuses every guest, and the document without it would not.
+	hooked := ReferenceValues{Family: rv.Family, Images: []remote.ImagePin{rv.Images[2]}}
+	hooked.Images[0].AcceptExtension = func(string) error { return nil }
+	for name, encode := range map[string]func(ReferenceValues) ([]byte, error){"Format": Format, "Render": Render} {
+		if _, err := encode(hooked); err == nil || !strings.Contains(err.Error(), "AcceptExtension") {
+			t.Fatalf("%s of an init-data pin with AcceptExtension = %v, want a refusal", name, err)
+		}
+	}
+	// The field is a TDX one, and the refusal says so instead of blaming the
+	// digest's width.
+	snp := ReferenceValues{Family: teetypes.FamilySNP, Images: []remote.ImagePin{rv.Images[2]}}
+	for name, encode := range map[string]func(ReferenceValues) ([]byte, error){"Format": Format, "Render": Render} {
+		if _, err := encode(snp); err == nil || !strings.Contains(err.Error(), "launch_file_field") {
+			t.Fatalf("%s of an init-data pin in an SEV-SNP set = %v, want a launch_file_field refusal", name, err)
+		}
+	}
+	rv.Images = rv.Images[:1]
+	if out, err := Format(rv); err != nil || !strings.Contains(string(out), `"schema_version": "2"`) {
+		t.Fatalf("a set reading no launch file from init data formatted as %s, %v; want schema_version 2", out, err)
+	}
+}
+
+func TestParseRefusesInvalidLaunchFileField(t *testing.T) {
+	entry := `{"name":"a","mrtd":"` + d1 + `","launch_file":"clusterID: alpha\n"`
+	key, err := json.Marshal(string(approverPEM(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Parse([]byte(tdxFile(`{"name":"a","mrtd":"` + d1 + `","approver_key":` + string(key) + `}`))); err != nil {
+		t.Fatalf("the approver key alone was refused: %v", err)
+	}
+	tests := []struct{ name, doc, want string }{
+		{"under schema 2", tdx2File(entry + `,"launch_file_field":"init_data"}`), "schema_version"},
+		{"unknown field name", tdx3File(entry + `,"launch_file_field":"rtmr3"}`), "launch_file_field"},
+		{"null", tdx3File(entry + `,"launch_file_field":null}`), "launch_file_field"},
+		{"not a string", tdx3File(entry + `,"launch_file_field":true}`), "launch_file_field"},
+		{"no launch file", tdx3File(`{"name":"a","mrtd":"` + d1 + `","launch_file_field":"init_data"}`), "launch_file_field"},
+		{"approver key", tdx3File(`{"name":"a","mrtd":"` + d1 + `","approver_key":` + string(key) + `,"launch_file_field":"init_data"}`), "launch_file_field"},
+		{"twice in one entry", tdx3File(entry + `,"launch_file_field":"init_data","launch_file_field":"init_data"}`), "launch_file_field"},
+		{"sev-snp", `{"schema_version":"3","tee":"sev-snp","measurements":[{"name":"a","measurement":"` + d1 + `","launch_file":"clusterID: alpha\n","launch_file_field":"init_data"}]}`, "launch_file_field"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := Parse([]byte(tc.doc)); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("got %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// The field a launch file is read from is part of a pin's identity: the same
+// file bound in the other field is another pin.
+func TestDiffTellsInitDataPinsFromRegisterPins(t *testing.T) {
+	file := []byte("clusterID: alpha\n")
+	digest, err := hex.DecodeString(d1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inRegister := ReferenceValues{Family: teetypes.FamilyTDX, Images: []remote.ImagePin{{Name: "a", Digest: digest, LaunchFile: file}}}
+	inInitData := ReferenceValues{Family: teetypes.FamilyTDX, Images: []remote.ImagePin{{Name: "a", Digest: digest, LaunchFile: file, LaunchFileInInitData: true}}}
+	if missing, extra := Diff(inRegister, inInitData); len(missing) != 1 || len(extra) != 1 {
+		t.Fatalf("Diff lost %v and gained %v, want one pin each way", missing, extra)
 	}
 }

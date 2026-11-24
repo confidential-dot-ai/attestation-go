@@ -48,12 +48,14 @@ func (rv ReferenceValues) HasAnchors() bool {
 }
 
 // HasLaunchBindings reports whether any image pins a launch binding: anchor,
-// launch file, or launch file digest. Flattened digest and register policies
-// cannot express these per-image bindings, so a caller converting to the flat
-// form must refuse such a set.
+// launch file, or launch file digest, or names the field one is read from.
+// Flattened digest and register policies cannot express these per-image
+// bindings, so a caller converting to the flat form must refuse such a set.
+// The field counts alone: enforcement refuses a pin that names it and pins
+// no file, and the flat form of that pin would admit its image.
 func (rv ReferenceValues) HasLaunchBindings() bool {
 	for _, img := range rv.Images {
-		if img.Anchor != nil || img.LaunchFile != nil || img.LaunchFileDigest != nil {
+		if img.Anchor != nil || img.LaunchFile != nil || img.LaunchFileDigest != nil || img.LaunchFileInInitData {
 			return true
 		}
 	}

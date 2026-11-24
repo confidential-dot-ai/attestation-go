@@ -226,11 +226,46 @@ can carry it without the document.
 `runtimemeasure.LaunchFileDigest(family, file)` computes it: SHA-256 on
 SEV-SNP, which HOSTDATA must equal, and SHA-384 on TDX, extended into RTMR[3]
 from zero. It accepts runtime extensions as
-`Anchor` does, and reports refusals as `ErrLaunchFileNotAllowed`. A pin whose
-digest `runtimemeasure.CheckLaunchFileDigest` refuses for the verified family
-(the other family's width, all zero, or the empty file's), or that sets more
-than one of `Anchor`, `LaunchFile` and `LaunchFileDigest`, is refused before
-any evidence is matched.
+`Anchor` does, and reports refusals as `ErrLaunchFileNotAllowed`.
+
+`ImagePin.LaunchFileInInitData` reads either pin from MRCONFIGID instead: the
+digest must equal it, RTMR[3] is not consulted, and no extension is admitted,
+so a pin that also sets `AcceptExtension` is refused. It proves the digest the
+launcher committed, not that the guest used the file, nor where the guest
+runs. What such a pin does depends on the tag the evidence was verified under:
+
+| Evidence tag | An init-data pin |
+|---|---|
+| `tdx` | compared with MRCONFIGID |
+| `az-tdx`, `gcp-tdx` | that image's mismatch, even when MRCONFIGID equals the digest: who sets the field under a provider's stack is not established here, so a Kata guest there cannot be pinned this way |
+| `snp`, `az-snp`, `gcp-snp` | that image's mismatch: the flag is a TDX choice, and HOST_DATA is not read for it; the error is `ErrLaunchFileNotAllowed` and wraps no further sentinel |
+
+A mismatch is reported as `ErrLaunchFileNotAllowed` once that image's `Digest`
+has matched the evidence, like any launch-binding mismatch, and other images
+in the set stay eligible. A guest whose launch digest matches no image is
+refused with `ErrMeasurementNotAllowed` as usual.
+
+Under a provider's TDX tag the mismatch wraps `runtimemeasure.ErrNoRegister`
+inside that image's `ErrLaunchFileNotAllowed`; it does not refuse the set.
+Refusing SEV-SNP evidence is this package's policy, since the flag chooses
+the TDX field: `runtimemeasure.VerifyInitDataFile` itself is the bare
+comparison and accepts evidence tagged `snp`. Evidence whose tag names no TEE
+family refuses a set holding an init-data pin, with
+`runtimemeasure.ErrUnknownPlatform`.
+
+These faults refuse the whole set before any evidence is matched, whatever
+the evidence: an init-data pin with `AcceptExtension`, or with neither
+`LaunchFile` nor `LaunchFileDigest`; a `LaunchFileDigest` that `runtimemeasure.CheckLaunchFileDigest`
+refuses for the verified family (the other family's width, all zero, or the
+empty file's), with an init-data pin's digest judged as a TDX one under any
+evidence; an empty `LaunchFile`; and a pin setting more than one of `Anchor`,
+`LaunchFile` and `LaunchFileDigest`. A non-empty `LaunchFile` is not judged up
+front: one the guest is not bound to is that image's mismatch. The digest
+rule is deliberately not symmetric with the table above: a plain
+`LaunchFileDigest` of the other family's width refuses the whole set, under
+SEV-SNP and TDX evidence alike, because a digest of the wrong width can bind
+no guest of the verified family, while an init-data pin is well formed and
+simply names a field the evidence lacks.
 
 `Client.Verify` is the raw endpoint, for callers enforcing the verdict
 themselves; `Client.VerifyEnforced` is the middle ground (verdict gated,
@@ -368,10 +403,58 @@ launched with, mapping to `ImagePin.LaunchFile`, or `launch_file_digest`, its
 `runtimemeasure.LaunchFileDigest` as lowercase hex of the document family's
 width, mapping to `ImagePin.LaunchFileDigest`. An entry carries at most one of
 the three binding fields. Either field under `"1"` is refused, so a schema 1
-reader never loads a document whose binding it would ignore; a `"2"` document
-may pin none. `Format` and `Render` write `"2"` only for a set that pins a
-launch file, whole or by digest, so a schema 1 reader keeps loading every other
-document and fails closed on this one.
+reader never loads a document whose binding it would ignore; a `"2"` or `"3"`
+document may pin none. `Format` and `Render` write the earliest schema that
+expresses the set: `"2"` for one that pins a launch file, whole or by digest,
+`"3"` for one with an entry setting `launch_file_field` (below), `"1"`
+otherwise. So a schema 1 reader keeps loading every other document and fails
+closed on this one.
+
+`schema_version` `"3"` adds `launch_file_field`, which selects the field
+an entry's launch file is read from. Its one value, `"init_data"`, maps to
+`ImagePin.LaunchFileInInitData`, and enforcement then reads `MRCONFIGID`
+instead of `RTMR[3]`: the file's `LaunchFileDigest` must equal `MRCONFIGID`,
+the init-data field the launcher sets, as a Kata Containers runtime commits
+an initdata document declaring `sha384`. The comparison is byte for byte
+against the SHA-384 of the exact document the launcher hands the guest
+(`runtimemeasure.LaunchFileDigest`); the `algorithm` the document declares
+is not read, so a field holding a SHA-256, zero-padded, never matches, and
+such a pin refuses every guest. Without the field the binding is the one
+the family's own images seed, `RTMR[3]`. The two are different fields and a
+pin proves exactly one; an init-data pin leaves `RTMR[3]` unchecked unless
+`rtmr` pins it. The pin matches evidence verified under the `tdx` platform
+tag only: `tee` names a family, so a document may say `gcp-tdx`, but evidence
+tagged `gcp-tdx` or `az-tdx` is refused, since who sets the field under a
+provider's stack is not established here. Such a document loads, and its
+init-data entries match no guest: write `tee` as `tdx`. It is a TDX field,
+refused in a document whose `tee` is an SEV-SNP one: there `HOST_DATA` is
+the one field a launcher sets, a plain `launch_file` or `launch_file_digest`
+pin already reads it, a Kata guest's included, and the field would name
+no choice. `refvalues.Format` refuses that document with a plain error;
+only refusals at enforcement wrap `ErrLaunchFileNotAllowed`. Separately, no
+launch-file pin accepts evidence tagged `az-snp`, because the Azure paravisor
+owns `HOST_DATA`. The field needs a `launch_file` or `launch_file_digest`
+beside it and is refused under `"1"` or `"2"`. `Format` and `Render` write
+`"3"` only for a set that uses it, and then for the whole set, its plain
+launch-file entries included: a reader of an earlier schema refuses that
+document whole.
+
+A `"3"` document none of whose entries sets the field loads, and `Format`
+writes it back under the earliest schema that expresses it, `"2"` or `"1"`.
+
+So to pin a Kata guest by its initdata document:
+
+- on SEV-SNP, write a plain `launch_file` or `launch_file_digest` entry, which
+  reads `HOST_DATA`;
+- on TDX, write the same entry with `launch_file_field: "init_data"`. Without
+  the field the entry reads `RTMR[3]` and never matches that guest.
+
+An init-data pin proves the digest the launcher committed, not that the guest
+used the document. The launcher chooses both the field and the file it hands
+the guest, so the same entry must pin measurements identifying software that
+checks the document against `MRCONFIGID` before acting on it. `MRTD` covers
+firmware alone, which many guest images share; pin the `rtmr` values that
+cover the kernel, initrd and command line of that boot stack as well.
 
 `Parse` and `ParseRendered` reject unknown or duplicate JSON fields, trailing
 data, and malformed pins. `Format` and `Render` refuse values they cannot

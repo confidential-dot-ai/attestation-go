@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
+	"github.com/confidential-dot-ai/attestation-go/remote"
 )
 
 // The flat flags enforced "digest in the list AND the one RTMR set". The
@@ -151,5 +152,18 @@ func TestFromFlagsRendersStrictlyWithoutDuplicatePins(t *testing.T) {
 	}
 	if got.HasAnchors() {
 		t.Fatal("flat flags invented an anchor")
+	}
+}
+
+// A pin naming the init-data field has no flat form, even one enforcement
+// refuses for pinning no file there: flattened, it would admit its image.
+func TestFlattenRefusesAnInitDataPin(t *testing.T) {
+	digest := bytes.Repeat([]byte{0x11}, DigestSize)
+	rv := ReferenceValues{Family: teetypes.FamilyTDX, Images: []remote.ImagePin{{Name: "a", Digest: digest, LaunchFileInInitData: true}}}
+	if !rv.HasLaunchBindings() {
+		t.Fatal("a pin naming the init-data field reported no launch binding")
+	}
+	if _, _, uniform := rv.Flatten(); uniform {
+		t.Fatal("Flatten reported a pin naming the init-data field as expressible flat")
 	}
 }
