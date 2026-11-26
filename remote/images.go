@@ -45,51 +45,24 @@ type ImagePin struct {
 	// binding never calls, is refused with [ErrLaunchFileNotAllowed].
 	LaunchFile []byte
 
-	// LaunchFileDigest pins the launch configuration file the guest was
-	// launched with by its [runtimemeasure.LaunchFileDigest] alone: 32 bytes
-	// on SEV-SNP, 48 on TDX. Read from the default binding, it may carry
-	// runtime extensions on top of it, like Anchor, judged by AcceptExtension;
-	// read from the init-data field (LaunchFileInInitData), it admits none.
-	// Nil leaves the binding unchecked. A digest
-	// [runtimemeasure.CheckLaunchFileDigest] refuses for the verified family,
-	// or for TDX when LaunchFileInInitData is set, is refused with
-	// [ErrLaunchFileNotAllowed] before any evidence is matched.
-	//
-	// Anchor, LaunchFile and LaunchFileDigest are alternative launch bindings,
-	// whichever field each is read from: a pin setting more than one is
-	// refused with [ErrLaunchFileNotAllowed].
+	// LaunchFileDigest pins the file's [runtimemeasure.LaunchFileDigest]:
+	// 32 bytes on SEV-SNP, 48 on TDX. Nil leaves it unchecked. AcceptExtension
+	// may allow runtime extensions unless LaunchFileInInitData is set.
+	// [runtimemeasure.CheckLaunchFileDigest] validates for the verified family
+	// (always TDX for LaunchFileInInitData); failure rejects the whole set
+	// with [ErrLaunchFileNotAllowed].
+	// Anchor, LaunchFile and LaunchFileDigest are mutually exclusive.
 	LaunchFileDigest []byte
 
-	// LaunchFileInInitData reads LaunchFile or LaunchFileDigest
-	// from MRCONFIGID, the init-data field a TDX launcher sets,
-	// as a guest launched by a Kata Containers runtime commits
-	// it. The field admits no runtime extension. False reads
-	// the binding [runtimemeasure.Binding] returns.
+	// LaunchFileInInitData checks LaunchFile or LaunchFileDigest against
+	// MRCONFIGID as full-width SHA-384. False uses [runtimemeasure.Binding].
+	// RTMR[3] is unchecked unless Registers pins it. Pin software that checks
+	// the file before use; see [runtimemeasure.VerifyInitDataFile] for trust limits.
 	//
-	// The field must equal the SHA-384 of the file's exact
-	// bytes. What a document declares inside itself is not read,
-	// so a field holding a SHA-256, zero-padded, never matches.
-	//
-	// It proves the digest the launcher committed, not that
-	// the guest used the file, nor where the guest runs: Digest
-	// and Registers must identify software that checks the file
-	// against the field before acting on it.
-	//
-	// It is a TDX choice: RTMR[3] is then unchecked unless
-	// Registers pins it.  The pin is accepted under TDX evidence
-	// only. SEV-SNP has the one field, which a launch file pin
-	// already reads, so under SEV-SNP evidence, a provider's tags
-	// included, the image is refused with [ErrLaunchFileNotAllowed]
-	// as that image's mismatch, and other images in the set stay
-	// eligible. So is TDX evidence under a provider's tag (az-tdx,
-	// gcp-tdx), where who sets the field is not established,
-	// so a Kata guest there cannot be pinned this way. A digest
-	// [runtimemeasure.CheckLaunchFileDigest] refuses for TDX is not
-	// a mismatch: it refuses the whole set under any evidence. Set
-	// without a launch file, or alongside AcceptExtension, the
-	// whole set is refused with [ErrLaunchFileNotAllowed]. So is
-	// a set judged against evidence whose tag names no TEE family,
-	// the error also wrapping [runtimemeasure.ErrUnknownPlatform].
+	// Only tdx evidence satisfies this binding. Other tags fail its check
+	// with [ErrLaunchFileNotAllowed], leaving other images eligible.
+	// A missing file/digest, AcceptExtension, or an unknown platform rejects
+	// the whole set; the latter also wraps [runtimemeasure.ErrUnknownPlatform].
 	LaunchFileInInitData bool
 
 	// AcceptExtension judges each runtime extension the quote proves on top
@@ -132,16 +105,12 @@ func EnforceImages(resp VerifyResponse, images []ImagePin, platform teetypes.Pla
 // were not measured into it, prove nothing, and are not judged. On SEV-SNP
 // k is always 0. A nil claimed requires the bare seed.
 //
-// An image pinning LaunchFileDigest is matched as one pinning Anchor, with
-// [runtimemeasure.MatchLaunchFileDigestPrefix]. An image pinning LaunchFile
-// requires the bare binding, so claimed says nothing about it: a guest
-// launched with a pinned file extends nothing on top of it. Nor does claimed
-// say anything about an image setting LaunchFileInInitData, whose field no
-// extension reaches.
+// LaunchFileDigest uses [runtimemeasure.MatchLaunchFileDigestPrefix] unless
+// LaunchFileInInitData selects a direct MRCONFIGID comparison. LaunchFile
+// and LaunchFileInInitData ignore claimed and require an unextended binding.
 //
-// Each Anchor or LaunchFileDigest image replays claimed at one SHA-384 per
-// entry, so bound a list taken from a peer before passing it; armtls caps it
-// at 256.
+// TDX replay cost is linear in the log length for each image that reaches it.
+// Bound peer-supplied lists before passing them; armtls caps them at 256.
 func EnforceImagesWithRuntimeLog(resp VerifyResponse, images []ImagePin, platform teetypes.PlatformType, claimed []string) error {
 	if len(images) == 0 {
 		return nil
@@ -231,9 +200,6 @@ func enforceReplayedBinding(r *teetypes.VerificationResult, bound []byte, claime
 	return nil
 }
 
-// enforceLaunchFile requires the binding to prove img.LaunchFile and nothing
-// else. VerifyBinding owns every platform question the file raises: which
-// field carries the binding, and which platforms refuse it.
 func enforceLaunchFile(r *teetypes.VerificationResult, img ImagePin) error {
 	if img.LaunchFileInInitData {
 		return runtimemeasure.VerifyInitDataFile(r, img.LaunchFile)
@@ -242,9 +208,6 @@ func enforceLaunchFile(r *teetypes.VerificationResult, img ImagePin) error {
 	return runtimemeasure.VerifyBinding(r, img.LaunchFile, noRuntimeExtensions)
 }
 
-// enforceLaunchFileDigest requires the binding to prove img.LaunchFileDigest:
-// in the init-data field alone, or in the binding with a prefix of claimed
-// that AcceptExtension accepts.
 func enforceLaunchFileDigest(r *teetypes.VerificationResult, img ImagePin, claimed []string) error {
 	if img.LaunchFileInInitData {
 		return runtimemeasure.VerifyInitDataDigest(r, img.LaunchFileDigest)
@@ -252,13 +215,8 @@ func enforceLaunchFileDigest(r *teetypes.VerificationResult, img ImagePin, claim
 	return enforceReplayedBinding(r, img.LaunchFileDigest, claimed, runtimemeasure.MatchLaunchFileDigestPrefix, img.AcceptExtension)
 }
 
-// checkLaunchBindingPins refuses a pin that cannot mean what it says: it
-// carries at most one launch binding, an empty file binds nothing, a
-// digest must pass [runtimemeasure.CheckLaunchFileDigest] for the verified
-// family, AcceptExtension judges extensions a launch-file binding does not
-// admit, and the init-data field holds a launch file and no extension. An
-// init-data pin under another family's evidence is that image's mismatch, not
-// the set's: the caller's loop refuses it once its launch digest matches.
+// checkLaunchBindingPins rejects malformed pins before matching any image.
+// Well-formed init-data pins reject SEV-SNP evidence per image.
 func checkLaunchBindingPins(images []ImagePin, family teetypes.Family) error {
 	for _, img := range images {
 		bindings := 0
@@ -281,9 +239,7 @@ func checkLaunchBindingPins(images []ImagePin, family teetypes.Family) error {
 			return fmt.Errorf("%s: %w: the pin sets AcceptExtension, which a launch-file binding never calls", img.Name, ErrLaunchFileNotAllowed)
 		}
 		if img.LaunchFileDigest != nil {
-			// An init-data pin is a TDX pin whatever the evidence: judged at
-			// the evidence's width, it would refuse a set holding it for any
-			// other family's guest.
+			// Use the pin's TDX width so mixed-family sets remain valid.
 			digestFamily := family
 			if img.LaunchFileInInitData {
 				digestFamily = teetypes.FamilyTDX

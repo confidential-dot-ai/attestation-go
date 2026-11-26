@@ -19,16 +19,11 @@ import (
 	"github.com/confidential-dot-ai/attestation-go/runtimemeasure"
 )
 
-// The measurements config schema versions this package accepts. A future
-// version is rejected, never guessed at. Schema 2 adds the per-entry
-// launch_file and launch_file_digest fields, and schema 3 launch_file_field.
 const (
 	schemaVersion1 = "1"
 	schemaVersion2 = "2"
 	schemaVersion3 = "3"
 
-	// launchFileFieldInitData is the launch_file_field value naming the
-	// init-data field a launcher sets.
 	launchFileFieldInitData = "init_data"
 )
 
@@ -133,11 +128,7 @@ func (f wire) validate(allowEmpty bool) (ReferenceValues, error) {
 	return rv, nil
 }
 
-// checkLaunchFileSchema requires a document to declare the schema that
-// introduced each field it writes: 2 for a launch file, whole or by digest,
-// and 3 for one read from the init-data field. An earlier reader has no such
-// field, so it must refuse the document rather than load it without the
-// binding, or check the binding in another field; a later schema may use none.
+// Reject fields an older schema reader would ignore or enforce differently.
 func checkLaunchFileSchema(version string, rv ReferenceValues) error {
 	if pinsInitData(rv) && version != schemaVersion3 {
 		return fmt.Errorf("launch_file_field requires schema_version %q, got %q", schemaVersion3, version)
@@ -193,11 +184,7 @@ func (we wireImage) validate(fam teetypes.Family, i int) (remote.ImagePin, error
 	return img, nil
 }
 
-// pinLaunchBinding reads the entry's launch binding: the approver key the
-// guest was launched to trust, or the launch file it was launched with,
-// whole or by digest. They are alternatives, so an entry carries at most
-// one. fam is the family validate has already accepted. A field written
-// as null binds nothing and is refused rather than read as absent.
+// pinLaunchBinding accepts at most one binding; explicit null is invalid.
 func (we wireImage) pinLaunchBinding(img *remote.ImagePin, fam teetypes.Family, at string) error {
 	bindings := 0
 	for _, field := range []struct {
@@ -247,10 +234,7 @@ func (we wireImage) pinLaunchBinding(img *remote.ImagePin, fam teetypes.Family, 
 	return we.pinLaunchFileField(img, fam, at)
 }
 
-// pinLaunchFileField reads which field the entry's launch file is bound in.
-// Absent, it is the binding the family's own images seed; init_data is the
-// field a launcher sets, which holds a launch file and nothing else. Only TDX
-// has both: on SEV-SNP they are one field, so naming it is refused.
+// Only TDX offers a choice between RTMR[3] and the launcher's init-data field.
 func (we wireImage) pinLaunchFileField(img *remote.ImagePin, fam teetypes.Family, at string) error {
 	if we.LaunchFileField == nil {
 		return nil
@@ -334,14 +318,11 @@ func Format(rv ReferenceValues) ([]byte, error) {
 	f := wire{SchemaVersion: schemaVersionFor(rv), TEE: string(rv.Family)}
 	for i, img := range rv.Images {
 		we := wireImage{Name: img.Name}
-		// Named first, so the error is the family and not the digest width
-		// the other family's check would report.
+		// Report the unsupported field before checking digest width.
 		if img.LaunchFileInInitData && rv.Family != teetypes.FamilyTDX {
 			return nil, fmt.Errorf("measurements[%d].launch_file_field: the pin reads its launch file from init data, a %q choice of field, in a %q set", i, teetypes.FamilyTDX, rv.Family)
 		}
-		// The launch binding is validated once, by the f.validate call below:
-		// it walks every entry through the same wireImage.validate the parse
-		// path uses.
+		// f.validate below applies the same binding checks as parsing.
 		if img.Anchor != nil {
 			key, err := jsonString(img.Anchor)
 			if err != nil {
@@ -363,9 +344,7 @@ func Format(rv ReferenceValues) ([]byte, error) {
 			we.LaunchFileDigest = json.RawMessage(`"` + hex.EncodeToString(img.LaunchFileDigest) + `"`)
 		}
 		if img.LaunchFileInInitData {
-			// The document cannot carry the hook, and enforcement refuses the
-			// pin that sets it, so writing the pin without it would admit a
-			// guest the set refuses.
+			// Dropping the hook would turn an invalid pin into a valid one.
 			if img.AcceptExtension != nil {
 				return nil, fmt.Errorf("measurements[%d].launch_file_field: the pin sets AcceptExtension, which the init-data field admits no extension for", i)
 			}
@@ -440,9 +419,7 @@ func tupleKey(img remote.ImagePin) string {
 	return b.String()
 }
 
-// schemaVersionFor names the schema version [Format] writes for rv, the
-// earliest that expresses it: schema 1 for a set that pins no launch file,
-// whole or by digest, and schema 2 for one that reads none from init data.
+// schemaVersionFor returns the earliest schema that preserves every pin.
 func schemaVersionFor(rv ReferenceValues) string {
 	if pinsInitData(rv) {
 		return schemaVersion3
@@ -464,8 +441,6 @@ func pinsLaunchFile(rv ReferenceValues) bool {
 	return false
 }
 
-// pinsInitData reports whether any image reads its launch file from the
-// init-data field, the binding schema 3 introduced.
 func pinsInitData(rv ReferenceValues) bool {
 	for _, img := range rv.Images {
 		if img.LaunchFileInInitData {

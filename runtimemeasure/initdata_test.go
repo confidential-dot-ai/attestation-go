@@ -9,8 +9,6 @@ import (
 	"github.com/confidential-dot-ai/attestation-go/attestation/teetypes"
 )
 
-// The launcher commits the file's digest at the field's own width on each
-// family, and a file it did not launch with is refused.
 func TestVerifyInitDataFileBothFamilies(t *testing.T) {
 	file, other := []byte("launch document\n"), []byte("another document\n")
 	for _, p := range []teetypes.PlatformType{teetypes.PlatformTDX, teetypes.PlatformSNP} {
@@ -30,8 +28,6 @@ func TestVerifyInitDataFileBothFamilies(t *testing.T) {
 	}
 }
 
-// On TDX the init-data field and RTMR[3] are separate: a guest whose image
-// seeded the register proves nothing about the field, and the reverse.
 func TestVerifyInitDataFileReadsMRCONFIGIDNotTheRegister(t *testing.T) {
 	file := []byte("launch document\n")
 	seed := Seed(file)
@@ -76,7 +72,6 @@ func TestVerifyInitDataRefusesWhatBindsNothing(t *testing.T) {
 		})
 	}
 
-	// The padded SHA-256 reaches the comparison and is refused there.
 	if err := VerifyInitDataFile(initDataResult(teetypes.PlatformTDX, sha256Padded), file); err == nil || !strings.Contains(err.Error(), "MRCONFIGID carries") {
 		t.Fatalf("zero-padded SHA-256 = %v, want the MRCONFIGID mismatch", err)
 	}
@@ -94,9 +89,6 @@ func TestVerifyInitDataRefusesWhatBindsNothing(t *testing.T) {
 	}
 }
 
-// The provider-tag refusal belongs to this layer and carries its own
-// sentinel: a provider's stack sets the field, so even a matching value binds
-// no launch file there.
 func TestVerifyInitDataRefusesProviderTagsWithErrNoRegister(t *testing.T) {
 	file := []byte("clusterID: alpha\n")
 	for _, platform := range []teetypes.PlatformType{

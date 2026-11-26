@@ -693,8 +693,6 @@ func tdx3File(images string) string {
 	return `{"schema_version":"3","tee":"tdx","measurements":[` + images + `]}`
 }
 
-// Where a launch file is bound is schema 3 and part of the tuple: one image
-// and file bound in two fields is two pins.
 func TestLaunchFileFieldRoundTripAndTupleIdentity(t *testing.T) {
 	file := []byte("clusterID: alpha\n")
 	digest := hex.EncodeToString(mustLaunchFileDigest(t, teetypes.FamilyTDX, file))
@@ -722,8 +720,6 @@ func TestLaunchFileFieldRoundTripAndTupleIdentity(t *testing.T) {
 	if missing, extra := Diff(rv, back); len(missing)+len(extra) != 0 {
 		t.Fatalf("round trip lost %v and gained %v", missing, extra)
 	}
-	// A hook the document cannot carry is refused, never dropped: the set
-	// with it refuses every guest, and the document without it would not.
 	hooked := ReferenceValues{Family: rv.Family, Images: []remote.ImagePin{rv.Images[2]}}
 	hooked.Images[0].AcceptExtension = func(string) error { return nil }
 	for name, encode := range map[string]func(ReferenceValues) ([]byte, error){"Format": Format, "Render": Render} {
@@ -731,8 +727,6 @@ func TestLaunchFileFieldRoundTripAndTupleIdentity(t *testing.T) {
 			t.Fatalf("%s of an init-data pin with AcceptExtension = %v, want a refusal", name, err)
 		}
 	}
-	// The field is a TDX one, and the refusal says so instead of blaming the
-	// digest's width.
 	snp := ReferenceValues{Family: teetypes.FamilySNP, Images: []remote.ImagePin{rv.Images[2]}}
 	for name, encode := range map[string]func(ReferenceValues) ([]byte, error){"Format": Format, "Render": Render} {
 		if _, err := encode(snp); err == nil || !strings.Contains(err.Error(), "launch_file_field") {
@@ -773,8 +767,6 @@ func TestParseRefusesInvalidLaunchFileField(t *testing.T) {
 	}
 }
 
-// The field a launch file is read from is part of a pin's identity: the same
-// file bound in the other field is another pin.
 func TestDiffTellsInitDataPinsFromRegisterPins(t *testing.T) {
 	file := []byte("clusterID: alpha\n")
 	digest, err := hex.DecodeString(d1)

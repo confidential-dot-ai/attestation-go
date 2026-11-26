@@ -155,8 +155,6 @@ func TestFromFlagsRendersStrictlyWithoutDuplicatePins(t *testing.T) {
 	}
 }
 
-// A pin naming the init-data field has no flat form, even one enforcement
-// refuses for pinning no file there: flattened, it would admit its image.
 func TestFlattenRefusesAnInitDataPin(t *testing.T) {
 	digest := bytes.Repeat([]byte{0x11}, DigestSize)
 	rv := ReferenceValues{Family: teetypes.FamilyTDX, Images: []remote.ImagePin{{Name: "a", Digest: digest, LaunchFileInInitData: true}}}

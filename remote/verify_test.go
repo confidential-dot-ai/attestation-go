@@ -764,9 +764,7 @@ func TestEnforcePinsWithRuntimeLog(t *testing.T) {
 	}
 }
 
-// initDataBoundTo returns evidence of image digestA whose launcher committed
-// file in the init-data field: MRCONFIGID on TDX, HOSTDATA on SEV-SNP. On TDX
-// RTMR[3] holds what the guest's own software extended, not the file.
+// initDataBoundTo binds file in init data with an unrelated TDX RTMR[3].
 func initDataBoundTo(t *testing.T, p teetypes.PlatformType, file []byte) VerifyResponse {
 	t.Helper()
 	var registers map[string]string
@@ -780,8 +778,6 @@ func initDataBoundTo(t *testing.T, p teetypes.PlatformType, file []byte) VerifyR
 	return r
 }
 
-// A pin reading its launch file from init data matches a guest whose launcher
-// committed that file, whole or by digest, whatever its software extended.
 func TestEnforceImagesPinsLaunchFileInInitData(t *testing.T) {
 	file := []byte("clusterID: alpha\n")
 	other := []byte("clusterID: beta\n")
@@ -799,7 +795,6 @@ func TestEnforceImagesPinsLaunchFileInInitData(t *testing.T) {
 			if err := EnforceImages(initDataBoundTo(t, p, other), images, p); !errors.Is(err, ErrLaunchFileNotAllowed) {
 				t.Fatalf("another launch file = %v, want ErrLaunchFileNotAllowed", err)
 			}
-			// The field admits no extension, so a runtime log says nothing about it.
 			claimed := []string{"sha256:" + strings.Repeat("01", 32)}
 			if err := EnforceImagesWithRuntimeLog(initDataBoundTo(t, p, file), images, p, claimed); err != nil {
 				t.Fatalf("a claimed runtime log changed the verdict: %v", err)
@@ -808,8 +803,6 @@ func TestEnforceImagesPinsLaunchFileInInitData(t *testing.T) {
 	}
 }
 
-// SEV-SNP has one launcher-set field, which a launch file pin already reads,
-// so the flag names no choice there and is refused.
 func TestEnforceImagesRefusesInitDataPinOnSNP(t *testing.T) {
 	file := []byte("clusterID: alpha\n")
 	images := []ImagePin{{Name: "ta", Digest: mustHex(t, digestA), LaunchFile: file, LaunchFileInInitData: true}}
@@ -822,8 +815,6 @@ func TestEnforceImagesRefusesInitDataPinOnSNP(t *testing.T) {
 	}
 }
 
-// An init-data pin is one image's constraint: a set holding it still matches
-// an SEV-SNP guest by another image, whichever way the TDX pin names its file.
 func TestEnforceImagesInitDataPinLeavesOtherFamiliesEligible(t *testing.T) {
 	file := []byte("clusterID: alpha\n")
 	tdx := map[string]ImagePin{
@@ -836,7 +827,6 @@ func TestEnforceImagesInitDataPinLeavesOtherFamiliesEligible(t *testing.T) {
 			if err := EnforceImages(snpBoundTo(t, file), images, teetypes.PlatformSNP); err != nil {
 				t.Fatalf("the SEV-SNP image was refused: %v", err)
 			}
-			// Sharing the guest's launch digest does not make the TDX pin match.
 			images[0].Digest = mustHex(t, digestA)
 			if err := EnforceImages(snpBoundTo(t, file), images[:1], teetypes.PlatformSNP); !errors.Is(err, ErrLaunchFileNotAllowed) {
 				t.Fatalf("the init-data pin alone = %v, want ErrLaunchFileNotAllowed", err)
@@ -845,8 +835,6 @@ func TestEnforceImagesInitDataPinLeavesOtherFamiliesEligible(t *testing.T) {
 	}
 }
 
-// On TDX the two bindings are separate fields, so the pin decides which one a
-// guest must prove: evidence of the other is refused either way.
 func TestEnforceImagesLaunchFileFieldIsThePinsChoice(t *testing.T) {
 	file := []byte("clusterID: alpha\n")
 	inRegister := []ImagePin{{Name: "ta", Digest: mustHex(t, digestA), LaunchFile: file}}
@@ -872,8 +860,7 @@ func TestEnforceImagesRefusesInvalidInitDataPin(t *testing.T) {
 	}
 	for name, pin := range tests {
 		t.Run(name, func(t *testing.T) {
-			// A valid image the evidence matches comes first: the refusal is of
-			// the set, so it cannot mask the misconfigured pin.
+			// A matching pin must not hide a later invalid pin.
 			valid := ImagePin{Name: "valid", Digest: mustHex(t, digestA), LaunchFile: file, LaunchFileInInitData: true}
 			pin.Name, pin.Digest = "ta", mustHex(t, digestA)
 			err := EnforceImages(initDataBoundTo(t, teetypes.PlatformTDX, file), []ImagePin{valid, pin}, teetypes.PlatformTDX)
@@ -884,9 +871,6 @@ func TestEnforceImagesRefusesInvalidInitDataPin(t *testing.T) {
 	}
 }
 
-// An init-data pin's digest is judged as a TDX one whatever the evidence, so a
-// malformed one refuses the set under SEV-SNP evidence too: it must not fall
-// to one image's mismatch and let the SEV-SNP image accept the guest.
 func TestEnforceImagesRefusesMalformedInitDataDigestUnderAnyFamily(t *testing.T) {
 	file := []byte("clusterID: alpha\n")
 	valid := ImagePin{Name: "snp", Digest: mustHex(t, digestA), LaunchFile: file}
@@ -908,9 +892,6 @@ func TestEnforceImagesRefusesMalformedInitDataDigestUnderAnyFamily(t *testing.T)
 	}
 }
 
-// A provider's stack sets MRCONFIGID on its own TDX guests, so an init-data
-// pin matches evidence under the bare tdx tag only: the same field under a
-// provider's tag is refused as that image's mismatch.
 func TestEnforceImagesRefusesInitDataPinUnderProviderTags(t *testing.T) {
 	file := []byte("clusterID: alpha\n")
 	pins := map[string]ImagePin{
@@ -929,8 +910,6 @@ func TestEnforceImagesRefusesInitDataPinUnderProviderTags(t *testing.T) {
 	}
 }
 
-// An unknown platform tag reaches a remote caller as a launch-file refusal
-// of the whole set, decided before any evidence is compared.
 func TestEnforceImagesRefusesInitDataPinsUnderAnUnknownTag(t *testing.T) {
 	file := []byte("clusterID: alpha\n")
 	const unknown = teetypes.PlatformType("nonsense")
