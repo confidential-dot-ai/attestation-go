@@ -233,7 +233,7 @@ RTMR[3] is unchecked unless pinned separately; runtime extensions are unsupporte
 Only `tdx` evidence matches. At the launch-binding check, unsupported tags
 fail that image with `ErrLaunchFileNotAllowed`: provider TDX also wraps
 `runtimemeasure.ErrNoRegister` (field ownership is unestablished); SEV-SNP does not.
-Other images remain eligible. No matching digest returns `ErrMeasurementNotAllowed`.
+Other images remain eligible. No matching image measurement returns `ErrMeasurementNotAllowed`.
 
 Malformed pins reject the whole set with `ErrLaunchFileNotAllowed`: conflicting
 bindings, empty files, invalid digests, or init-data pins with `AcceptExtension`
@@ -388,11 +388,10 @@ It requires a TDX-family `tee` and a `launch_file` or `launch_file_digest`;
 schemas `"1"` and `"2"` reject it. Family aliases parse, but only evidence verified
 under `tdx` can match. Omit the field for the default binding.
 
-For Kata initdata, use the whole document as the launch file:
-
-- TDX: add `launch_file_field: "init_data"` to check MRCONFIGID. The check hashes
-  the exact bytes with SHA-384; it does not parse `algorithm` or accept padded SHA-256.
-- SEV-SNP: omit the field to check HOSTDATA. Azure SNP is unsupported.
+- Kata TDX: commit SHA-384 of the exact initdata document to MRCONFIGID, not padded SHA-256.
+  Set `launch_file_field: "init_data"` with its bytes in `launch_file` or their SHA-384
+  in `launch_file_digest`. The document's `algorithm` field is not parsed.
+- Kata SEV-SNP: omit the field to check HOSTDATA. Azure SNP is unsupported.
 
 `Format` and `Render` choose the earliest schema for the whole set: `"3"` for
 init-data pins, `"2"` for other launch-file pins, and `"1"` otherwise. A schema
