@@ -391,7 +391,8 @@ under `tdx` can match. Omit the field for the default binding.
 - Kata TDX: commit SHA-384 of the exact initdata document to MRCONFIGID, not padded SHA-256.
   Set `launch_file_field: "init_data"` with its bytes in `launch_file` or their SHA-384
   in `launch_file_digest`. The document's `algorithm` field is not parsed.
-- Kata SEV-SNP: omit the field to check HOSTDATA. Azure SNP is unsupported.
+- Kata SEV-SNP: set `launch_file` or `launch_file_digest` and omit `launch_file_field`
+  to check HOSTDATA. Azure SNP does not support this binding.
 
 `Format` and `Render` choose the earliest schema for the whole set: `"3"` for
 init-data pins, `"2"` for other launch-file pins, and `"1"` otherwise. A schema
