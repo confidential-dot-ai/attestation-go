@@ -226,11 +226,24 @@ can carry it without the document.
 `runtimemeasure.LaunchFileDigest(family, file)` computes it: SHA-256 on
 SEV-SNP, which HOSTDATA must equal, and SHA-384 on TDX, extended into RTMR[3]
 from zero. It accepts runtime extensions as
-`Anchor` does, and reports refusals as `ErrLaunchFileNotAllowed`. A pin whose
-digest `runtimemeasure.CheckLaunchFileDigest` refuses for the verified family
-(the other family's width, all zero, or the empty file's), or that sets more
-than one of `Anchor`, `LaunchFile` and `LaunchFileDigest`, is refused before
-any evidence is matched.
+`Anchor` does, and reports refusals as `ErrLaunchFileNotAllowed`.
+
+`ImagePin.LaunchFileInInitData` checks the file's SHA-384 against MRCONFIGID.
+RTMR[3] is unchecked unless pinned separately; runtime extensions are unsupported.
+Only `tdx` evidence matches. At the launch-binding check, unsupported tags
+fail that image with `ErrLaunchFileNotAllowed`: provider TDX also wraps
+`runtimemeasure.ErrNoRegister` (field ownership is unestablished); SEV-SNP does not.
+Other images remain eligible. No matching image measurement returns `ErrMeasurementNotAllowed`.
+
+Malformed pins reject the whole set with `ErrLaunchFileNotAllowed`: conflicting
+bindings, empty files, invalid digests, or init-data pins with `AcceptExtension`
+or no file/digest. Digest validation uses the verified family, always TDX for
+init-data pins. Unknown platforms reject sets containing init-data pins, also
+wrapping `runtimemeasure.ErrUnknownPlatform`.
+
+A match proves the launcher's commitment, not file use or guest location.
+In the same image entry, pin kernel, initrd and command-line measurements of software
+that hashes the received file bytes and compares them with MRCONFIGID before use; MRTD is firmware only.
 
 `Client.Verify` is the raw endpoint, for callers enforcing the verdict
 themselves; `Client.VerifyEnforced` is the middle ground (verdict gated,
@@ -368,10 +381,22 @@ launched with, mapping to `ImagePin.LaunchFile`, or `launch_file_digest`, its
 `runtimemeasure.LaunchFileDigest` as lowercase hex of the document family's
 width, mapping to `ImagePin.LaunchFileDigest`. An entry carries at most one of
 the three binding fields. Either field under `"1"` is refused, so a schema 1
-reader never loads a document whose binding it would ignore; a `"2"` document
-may pin none. `Format` and `Render` write `"2"` only for a set that pins a
-launch file, whole or by digest, so a schema 1 reader keeps loading every other
-document and fails closed on this one.
+reader never loads a document whose binding it would ignore.
+
+Schema `"3"` adds [`launch_file_field: "init_data"`](#verifying-evidence).
+It requires a TDX-family `tee` and a `launch_file` or `launch_file_digest`;
+schemas `"1"` and `"2"` reject it. Family aliases parse, but only evidence verified
+under `tdx` can match. Omit the field for the default binding.
+
+- Kata TDX: commit SHA-384 of the exact initdata document to MRCONFIGID, not padded SHA-256.
+  Set `launch_file_field: "init_data"` with its bytes in `launch_file` or their SHA-384
+  in `launch_file_digest`. The document's `algorithm` field is not parsed.
+- Kata SEV-SNP: set `launch_file` or `launch_file_digest` and omit `launch_file_field`
+  to check HOSTDATA. Azure SNP does not support this binding.
+
+`Format` and `Render` choose the earliest schema for the whole set: `"3"` for
+init-data pins, `"2"` for other launch-file pins, and `"1"` otherwise. A schema
+`"3"` document without init-data pins therefore renders as `"2"` or `"1"`.
 
 `Parse` and `ParseRendered` reject unknown or duplicate JSON fields, trailing
 data, and malformed pins. `Format` and `Render` refuse values they cannot

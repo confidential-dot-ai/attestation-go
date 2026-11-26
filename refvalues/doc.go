@@ -19,17 +19,18 @@
 // reviewer can check it rather than compare hex. A second binding kind is a
 // new field under a new schema_version, not a reinterpretation of the first.
 //
-// schema_version 2 adds that second kind: a launch_file holding the exact
-// bytes of the launch configuration file a guest was launched with, mapped to
-// [remote.ImagePin.LaunchFile], or a launch_file_digest holding its
-// [runtimemeasure.LaunchFileDigest] alone as lowercase hex of the document
-// family's width, mapped to [remote.ImagePin.LaunchFileDigest]. An entry
-// carries at most one of approver_key, launch_file and launch_file_digest, all
-// naming the same hardware field. [Format] and [Render] write schema_version 2
-// only for a set that pins a launch file, whole or by digest, so a schema 1
-// reader sees a document it still loads, and refuse one they cannot preserve
-// byte for byte. [Parse] refuses either field under schema_version 1, where a
-// reader has no such field; a schema 2 document may pin none.
+// Schema 2 adds launch_file (exact bytes) and launch_file_digest (lowercase hex).
+// Each entry allows only one of these or approver_key.
+//
+// Schema 3 adds launch_file_field: "init_data", which maps to
+// [remote.ImagePin.LaunchFileInInitData] and selects TDX MRCONFIGID instead of
+// RTMR[3]. It requires a launch_file or launch_file_digest and is part of the
+// pin's identity. SEV-SNP documents reject it: plain launch-file pins already
+// read HOSTDATA. See [remote.ImagePin.LaunchFileInInitData] for evidence limits.
+//
+// [Parse] enforces each field's minimum schema. [Format] and [Render] choose
+// the earliest schema for the whole set: 3 for init-data pins, 2 for other
+// launch-file pins, and 1 otherwise, even if the input used a later schema.
 //
 // [ParseRendered] uses the same strict parsing rules as [Parse], while
 // permitting the empty set a component may report through [Render]. [Diff]
